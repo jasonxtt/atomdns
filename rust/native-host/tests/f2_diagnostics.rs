@@ -657,6 +657,17 @@ fn a_capture_reports_every_matcher_and_action_in_the_reference_form() {
             .filter(|line| line["domain"] == "steps.example.com")
             .all(|line| line["time"].as_str().unwrap().contains('T'))
     );
+    // The upstream attempt of that query reports its response under the same trace id.
+    let attempt = lines
+        .iter()
+        .find(|line| line["msg"] == "dns upstream attempt" && line["domain"] == "steps.example.com")
+        .expect("an upstream attempt line");
+    assert_eq!(attempt["logger_name"], "upstream");
+    assert_eq!(attempt["trace_id"], plugin["trace_id"]);
+    assert_eq!(attempt["outcome"], "response");
+    assert_eq!(attempt["rcode"], 0);
+    assert_eq!(attempt["has_address"], true);
+    assert_eq!(attempt["qtype"], 1);
     // Nothing from the query made before the capture.
     assert!(
         lines

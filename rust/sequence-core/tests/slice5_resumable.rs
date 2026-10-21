@@ -16,6 +16,8 @@ fn state() -> ExecutionState {
             ancount: 0,
             nscount: 0,
             arcount: 0,
+            rd: false,
+            cd: false,
         },
         QuestionInfo {
             qname_wire: vec![7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0],

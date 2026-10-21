@@ -89,6 +89,8 @@ fn query_state(facts: &[(u32, &str)]) -> ExecutionState {
             ancount: 0,
             nscount: 0,
             arcount: 0,
+            rd: false,
+            cd: false,
         },
         mosdns_dns_core::QuestionInfo {
             qname_wire: vec![0],

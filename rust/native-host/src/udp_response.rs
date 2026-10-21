@@ -432,6 +432,24 @@ mod tests {
     }
 
     #[test]
+    fn tc_fallback_keeps_the_response_header_rd_and_cd() {
+        let mut query = message();
+        query.set_message_type(MessageType::Query);
+        let query = query.to_vec().unwrap();
+        let mut wire = message().to_vec().unwrap();
+        wire[2] |= 0x01; // RD
+        wire[3] |= 0x90; // RA and CD
+        wire[10..12].copy_from_slice(&1_u16.to_be_bytes());
+        wire.extend_from_slice(&[0, 0, 41, 16, 0, 0, 0, 0, 0, 1, 218]);
+        wire.extend_from_slice(&[0xfd, 0xe9, 1, 214]);
+        wire.extend_from_slice(&[7; 470]);
+        let (output, changed) = prepare_response(wire, 512, &query).unwrap();
+        assert!(changed);
+        assert_eq!(output[2] & 0x03, 0x03, "RD and TC");
+        assert_eq!(output[3] & 0x90, 0x90, "RA and CD");
+    }
+
+    #[test]
     fn oversized_opt_uses_the_same_minimal_tc_fallback() {
         let mut query = message();
         query.set_message_type(MessageType::Query);

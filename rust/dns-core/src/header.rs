@@ -56,8 +56,8 @@ pub enum ResponseBuildError {
     InvalidRcode(u8),
 }
 
-/// Builds a QR/RA response carrying the original ID and question with no
-/// answer, authority, or additional records. The question name is the
+/// Builds a QR/RA response carrying the original ID, the query's RD/CD and
+/// question with no answer, authority, or additional records. The question name is the
 /// self-contained, uncompressed form produced by [`crate::parse_query`].
 ///
 /// This is deliberately limited to the two native-host protocol-error forms
@@ -71,7 +71,11 @@ pub fn synthesize_response(
     if rcode > 0x0f {
         return Err(ResponseBuildError::InvalidRcode(rcode));
     }
-    let flags = 0x8000 | 0x0080 | u16::from(rcode);
+    let flags = 0x8000
+        | 0x0080
+        | if query.rd { 0x0100 } else { 0 }
+        | if query.cd { 0x0010 } else { 0 }
+        | u16::from(rcode);
     let mut response = Vec::with_capacity(12 + question.qname_wire.len() + 4);
     response.extend_from_slice(&query.id.to_be_bytes());
     response.extend_from_slice(&flags.to_be_bytes());
@@ -228,6 +232,8 @@ mod tests {
             ancount: 0,
             nscount: 0,
             arcount: 0,
+            rd: false,
+            cd: false,
         };
         let question = QuestionInfo {
             qname_wire: vec![7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0],
@@ -254,6 +260,33 @@ mod tests {
             synthesize_response(&query, &question, 16),
             Err(ResponseBuildError::InvalidRcode(16))
         );
+    }
+
+    #[test]
+    fn synthesized_responses_copy_rd_and_cd_from_the_query() {
+        let question = QuestionInfo {
+            qname_wire: vec![7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0],
+            qtype: 1,
+            qclass: 1,
+        };
+        for (rd, cd) in [(false, false), (true, false), (false, true), (true, true)] {
+            let query = QueryHeader {
+                id: 7,
+                qr: false,
+                opcode: 0,
+                qdcount: 1,
+                ancount: 0,
+                nscount: 0,
+                arcount: 0,
+                rd,
+                cd,
+            };
+            let response = synthesize_response(&query, &question, 2).unwrap();
+            assert_eq!(response[2] & 0x01 != 0, rd);
+            assert_eq!(response[3] & 0x10 != 0, cd);
+            assert_eq!(response[2] & 0x80, 0x80, "QR");
+            assert_eq!(response[3] & 0x80, 0x80, "RA");
+        }
     }
 
     #[test]

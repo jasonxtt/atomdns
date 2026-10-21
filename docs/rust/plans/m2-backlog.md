@@ -91,7 +91,9 @@
 **真实流量（Shadow-1/2）留下的线索**
 3. **并发上游的应答优先级**（P2）：Go `aliapi` 等待并发各路，优先“含 A/AAAA 的应答”→ 首个 NOERROR/NXDOMAIN → 其它 rcode；
    疑似 Rust 会采用先到的 SERVFAIL（Shadow-1 token 20061、Shadow-2 token 198，同为 `local_addlist_exit_v6`→domestic）。先诊断再修。
+   **2026-10-21 已查证（任务 10-21-rust-native-reply-flags）**：分级、同级取舍、超时/取消语义与 Go 一致，未改行为；已补逐路上游 trace 行 `dns upstream attempt`（rcode、has_address），见 `docs/rust/validation-records/10-21-reply-flags/`。
 4. **本地合成应答不复制 RD/CD**（P2）：Go `SetReply` 复制 RD；Rust `protocol_error`/`synthesize_response` 为 RD=0。
+   **2026-10-21 已修**：`QueryHeader` 带 RD/CD，`synthesize_response` 写入；见同一验证记录。
 5. **热应用后内存台阶**（P2）：整代热应用时峰值约 176 MiB、之后 RSS 停在约 118 MiB（新进程约 51 MiB），稳态贴近 128 MiB 预算；与 M2-3 一并评估。
 6. **Rust-only TC 偏多**（P2，原因未明）：Rust 应答 additional A 更多；“Rust 扩大上游 OPT”的假设已被否定（Go 反而统一加 OPT 1200）。
 7. **上游查询形状**（待定契约）：Go 对上游统一 OPT 1200、DO=0；Rust 普通转发原样、ECS 时 1232。是否对齐需先定契约。

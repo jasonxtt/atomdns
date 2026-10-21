@@ -66,6 +66,8 @@ fn frozen_w2_cache_configuration_compiles_to_udp_graph() {
                     ancount: 0,
                     nscount: 0,
                     arcount: 0,
+                    rd: false,
+                    cd: false,
                 },
                 QuestionInfo {
                     qname_wire: vec![0],

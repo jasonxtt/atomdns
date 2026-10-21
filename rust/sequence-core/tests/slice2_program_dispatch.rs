@@ -20,6 +20,8 @@ fn state(qtype: u16) -> ExecutionState {
             ancount: 0,
             nscount: 0,
             arcount: 0,
+            rd: false,
+            cd: false,
         },
         QuestionInfo {
             qname_wire: vec![0],

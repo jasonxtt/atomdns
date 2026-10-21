@@ -132,6 +132,14 @@ Real UDP/TCP regressions must cover the policy callers, EDNS and noEDNS,
 original-question restoration, root cancellation after upstream admission, and
 the existing REFUSED/ordinary failure cases. Fuel exhaustion must answer too.
 
+## Locally constructed reply flags (2026-10-21)
+
+Every reply the host builds itself (REFUSED/SERVFAIL, `reject`, `hosts`, `rewrite`,
+redirect/ECS wrapping of a local reply, budget SERVFAIL) is built from the query header
+by `synthesize_response` and carries QR=1, RA=1 and the **query's RD and CD**, as Go's
+`SetReply` does; AD stays 0. Replies from an upstream or the cache keep the flags they
+carry. The UDP TC fallback copies the header of the response it replaces.
+
 ## Planned native v2 upstream diagnostics migration (approved 2026-09-30)
 
 ### 1. Scope / Trigger

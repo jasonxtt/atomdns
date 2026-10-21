@@ -232,6 +232,15 @@ the host inserts that have no configuration text (managed-profile rules, etc.) a
 A query is traced only when it was admitted while a capture was running; queries already in flight
 when `start` is called are not.
 
+**Upstream attempt line.** While a capture runs, each upstream attempt of a forward group for a traced
+query adds one line `dns upstream attempt` (`logger_name:"upstream"`) under the query's **`trace_id`**,
+with `domain` (the name sent upstream: the redirect target when a redirect applies), `qtype`,
+`entry_index`, `upstream` (`host:port` as configured) and `outcome`: `response` plus `rcode` (full,
+including the OPT extension) and `has_address` (the Answer section holds an A/AAAA), or the failed
+outcome (`failed`, `timedout`, `canceled`) without them. It lets a final SERVFAIL be traced to the leg
+that supplied it; join it to the `dns query completed` line by `trace_id`. An untraced query (admitted
+before the capture started) adds no line. The audit and API schemas are unchanged.
+
 The per-query lines go **only to the capture buffer**, never to the log file or stderr, so a capture
 does not put file I/O on the DNS thread; recording is a short critical section on a dedicated mutex.
 With no capture running the engine does one `Option` check per matcher and per rule (no allocation,
