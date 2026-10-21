@@ -95,3 +95,8 @@
 5. **热应用后内存台阶**（P2）：整代热应用时峰值约 176 MiB、之后 RSS 停在约 118 MiB（新进程约 51 MiB），稳态贴近 128 MiB 预算；与 M2-3 一并评估。
 6. **Rust-only TC 偏多**（P2，原因未明）：Rust 应答 additional A 更多；“Rust 扩大上游 OPT”的假设已被否定（Go 反而统一加 OPT 1200）。
 7. **上游查询形状**（待定契约）：Go 对上游统一 OPT 1200、DO=0；Rust 普通转发原样、ECS 时 1232。是否对齐需先定契约。
+
+**独立为 rtdns 仓库后（2026-10-21 记录）**
+8. **项目改名收尾**（待排期）：在线更新仍查 `jasonxtt/mosdns` 的 Releases（`rust/native-host/src/update/mod.rs` 的 `DEFAULT_API_URL`/`RELEASE_PAGE`），
+   发布包名仍为 `mosdns-rust-*`（构建/清单脚本、F-3a 测试、cutover 工具）；README 正文仍是 Go 版介绍。改名前须决定新的发布包与 tag 命名，
+   并保证生产 rtdns 的在线更新能平滑过渡（旧程序只认旧包名）。

@@ -15,14 +15,16 @@ When working on the Rust branch or Rust migration, also read:
 6. `docs/rust/contracts/index.md`
 7. `.trellis/workflow.md` when optional local Trellis tooling is installed and a task is active
 
-This repository is a maintained fork of `yyysuo/mosdns`. The current worktree
-is the dedicated `rust` branch at `/Users/tom/github/mosdns-rust`; do not infer
-`main` from the repository name or switch branches merely because the folder
-name is similar.
+This repository is `jasonxtt/rtdns` (local clone `/Users/tom/github/rtdns`,
+default branch `main`). It is the Rust rewrite of MosDNS, moved here on
+2026-10-21 with its full history from the `rust` branch of `jasonxtt/mosdns`
+(itself a maintained fork of `yyysuo/mosdns`). Commit IDs cited in older
+records are the same in both repositories. The old `/Users/tom/github/mosdns-rust`
+worktree is no longer used for new work.
 
 ## Scope and stable facts
 
-- **The `rust` branch is a pure Rust project** (Phase 6a, 2026-10-18): it has no Go source, no `go.mod`, no cgo bridge (`rust/runtime`, `MOSDNS_*_BACKEND`) and needs no Go toolchain to build. The Go MosDNS lives on `main` and in `/Users/tom/github/mosdns` (`jasonxtt/mosdns`); the Go-side comparison tools and the reference binary are built from a pinned commit of that repository with `tools/go-reference/build.sh` (see `tools/go-reference/README.md`). Paths like `coremain/*.go` in Rust comments, contracts and validation records name files of that Go repository.
+- **This is a pure Rust project** (Phase 6a, 2026-10-18): it has no Go source, no `go.mod`, no cgo bridge (`rust/runtime`, `MOSDNS_*_BACKEND`) and needs no Go toolchain to build. The Go MosDNS lives in `/Users/tom/github/mosdns` (`jasonxtt/mosdns`); the Go-side comparison tools and the reference binary are built from a pinned commit of that repository with `tools/go-reference/build.sh` (see `tools/go-reference/README.md`). Paths like `coremain/*.go` in Rust comments, contracts and validation records name files of that Go repository.
 - The final Rust migration target is a pure Rust-native MosDNS binary/runtime; the Rust-native host still has to pass its final cutover gate before it replaces the production Go program.
 - `/` is the maintained Vue UI, built from `webui-log/src` into `rust/native-host/ui/` (checked in, embedded by `rust/native-host/build.rs`). The Rust-native host serves `/` (built in) and any external UI package placed in `<config root>/ui/<name>/` at `/<name>/` (`main` is only an example; see `docs/rust/external-ui.md`); it has no `/log` (that compatibility UI exists only in the Go repository). `webui-log/` is the active frontend workspace despite its historical name.
 - The canonical backend feature name is `special_groups`; do not reintroduce `route_group`.
@@ -41,7 +43,7 @@ name is similar.
 ## Build and validation
 
 - For binaries that embed the Vue UI, use `scripts/build-rust-native.sh` (it builds the UI bundle into `rust/native-host/ui/` before `cargo build`; release artifacts: `scripts/build-rust-release.sh`, external UI package: `npm run build:external` in `webui-log`). Do not run frontend and Rust builds in parallel.
-- Do not make the incomplete `rust` branch a production/default release. Phase 3B+ foundations should target the final Rust-native host directly; production replacement is allowed only after the Rust-native E2E gate and the later hybrid-scaffolding retirement gate.
+- Production runs this program as `rtdns` since 2026-10-21 (manual cutover; the Go `mosdns` service stays installed for rollback). Do not publish a GitHub Release or deploy without explicit user approval.
 - Config compatibility and switch-bit reservations are documented in `docs/ai/config-notes.md`; do not change them casually.
 - When real deployment verification is requested, build locally, validate on `mos-test`, and promote to `mosdns` only after confirmation. Prefer the SSH aliases in `~/.ssh/config`.
 
