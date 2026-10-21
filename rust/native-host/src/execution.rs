@@ -163,6 +163,7 @@ impl RefreshEnvironment {
                 allow_empty_response: false,
                 branch_id: None,
                 polls: Rc::default(),
+                capture_trace_id: None,
             };
             let result = drive_branch(machine, context, None).await;
             if result.completed_successfully()
@@ -241,6 +242,7 @@ struct BranchContext<'a, E: ExchangeExecutor + ?Sized> {
     allow_empty_response: bool,
     branch_id: Option<usize>,
     polls: Rc<BranchPollQueue<'a>>,
+    capture_trace_id: Option<Rc<str>>,
 }
 
 impl<E: ExchangeExecutor + ?Sized> Clone for BranchContext<'_, E> {
@@ -259,6 +261,7 @@ impl<E: ExchangeExecutor + ?Sized> Clone for BranchContext<'_, E> {
             allow_empty_response: self.allow_empty_response,
             branch_id: self.branch_id,
             polls: self.polls.clone(),
+            capture_trace_id: self.capture_trace_id.clone(),
         }
     }
 }
@@ -565,6 +568,9 @@ fn new_branch_ledger<E: ExchangeExecutor + ?Sized>(
     executable: ExecutableId,
 ) -> UpstreamAttemptLedgerHandle {
     let ledger = UpstreamAttemptLedger::default().into_shared();
+    ledger
+        .borrow_mut()
+        .set_capture_trace_id(context.capture_trace_id.clone());
     if let Some(trace) = &context.trace {
         let hook = BranchTrace::registration_hook(
             trace.clone(),
@@ -1626,6 +1632,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                             allow_empty_response: true,
                             branch_id: Some(0),
                             polls: Rc::default(),
+                            capture_trace_id: facts.checkpoint.capture_trace_id(),
                         };
                         let successor = match machine.fork_successor(CancellationToken::new()) {
                             Ok(successor) => successor,
@@ -1723,6 +1730,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                         allow_empty_response: false,
                         branch_id: Some(0),
                         polls: Rc::default(),
+                        capture_trace_id: facts.checkpoint.capture_trace_id(),
                     };
                     let successor = match machine.fork_successor(CancellationToken::new()) {
                         Ok(successor) => successor,
@@ -1817,6 +1825,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                         allow_empty_response: false,
                         branch_id: Some(0),
                         polls: Rc::default(),
+                        capture_trace_id: facts.checkpoint.capture_trace_id(),
                     };
                     let successor = match machine.fork_successor(CancellationToken::new()) {
                         Ok(successor) => successor,
@@ -8794,6 +8803,7 @@ plugins:
             allow_empty_response: false,
             branch_id: None,
             polls: Rc::default(),
+            capture_trace_id: None,
         };
         let outcome = fallback_failure(&context, ExecutionState::new(header, question));
 
@@ -8873,6 +8883,7 @@ plugins:
                 allow_empty_response: true,
                 branch_id: None,
                 polls: Rc::default(),
+                capture_trace_id: None,
             };
             let result = futures_like_block_on(super::run_query_policy(
                 successor,

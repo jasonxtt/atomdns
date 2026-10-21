@@ -917,6 +917,75 @@ fn attempt_outcome(error: &UpstreamError) -> UpstreamAttemptOutcome {
     }
 }
 
+/// While a diagnostic capture runs, a traced query adds one debug line per
+/// upstream attempt with the rcode and address presence of its response (or
+/// the failed outcome), under the query's `trace_id`, so a final SERVFAIL can
+/// be traced to the leg that supplied it. `domain` is the name sent upstream
+/// (the redirect target when a redirect applies).
+fn capture_attempt(
+    trace_id: Option<&str>,
+    target: &ForwardTargetConfig,
+    entry_index: usize,
+    question: &mosdns_dns_core::QuestionInfo,
+    result: Result<&[u8], UpstreamAttemptOutcome>,
+) {
+    if let Some(trace_id) = trace_id.filter(|_| crate::capture::hint()) {
+        crate::capture::push_line(attempt_line(
+            trace_id,
+            target,
+            entry_index,
+            question,
+            result,
+        ));
+    }
+}
+
+fn attempt_line(
+    trace_id: &str,
+    target: &ForwardTargetConfig,
+    entry_index: usize,
+    question: &mosdns_dns_core::QuestionInfo,
+    result: Result<&[u8], UpstreamAttemptOutcome>,
+) -> String {
+    use crate::capture::Field;
+    let domain = crate::observer::render_qname(&question.qname_wire);
+    let upstream = format!("{}:{}", target.host, target.port);
+    let mut fields = vec![
+        ("trace_id", Field::Str(trace_id)),
+        ("domain", Field::Str(domain.trim_end_matches('.'))),
+        ("qtype", Field::Uint(u64::from(question.qtype))),
+        ("entry_index", Field::Uint(entry_index as u64)),
+        ("upstream", Field::Str(&upstream)),
+    ];
+    let outcome;
+    match result {
+        Ok(wire) => {
+            // The full rcode, including the OPT extension (BADVERS and up).
+            let rcode = mosdns_dns_core::observe_response_metadata(wire).map_or_else(
+                |_| u16::from(wire.get(3).map_or(0, |flags| flags & 0x0f)),
+                |m| m.rcode,
+            );
+            fields.push(("outcome", Field::Str("response")));
+            fields.push(("rcode", Field::Uint(u64::from(rcode))));
+            fields.push((
+                "has_address",
+                Field::Bool(crate::execution::response_priority(wire) == 0),
+            ));
+        }
+        Err(failed) => {
+            outcome = format!("{failed:?}").to_lowercase();
+            fields.push(("outcome", Field::Str(&outcome)));
+        }
+    }
+    crate::capture::render(
+        std::time::SystemTime::now(),
+        "debug",
+        "upstream",
+        "dns upstream attempt",
+        &fields,
+    )
+}
+
 fn tls_policy(
     insecure: bool,
     custom_roots: Option<&rustls::RootCertStore>,
@@ -1209,6 +1278,7 @@ impl ExchangeExecutor for ForwardCatalog {
             let entry_index = self.entry_indexes[&executable][selected_indices[0]];
             let owner = Rc::clone(&owners[selected_indices[0]]);
             let shared = Rc::clone(&ledger);
+            let trace_id = shared.borrow().capture_trace_id();
             let slot = shared.borrow_mut().start(entry_index);
             let mut tracker =
                 UpstreamAttemptTracker::new(Rc::clone(&shared), slot, cancellation.clone());
@@ -1225,9 +1295,23 @@ impl ExchangeExecutor for ForwardCatalog {
                             header.id,
                             &question,
                         ) else {
+                            capture_attempt(
+                                trace_id.as_deref(),
+                                &owner.target,
+                                entry_index,
+                                &question,
+                                Err(UpstreamAttemptOutcome::Failed),
+                            );
                             tracker.finish(peer, transport, UpstreamAttemptOutcome::Failed);
                             return Err(ExchangeError::Upstream(UpstreamError::MalformedResponse));
                         };
+                        capture_attempt(
+                            trace_id.as_deref(),
+                            &owner.target,
+                            entry_index,
+                            &question,
+                            Ok(&wire),
+                        );
                         tracker.finish(peer, transport, UpstreamAttemptOutcome::Response);
                         Ok(InvocationExchange {
                             selected_entry: Some(entry_index),
@@ -1242,6 +1326,13 @@ impl ExchangeExecutor for ForwardCatalog {
                         })
                     }
                     Err(error) => {
+                        capture_attempt(
+                            trace_id.as_deref(),
+                            &owner.target,
+                            entry_index,
+                            &question,
+                            Err(attempt_outcome(&error)),
+                        );
                         tracker.finish(peer, transport, attempt_outcome(&error));
                         Err(ExchangeError::Upstream(error))
                     }
@@ -1260,6 +1351,7 @@ impl ExchangeExecutor for ForwardCatalog {
             })
             .collect::<Vec<_>>();
         let shared = Rc::clone(&ledger);
+        let trace_id = shared.borrow().capture_trace_id();
         let slots = owners
             .iter()
             .map(|(entry_index, _)| (*entry_index, shared.borrow_mut().start(*entry_index)))
@@ -1273,6 +1365,7 @@ impl ExchangeExecutor for ForwardCatalog {
                 let shared = Rc::clone(&shared);
                 let leg_question = question.clone();
                 let request_id = header.id;
+                let trace_id = trace_id.clone();
                 tasks.spawn_local(async move {
                     let mut tracker =
                         UpstreamAttemptTracker::new(shared, slot, leg_cancellation.clone());
@@ -1288,6 +1381,13 @@ impl ExchangeExecutor for ForwardCatalog {
                                 request_id,
                                 &leg_question,
                             ) else {
+                                capture_attempt(
+                                    trace_id.as_deref(),
+                                    &owner.target,
+                                    entry_index,
+                                    &leg_question,
+                                    Err(UpstreamAttemptOutcome::Failed),
+                                );
                                 tracker.finish(peer, transport, UpstreamAttemptOutcome::Failed);
                                 return (
                                     entry_index,
@@ -1296,6 +1396,13 @@ impl ExchangeExecutor for ForwardCatalog {
                                     Err(UpstreamError::MalformedResponse),
                                 );
                             };
+                            capture_attempt(
+                                trace_id.as_deref(),
+                                &owner.target,
+                                entry_index,
+                                &leg_question,
+                                Ok(&wire),
+                            );
                             tracker.finish(peer, transport, UpstreamAttemptOutcome::Response);
                             Ok(ExchangeResponse::new(
                                 wire,
@@ -1306,6 +1413,13 @@ impl ExchangeExecutor for ForwardCatalog {
                             ))
                         }
                         Err(error) => {
+                            capture_attempt(
+                                trace_id.as_deref(),
+                                &owner.target,
+                                entry_index,
+                                &leg_question,
+                                Err(attempt_outcome(&error)),
+                            );
                             tracker.finish(peer, transport, attempt_outcome(&error));
                             Err(error)
                         }
@@ -1724,6 +1838,79 @@ mod tests {
             HostAssembly::from_yaml(&invalid),
             Err(AssemblyError::Config(ConfigError { .. }))
         ));
+    }
+
+    #[test]
+    fn capture_records_each_attempt_rcode_and_address_presence() {
+        use crate::config::{ForwardScheme, ForwardTargetConfig};
+        use crate::observer::UpstreamAttemptOutcome;
+
+        let target = ForwardTargetConfig {
+            scheme: ForwardScheme::Udp,
+            service: "192.0.2.53:53".to_owned(),
+            host: "192.0.2.53".to_owned(),
+            port: 53,
+            dial_addr: Some("192.0.2.53:53".parse().expect("address")),
+            bootstrap: None,
+            bootstrap_version: None,
+            query_timeout: Duration::from_secs(5),
+            insecure_skip_verify: false,
+            socks5: None,
+        };
+        let (_, question) = mosdns_dns_core::parse_query(&[
+            0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0, 5, b'c', b'a', b'p', b't', b'u', 0, 0,
+            28, 0, 1,
+        ])
+        .expect("query");
+        let servfail = [
+            0x12, 0x34, 0x81, 0x82, 0, 1, 0, 0, 0, 0, 0, 0, 5, b'c', b'a', b'p', b't', b'u', 0, 0,
+            28, 0, 1,
+        ];
+        let mut with_address = servfail;
+        with_address[3] = 0x80;
+        let mut with_address = with_address.to_vec();
+        with_address[7] = 1;
+        with_address.extend_from_slice(&[0xc0, 0x0c, 0, 28, 0, 1, 0, 0, 0, 60, 0, 16]);
+        with_address
+            .extend_from_slice(&[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+
+        // NOERROR in the header, extended rcode 1 in the OPT TTL: BADVERS (16).
+        let mut badvers = servfail.to_vec();
+        badvers[3] = 0x80;
+        badvers[11] = 1;
+        badvers.extend_from_slice(&[0, 0, 41, 16, 0, 1, 0, 0, 0, 0, 0]);
+        let lines: Vec<serde_json::Value> = [
+            super::attempt_line("t-1", &target, 1, &question, Ok(&servfail)),
+            super::attempt_line("t-1", &target, 0, &question, Ok(&with_address)),
+            super::attempt_line(
+                "t-1",
+                &target,
+                2,
+                &question,
+                Err(UpstreamAttemptOutcome::TimedOut),
+            ),
+            super::attempt_line("t-1", &target, 3, &question, Ok(&badvers)),
+        ]
+        .iter()
+        .map(|line| serde_json::from_str(line).expect("capture JSON"))
+        .collect();
+        let lines: Vec<_> = lines.iter().collect();
+        assert_eq!(lines.len(), 4);
+        assert_eq!(lines[0]["msg"], "dns upstream attempt");
+        assert_eq!(lines[0]["logger_name"], "upstream");
+        assert_eq!(lines[0]["trace_id"], "t-1");
+        assert_eq!(lines[0]["domain"], "captu");
+        assert_eq!(lines[0]["qtype"], 28);
+        assert_eq!(lines[0]["upstream"], "192.0.2.53:53");
+        assert_eq!(lines[0]["entry_index"], 1);
+        assert_eq!(lines[0]["outcome"], "response");
+        assert_eq!(lines[0]["rcode"], 2);
+        assert_eq!(lines[0]["has_address"], false);
+        assert_eq!(lines[1]["rcode"], 0);
+        assert_eq!(lines[1]["has_address"], true);
+        assert_eq!(lines[2]["outcome"], "timedout");
+        assert!(lines[2].get("rcode").is_none());
+        assert_eq!(lines[3]["rcode"], 16, "extended rcode from the OPT record");
     }
 
     #[test]

@@ -41,6 +41,8 @@ mod slice1_state_tests {
                 ancount: 0,
                 nscount: 0,
                 arcount: 0,
+                rd: false,
+                cd: false,
             },
             QuestionInfo {
                 qname_wire: vec![7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0],
@@ -364,6 +366,8 @@ mod slice2_dispatch_tests {
                 ancount: 0,
                 nscount: 0,
                 arcount: 0,
+                rd: false,
+                cd: false,
             },
             QuestionInfo {
                 qname_wire: vec![0],
@@ -822,6 +826,8 @@ mod slice3_control_tests {
                 ancount: 0,
                 nscount: 0,
                 arcount: 0,
+                rd: false,
+                cd: false,
             },
             QuestionInfo {
                 qname_wire: vec![0],
@@ -2042,6 +2048,8 @@ mod slice4_safety_tests {
                 ancount: 0,
                 nscount: 0,
                 arcount: 0,
+                rd: false,
+                cd: false,
             },
             QuestionInfo {
                 qname_wire: vec![0],
@@ -2269,6 +2277,8 @@ mod step_trace_tests {
                 ancount: 0,
                 nscount: 0,
                 arcount: 0,
+                rd: false,
+                cd: false,
             },
             QuestionInfo {
                 qname_wire: vec![0],

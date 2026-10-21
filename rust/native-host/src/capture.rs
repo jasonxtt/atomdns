@@ -122,8 +122,17 @@ pub(crate) fn record(logger: &str, message: &str, fields: &[(&str, Field<'_>)]) 
     if !hint() {
         return;
     }
-    let now = std::time::SystemTime::now();
-    let line = render(now, "debug", logger, message, fields);
+    push_line(render(
+        std::time::SystemTime::now(),
+        "debug",
+        logger,
+        message,
+        fields,
+    ));
+}
+
+/// Adds one already rendered line; does nothing when no capture runs.
+pub(crate) fn push_line(line: String) {
     state().push(Instant::now(), line, &CAPTURING);
 }
 
@@ -156,7 +165,7 @@ pub(crate) fn take_json() -> String {
     out
 }
 
-fn render(
+pub(crate) fn render(
     now: std::time::SystemTime,
     level: &str,
     logger: &str,

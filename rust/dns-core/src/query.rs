@@ -42,6 +42,10 @@ pub struct QueryHeader {
     pub ancount: u16,
     pub nscount: u16,
     pub arcount: u16,
+    /// Recursion Desired, copied into locally synthesized responses.
+    pub rd: bool,
+    /// Checking Disabled, copied into locally synthesized responses.
+    pub cd: bool,
 }
 
 /// The single decoded question.
@@ -138,6 +142,8 @@ pub fn parse_query(packet: &[u8]) -> Result<(QueryHeader, QuestionInfo), QueryEr
         ancount,
         nscount,
         arcount,
+        rd: flags & 0x0100 != 0,
+        cd: flags & 0x0010 != 0,
     };
     Ok((header, question))
 }

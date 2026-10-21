@@ -325,6 +325,8 @@ pub struct UpstreamDiagnostics {
 pub(crate) struct UpstreamAttemptLedger {
     slots: Vec<UpstreamAttemptSlot>,
     registration_hook: Option<AttemptRegistrationHook>,
+    /// Trace id of the running diagnostic capture for this query, if traced.
+    capture_trace_id: Option<Rc<str>>,
 }
 
 impl std::fmt::Debug for UpstreamAttemptLedger {
@@ -389,6 +391,14 @@ impl UpstreamAttemptLedger {
 
     pub(crate) fn set_registration_hook(&mut self, hook: AttemptRegistrationHook) {
         self.registration_hook = Some(hook);
+    }
+
+    pub(crate) fn set_capture_trace_id(&mut self, trace_id: Option<Rc<str>>) {
+        self.capture_trace_id = trace_id;
+    }
+
+    pub(crate) fn capture_trace_id(&self) -> Option<Rc<str>> {
+        self.capture_trace_id.clone()
     }
 
     pub(crate) fn finish(
@@ -994,9 +1004,15 @@ pub(crate) struct ExecutionCheckpoint {
     completed_observation: Option<TerminalObservation>,
     /// The step trace of a running diagnostic capture, set at admission.
     step_trace: Option<Rc<dyn mosdns_sequence_core::StepTrace>>,
+    /// The trace id behind `step_trace`, for per-attempt capture lines.
+    capture_trace_id: Option<Rc<str>>,
 }
 
 impl ExecutionCheckpoint {
+    pub(crate) fn capture_trace_id(&self) -> Option<Rc<str>> {
+        self.capture_trace_id.clone()
+    }
+
     pub(crate) fn step_trace(&self) -> Option<Rc<dyn mosdns_sequence_core::StepTrace>> {
         self.step_trace.clone()
     }
@@ -1004,6 +1020,7 @@ impl ExecutionCheckpoint {
     pub(crate) fn new(capture_audit_details: bool) -> Self {
         Self {
             step_trace: None,
+            capture_trace_id: None,
             capture_audit_details,
             response: ResponseState::NoResponse,
             response_details: ResponseDetails::no_response(),
@@ -1030,7 +1047,9 @@ impl ExecutionCheckpoint {
     }
 
     pub(crate) fn begin_attempt_ledger(&mut self) {
-        self.attempt_ledger.borrow_mut().clear();
+        let mut ledger = self.attempt_ledger.borrow_mut();
+        ledger.clear();
+        ledger.set_capture_trace_id(self.capture_trace_id.clone());
     }
 
     pub(crate) fn attempt_ledger_handle(&self) -> UpstreamAttemptLedgerHandle {
@@ -1593,6 +1612,7 @@ impl QueryObserver {
         let mut execution_checkpoint = Box::new(ExecutionCheckpoint::new(enabled || traced));
         if let Some(context) = audit_context.as_ref().filter(|_| traced) {
             execution_checkpoint.step_trace = Some(Rc::new(QueryTrace::new(&context.trace_id)));
+            execution_checkpoint.capture_trace_id = Some(Rc::from(context.trace_id.as_str()));
         }
         self.admit_query();
         Ok(AdmittedQueryGuard {
@@ -1966,7 +1986,7 @@ fn capture_query_line(context: &AuditContext, observation: &TerminalObservation)
     crate::capture::record("query", "dns query completed", &fields);
 }
 
-fn render_qname(wire: &[u8]) -> String {
+pub(crate) fn render_qname(wire: &[u8]) -> String {
     fn labels(mut wire: &[u8]) -> impl Iterator<Item = &[u8]> {
         std::iter::from_fn(move || {
             let (&length, rest) = wire.split_first()?;
