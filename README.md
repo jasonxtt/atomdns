@@ -1,6 +1,6 @@
 # MosDNS-T
 
-> **`rust` 分支**：纯 Rust 实现（无 Go 源码、无需 Go 工具链即可构建，见 `AGENTS.md`、`docs/ai/project-context.md`）。下文介绍的是 `main` 分支的 Go 版本。
+> **rtdns**：MosDNS 的纯 Rust 重写（无 Go 源码、无需 Go 工具链即可构建，见 `AGENTS.md`、`docs/ai/project-context.md`），2026-10-21 起从 `jasonxtt/mosdns` 的 `rust` 分支独立为本仓库。下文仍是 Go 版 MosDNS-T 的介绍，待重写。
 
 MosDNS-T 是基于 [`yyysuo/mosdns`](https://github.com/yyysuo/mosdns) 持续维护的 DNS 分流增强版，面向家庭网络、旁路由和透明代理环境，重构了 WebUI，并增加专属分流组、规则维护、查询诊断及多平台部署支持。
 
