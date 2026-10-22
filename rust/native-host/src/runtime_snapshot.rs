@@ -1542,6 +1542,101 @@ mod admission_tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn an_ip_post_drains_before_a_stale_settings_candidate_returns_409() {
+        let (root, path) = proxy_config("native-ip-post-apply");
+        std::fs::write(root.join("ips.txt"), "192.0.2.7\n").unwrap();
+        let yaml = std::fs::read_to_string(&path).unwrap().replace(
+            "plugins:\n",
+            "plugins:\n  - tag: networks\n    type: ip_set\n    args: {files: [ips.txt]}\n",
+        );
+        std::fs::write(&path, yaml).unwrap();
+        let host = crate::HostAssembly::from_config_file_in(&path, None).unwrap();
+        host.block_on(async {
+            let control = host.control();
+            let view = control.view();
+            let gate = crate::managed::PersistGate::new();
+            view.config.ip_sets[0]
+                .management
+                .as_ref()
+                .unwrap()
+                .inject_gate(gate.clone());
+            let writing = tokio::task::spawn_local({
+                let control = control.clone();
+                async move {
+                    crate::api::local_plugin_request(
+                        &control,
+                        "POST",
+                        "/plugins/networks/post",
+                        br#"{"values":["198.51.100.7"]}"#,
+                    )
+                    .await
+                    .unwrap()
+                }
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                while !gate.arrived() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(control.0.active_management.get(), 1);
+            let applying = tokio::task::spawn_local({
+                let control = control.clone();
+                async move {
+                    let view = control.view();
+                    crate::settings_api::handle(
+                        Some(&control),
+                        &view.config,
+                        "POST",
+                        "/api/v1/overrides",
+                        br#"{"socks5":"192.0.2.2:1080"}"#,
+                    )
+                    .await
+                    .unwrap()
+                }
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                while !control.0.management_only.get() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert!(
+                !applying.is_finished(),
+                "apply waits for the admitted IP write"
+            );
+            gate.release();
+            assert_eq!(writing.await.unwrap().0, 200);
+            let refused = applying.await.unwrap();
+            assert_eq!(
+                refused.status,
+                409,
+                "{}",
+                String::from_utf8_lossy(&refused.body)
+            );
+            assert!(String::from_utf8_lossy(&refused.body).contains("ips.txt"));
+            assert_eq!(control.generation(), 0);
+            assert_eq!(
+                control.view().config.ip_sets[0]
+                    .management
+                    .as_ref()
+                    .unwrap()
+                    .show(),
+                "198.51.100.7/32\n"
+            );
+            assert_eq!(
+                std::fs::read_to_string(root.join("ips.txt")).unwrap(),
+                "198.51.100.7/32\n"
+            );
+            assert!(!root.join("webinfo/settings.json").exists());
+            control.close().await.unwrap();
+        });
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// A candidate built from an older view is refused when another change was
     /// published while it compiled (a group save queued behind a settings save
     /// would otherwise publish the old settings with the new file's fingerprint).

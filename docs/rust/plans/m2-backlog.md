@@ -91,6 +91,8 @@
    排查其它页面同类 `special_groups.enabled` 残留。
 2. **`ip_set` 缺 `/plugins/<tag>/show` 与 `/post`**（后端）：`client_ip`、`direct_ip` 返回 404，Go `plugin/data_provider/ip_set/ip_set.go` 有此接口。
    名单从文件加载并生效，但无法经 API/WebUI 查看或修改；新 UI 需要此后端接口。
+   **2026-10-22 已完成**：新增 show/post；post 仅允许单个独占 `.txt`、无内联 IP，复用原子写与活快照；旧热应用候选冲突返回 409。
+   验证与 Shadow-2 诊断见 [10-22-small-batch](../validation-records/10-22-small-batch/README.md)。
 
 **真实流量（Shadow-1/2）留下的线索**
 3. **并发上游的应答优先级**（P2）：Go `aliapi` 等待并发各路，优先“含 A/AAAA 的应答”→ 首个 NOERROR/NXDOMAIN → 其它 rcode；
@@ -104,8 +106,12 @@
 6. **Rust-only TC 偏多**（P2，原因未明）：Rust 应答 additional A 更多；“Rust 扩大上游 OPT”的假设已被否定（Go 反而统一加 OPT 1200）。
 7. **上游查询形状**（待定契约）：Go 对上游统一 OPT 1200、DO=0；Rust 普通转发原样、ECS 时 1232。是否对齐需先定契约。
 
+**Shadow-2 的 214 条 NXDOMAIN→NOERROR**（2026-10-22 诊断）：Go SOA TTL 483→1，推算到期区间跨度 2.948 秒；Rust 全为空 NOERROR、无新 attempt。
+同一名字后半段另有 16 条反向差异。最可能是两端缓存取得/刷新时序不同，但缺少初始缓存与首次上游应答，判定为**证据不足**，保持原未解释计数、不改代码。
+数值、推断和限制见上述验证记录。
+
 **独立为 rtdns 仓库后（2026-10-21 记录）**
-8. **项目改名收尾**（2026-10-22 任务 `10-22-rtdns-rename-release`：代码、脚本、文档与 VM 演练已完成，**尚未发布 v0.2.0**）：
+8. **项目改名收尾**（2026-10-22 任务 `10-22-rtdns-rename-release`：已完成；2026-10-22 发布 v0.2.0，生产手动替换为 v0.2.0 后经 WebUI 在线更新到 v0.2.1）：
    用户决定不做桥接版（旧仓库从未发布 `rust-v*`，Go 更新器有一条路径读 `/releases/latest`）；tag 为 `vX.Y.Z`，发布包 `rtdns-linux-amd64.tar.gz`/`rtdns-update-manifest.json`，
    在线更新只来自 `jasonxtt/rtdns`，cargo bin 改为 `rtdns`，`native-host` 版本 `0.2.0`；README 已重写，发版与手动替换见 [release.md](../release.md)，
    演练记录见 [10-22-rtdns-rename](../validation-records/10-22-rtdns-rename/README.md)。生产 `rust-v0.1.4` 由用户手动替换为 `v0.2.0`。

@@ -50,6 +50,7 @@ fn exec_program(executable: &str, args: &[String]) -> std::io::Error {
 /// The signal is only sent when the parent dies *after* it is set, so the guard's pid is
 /// checked as well: a guard that was killed between `spawn` and this call has already left
 /// the candidate re-parented, and the candidate must not run on.
+#[cfg(target_os = "linux")]
 pub fn arm_parent_death_signal() {
     if std::env::var_os(MARKER_ENV).is_none() {
         return;
@@ -67,9 +68,13 @@ pub fn arm_parent_death_signal() {
 }
 
 /// Whether the process that started this candidate is no longer its parent.
+#[cfg(any(target_os = "linux", test))]
 fn guard_is_gone(expected: Option<u32>, parent: Option<u32>) -> bool {
     expected.is_some_and(|expected| parent != Some(expected))
 }
+
+#[cfg(not(target_os = "linux"))]
+pub fn arm_parent_death_signal() {}
 
 /// Runs the guard. Returns (an error message) only when even the final `exec` failed.
 pub fn run(transaction_path: &Path) -> String {
@@ -222,6 +227,7 @@ fn spawn_candidate(tx: &Transaction, path: &Path) -> std::io::Result<Child> {
 }
 
 fn stop(child: &mut Child, grace: Duration) {
+    #[cfg(target_os = "linux")]
     if let Some(pid) = rustix::process::Pid::from_raw(i32::try_from(child.id()).unwrap_or(0)) {
         let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
     }

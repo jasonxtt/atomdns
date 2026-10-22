@@ -9,6 +9,7 @@ use tokio::{io::AsyncWriteExt, sync::mpsc};
 
 /// What a directory under `<config root>/ui/` is, as startup judged it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) enum Kind {
     /// It carries a `ui-manifest.json`: a mosdns UI package, mounted only when compatible.
     MosdnsUi,
@@ -30,8 +31,10 @@ pub(crate) struct Entry {
 }
 
 /// At most this many directories are listed (a bound on health size, far above real use).
+#[cfg(target_os = "linux")]
 const MAX_LISTED: usize = 64;
 /// The note for a directory served without a manifest.
+#[cfg(target_os = "linux")]
 pub(crate) const NO_MANIFEST_NOTE: &str = "非 mosdns UI 包（无 manifest）";
 
 #[derive(Default)]

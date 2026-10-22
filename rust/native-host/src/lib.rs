@@ -21,6 +21,7 @@ mod external_ui;
 mod local_time;
 mod local_url;
 mod managed;
+mod managed_ip;
 mod matchers;
 mod memory;
 mod observer;

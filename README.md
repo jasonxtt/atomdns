@@ -53,6 +53,7 @@ cargo test --workspace --no-fail-fast --manifest-path rust/Cargo.toml
 
 ## 文档
 
+- [不使用 WebUI：持久设置、校验与生效](docs/rust/headless.md)
 - [AGENTS.md](AGENTS.md)、[项目背景](docs/ai/project-context.md)、[配置说明](docs/ai/config-notes.md)
 - [产品契约](docs/rust/contracts/index.md)、[验证摘要](docs/rust/validation-summary.md)
 - [发版与手动替换](docs/rust/release.md)、[Go→Rust 切换（历史）](docs/rust/cutover.md)

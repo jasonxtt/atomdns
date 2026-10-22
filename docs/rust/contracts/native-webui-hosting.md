@@ -287,6 +287,11 @@ comes from actual handlers/providers: a group profile alone does not
 make local-rule writes available. Existing per-item format/read-only contracts
 remain authoritative. Missing Go-only APIs do not gain fake success handlers.
 
+Named `ip_set` show/post also participate in local-rule management: an eligible
+single exclusive `.txt` source makes the existing `rules.local.manage` operation
+available. Other IP shapes remain readable and POST returns 400 with the reason;
+there is no ip_set save/flush route. See [response/IP policy](native-response-policy.md#named-ip_set-management-2026-10-22).
+
 Both Vue shells share pending/ready/error discovery, completing discovery before
 optional requests. Only discovery404 selects legacy Go behavior. Network/non404,
 invalid schema or incomplete present operations show a retryable error and block

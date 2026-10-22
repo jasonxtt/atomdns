@@ -1313,6 +1313,63 @@ async fn plugin_response(
     cache: &CacheCatalog,
     request: &Request,
 ) -> Option<Response> {
+    if let Route::Plugin { tag, action } = route(&request.target) {
+        if let Some(set) = config
+            .ip_sets
+            .iter()
+            .find(|set| set.tag == tag.as_ref())
+            .and_then(|set| set.management.as_ref())
+        {
+            return Some(match (request.method.as_str(), action) {
+                ("GET", "show") => Response::text(set.show()),
+                ("POST", "post") => {
+                    if let Some(reason) = &set.reason {
+                        Response::error(400, &format!("ip_set `{tag}` is not manageable: {reason}"))
+                    } else {
+                        let _readers = config.rule_sources.lock_file_readers().await;
+                        if set
+                            .file
+                            .as_ref()
+                            .is_some_and(|file| config.rule_sources.reads_file(file))
+                        {
+                            return Some(Response::error(
+                                400,
+                                &format!(
+                                    "ip_set `{tag}` is not manageable: the file is shared with other configuration readers"
+                                ),
+                            ));
+                        }
+                        // Match Go's permissive JSON object (unknown fields ignored).
+                        #[derive(Deserialize)]
+                        struct IpPost {
+                            #[serde(default)]
+                            values: Option<Vec<String>>,
+                        }
+                        let payload = match serde_json::from_slice::<Option<IpPost>>(&request.body)
+                        {
+                            Ok(payload) => payload
+                                .and_then(|payload| payload.values)
+                                .unwrap_or_default(),
+                            Err(_) => return Some(Response::error(400, "invalid JSON")),
+                        };
+                        match set.replace(payload).await {
+                            Ok(count) => {
+                                Response::text(format!("ip_set replaced with {count} entries"))
+                            }
+                            Err(crate::managed_ip::ReplaceError::Limits) => {
+                                Response::error(400, "IP rule resource limit exceeded")
+                            }
+                            Err(crate::managed_ip::ReplaceError::Failed(error)) => {
+                                Response::error(500, &error)
+                            }
+                        }
+                    }
+                }
+                (_, "show" | "post") => Response::empty(405),
+                _ => Response::error(404, "404 page not found"),
+            });
+        }
+    }
     if let Some((tag, rest)) = rule_source_path(&request.target) {
         if let Some(provider) = config.rule_sources.provider(tag.as_ref()) {
             let query = request
@@ -3204,7 +3261,16 @@ fn ui_operations(
     // Upstream edits go to the typed settings of the `aliapi` groups.
     let settings_upstreams = config.reload.is_some() && !config.effective_upstreams.is_empty();
     let local = config.domain_sets.iter().any(|set| set.managed.is_some())
-        || config.rule_sources.has_postable_light();
+        || config.rule_sources.has_postable_light()
+        || config.ip_sets.iter().any(|set| {
+            set.management.as_ref().is_some_and(|set| {
+                set.reason.is_none()
+                    && set
+                        .file
+                        .as_ref()
+                        .is_some_and(|file| !config.rule_sources.reads_file(file))
+            })
+        });
     let diversion = config.rule_sources.has_kind(&[Kind::Sd, Kind::Si]);
     // The UI addresses AdGuard through the fixed `/plugins/adguard/...` path.
     let adguard = config
