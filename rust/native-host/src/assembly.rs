@@ -168,7 +168,8 @@ pub struct HostAssembly {
     forwards: Rc<ForwardCatalog>,
     cache: Rc<CacheCatalog>,
     observer: Arc<QueryObserver>,
-    runtime: HostRuntime,
+    /// Shared so `run` can keep the runtime while it drops the assembly.
+    runtime: Rc<HostRuntime>,
     options: HostOptions,
     state_root: Option<PathBuf>,
     audit_persistence_faults: AuditPersistenceFaults,
@@ -320,7 +321,7 @@ impl HostAssembly {
             forwards,
             cache,
             observer,
-            runtime: HostRuntime::new()?,
+            runtime: Rc::new(HostRuntime::new()?),
             options,
             state_root,
             audit_persistence_faults: AuditPersistenceFaults::default(),
@@ -514,19 +515,7 @@ impl HostAssembly {
     /// failure on either side cancels and joins the other before returning.
     pub async fn serve_host(&self) -> Result<(), HostRunError> {
         let bound = self.bind_host().await?;
-        let shutdown = TransportCancellation::new();
-        let serving = bound.serve(shutdown.clone());
-        tokio::pin!(serving);
-        tokio::select! {
-            result = &mut serving => result,
-            signal = shutdown_signal() => {
-                self.control().note_signal_stop();
-                shutdown.cancel();
-                let drained = serving.await;
-                drained?;
-                signal.map_err(|error| HostRunError::Task(format!("shutdown signal: {error}")))
-            },
-        }
+        serve_until(bound, self.control(), shutdown_signal()).await
     }
 
     /// Binds and serves the configured UDP listener without opening any
@@ -543,9 +532,48 @@ impl HostAssembly {
     }
 
     /// Runs the configured host: one DNS listener plus the optional scoped
-    /// management listener, owned by one shutdown scope.
-    pub fn run(&self) -> Result<(), HostRunError> {
-        self.block_on(self.serve_host())
+    /// management listener, owned by one shutdown scope. Once everything is
+    /// bound the assembly is dropped: from then on the supervisor's committed
+    /// view is the only owner of the startup generation, so the first hot
+    /// apply's retirement frees it. The runtime ends before this returns.
+    pub fn run(self) -> Result<(), HostRunError> {
+        self.run_until(shutdown_signal())
+    }
+
+    /// [`Self::run`] with the termination signal replaced by `stop` (tests).
+    pub(crate) fn run_until(
+        self,
+        stop: impl Future<Output = std::io::Result<()>>,
+    ) -> Result<(), HostRunError> {
+        let runtime = Rc::clone(&self.runtime);
+        runtime.block_on(async move {
+            let bound = self.bind_host().await?;
+            let control = self.control();
+            drop(self);
+            serve_until(bound, control, stop).await
+        })
+    }
+}
+
+/// Serves `bound` until it stops by itself or `stop` (the termination signal)
+/// completes, which cancels it and waits for it to drain.
+async fn serve_until(
+    bound: BoundHost,
+    control: crate::runtime_snapshot::RuntimeControl,
+    stop: impl Future<Output = std::io::Result<()>>,
+) -> Result<(), HostRunError> {
+    let shutdown = TransportCancellation::new();
+    let serving = bound.serve(shutdown.clone());
+    tokio::pin!(serving);
+    tokio::select! {
+        result = &mut serving => result,
+        signal = stop => {
+            control.note_signal_stop();
+            shutdown.cancel();
+            let drained = serving.await;
+            drained?;
+            signal.map_err(|error| HostRunError::Task(format!("shutdown signal: {error}")))
+        },
     }
 }
 

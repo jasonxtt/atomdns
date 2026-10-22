@@ -257,8 +257,11 @@ const UPLOAD_BODY_DEADLINE: Duration = Duration::from_secs(120);
 pub struct ApiServer {
     control: Option<crate::runtime_snapshot::RuntimeControl>,
     listener: TcpListener,
-    config: Rc<CompiledConfig>,
-    cache: Rc<CacheCatalog>,
+    /// The configuration and caches served when no `control` is attached
+    /// (tests and embedders). With a control every request uses the committed
+    /// view instead, and this is dropped: keeping the startup generation here
+    /// would hold it alive after every later hot apply.
+    fixed: Option<(Rc<CompiledConfig>, Rc<CacheCatalog>)>,
     observer: Arc<QueryObserver>,
     state_root: Option<PathBuf>,
     audit_persist_lock: Arc<AsyncMutex<()>>,
@@ -298,8 +301,7 @@ impl ApiServer {
             external_ui,
             control: None,
             listener,
-            config,
-            cache,
+            fixed: Some((config, cache)),
             observer,
             state_root,
             audit_persist_lock: Arc::new(AsyncMutex::new(())),
@@ -316,6 +318,7 @@ impl ApiServer {
             control.set_api_listen(address);
         }
         self.control = Some(control);
+        self.fixed = None;
         self
     }
 
@@ -365,8 +368,7 @@ impl ApiServer {
                                 break;
                             }
                             let control = self.control.clone();
-                            let config = Rc::clone(&self.config);
-                            let cache = Rc::clone(&self.cache);
+                            let fixed = self.fixed.clone();
                             let observer = Arc::clone(&self.observer);
                             let state_root = self.state_root.clone();
                             let audit_persist_lock = Arc::clone(&self.audit_persist_lock);
@@ -382,8 +384,7 @@ impl ApiServer {
                                     let _ = process_connection(
                                         stream,
                                         control,
-                                        config,
-                                        cache,
+                                        fixed,
                                         observer,
                                         state_root,
                                         audit_persist_lock,
@@ -565,8 +566,7 @@ impl Response {
 async fn process_connection(
     mut stream: TcpStream,
     control: Option<crate::runtime_snapshot::RuntimeControl>,
-    config: Rc<CompiledConfig>,
-    cache: Rc<CacheCatalog>,
+    fixed: Option<(Rc<CompiledConfig>, Rc<CacheCatalog>)>,
     observer: Arc<QueryObserver>,
     state_root: Option<PathBuf>,
     audit_persist_lock: Arc<AsyncMutex<()>>,
@@ -601,10 +601,12 @@ async fn process_connection(
     // Exact read-only health is available through admission pause. It takes no
     // lease and cannot resume admission or trigger recovery shutdown.
     if request.target.split('?').next() == Some("/api/v1/system/health") {
-        let update_root: Option<PathBuf> = config
-            .reload
-            .as_ref()
-            .map(|reload| reload.root_dir.clone())
+        let reload = match &control {
+            Some(control) => control.view().config.reload.clone(),
+            None => fixed.as_ref().and_then(|(config, _)| config.reload.clone()),
+        };
+        let update_root: Option<PathBuf> = reload
+            .map(|reload| reload.root_dir)
             .or_else(|| state_root.clone());
         let response = if request.method == "GET" {
             let state = control
@@ -712,12 +714,10 @@ async fn process_connection(
     // Capture the committed API view after a complete bounded HTTP request,
     // not at connection acceptance. The server address/observer stay stable.
     let snapshot = control.as_ref().map(|control| control.view());
-    let config = snapshot
-        .as_ref()
-        .map_or(config, |snapshot| snapshot.config.clone());
-    let cache = snapshot
-        .as_ref()
-        .map_or(cache, |snapshot| snapshot.cache.clone());
+    let (config, cache) = match &snapshot {
+        Some(snapshot) => (snapshot.config.clone(), snapshot.cache.clone()),
+        None => fixed.expect("an API server without a control keeps its fixed generation"),
+    };
     let (_reader, mut writer) = stream.into_split();
     let request_shutdown = shutdown.child_token();
     let dispatch = dispatch(

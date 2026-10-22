@@ -74,6 +74,8 @@ struct Control {
     retired: RefCell<Option<Rc<RuntimeSnapshot>>>,
     preparing: Cell<bool>,
     retirement_gate: tokio::sync::Mutex<()>,
+    /// Serializes hot-apply compiles (see `compile_candidate`).
+    compile_gate: tokio::sync::Mutex<()>,
     admitting: Cell<bool>,
     /// Set while only management is paused (a settings apply): DNS keeps
     /// being admitted, because the apply changes nothing a query could
@@ -405,6 +407,7 @@ impl RuntimeControl {
             retired: RefCell::new(None),
             preparing: Cell::new(false),
             retirement_gate: tokio::sync::Mutex::new(()),
+            compile_gate: tokio::sync::Mutex::new(()),
             admitting: Cell::new(true),
             management_only: Cell::new(false),
             started: Cell::new(false),
@@ -728,7 +731,6 @@ impl RuntimeControl {
                 ListenerKind::Udp => crate::assembly::DnsServer::Udp(
                     crate::udp::UdpServer::bind_snapshot(
                         self.clone(),
-                        next,
                         self.0.observer.clone(),
                         listener,
                     )
@@ -748,7 +750,6 @@ impl RuntimeControl {
                 ListenerKind::Tcp => crate::assembly::DnsServer::Tcp(
                     crate::tcp::TcpServer::bind_snapshot(
                         self.clone(),
-                        next,
                         self.0.observer.clone(),
                         listener,
                     )
@@ -944,8 +945,12 @@ impl RuntimeControl {
         };
         let path = crate::config::settings::Settings::path(&reload.root_dir);
         let expected = read_optional(&path)?;
-        let config = crate::config::recompile(&reload, &settings)
-            .map_err(|error| ApplyFailure::Invalid(error.to_string()))?;
+        let candidate = settings.clone();
+        // `settings` came from the view current now (the API built it without awaiting since).
+        let base = self.generation();
+        let config = self
+            .compile_candidate(base, move || crate::config::recompile(&reload, &candidate))
+            .await?;
         let commit = FileCommit {
             path,
             expected,
@@ -968,16 +973,23 @@ impl RuntimeControl {
         let reload = current
             .config
             .reload
-            .as_ref()
+            .clone()
             .ok_or_else(|| ApplyFailure::Invalid("file configuration is required".into()))?;
-        let expected = read_optional(&profile.base.join(crate::config::standard_groups::STATE))?;
+        let state = profile.base.join(crate::config::standard_groups::STATE);
+        let expected = read_optional(&state)?;
         if expected != profile.expected_state {
-            return Err(ApplyFailure::Conflict(
-                profile.base.join(crate::config::standard_groups::STATE),
-            ));
+            return Err(ApplyFailure::Conflict(state));
         }
-        let mut config = crate::config::recompile_groups(reload, &current.config.settings, &groups)
-            .map_err(|error| ApplyFailure::Invalid(error.to_string()))?;
+        let settings = current.config.settings.clone();
+        let base = current.config.generation;
+        // The compile does not need the running view; holding it would keep a
+        // generation that another save retires meanwhile alive.
+        drop(current);
+        let mut config = self
+            .compile_candidate(base, move || {
+                crate::config::recompile_groups(&reload, &settings, &groups)
+            })
+            .await?;
         let bytes = crate::config::standard_groups::state_bytes(
             &config
                 .standard_groups
@@ -986,7 +998,7 @@ impl RuntimeControl {
                 .groups,
         );
         let commit = FileCommit {
-            path: profile.base.join(crate::config::standard_groups::STATE),
+            path: state,
             expected,
             bytes: bytes.clone(),
             cache_dumps: Vec::new(),
@@ -998,8 +1010,44 @@ impl RuntimeControl {
             .as_mut()
             .expect("candidate groups")
             .expected_state = Some(bytes);
-        drop(current);
         self.apply_config(config, Some(commit)).await
+    }
+
+    /// Compiles a hot-apply candidate on its own thread (`compile_thread`), so
+    /// the DNS thread keeps answering meanwhile. One candidate compiles at a
+    /// time; a later save waits here. Shutdown abandons the wait (the compile
+    /// thread finishes and drops its result); a panic in the compile is an
+    /// invalid change. The compile only reads files, so nothing has changed.
+    ///
+    /// `base` is the generation whose view the caller built the candidate's
+    /// in-memory inputs from (settings, groups). If another change is
+    /// published before this compile ends, the candidate is refused as busy:
+    /// it would combine that older view with files the compile read after the
+    /// publication, whose fingerprints the commit-point checks then accept.
+    async fn compile_candidate(
+        &self,
+        base: u64,
+        compile: impl FnOnce() -> Result<CompiledConfig, crate::config::ConfigError> + Send + 'static,
+    ) -> Result<CompiledConfig, ApplyFailure> {
+        let _gate = tokio::select! {
+            biased;
+            () = wait_for_shutdown(self.shutdown_token()) => return Err(ApplyFailure::Shutdown),
+            gate = self.0.compile_gate.lock() => gate,
+        };
+        let config = tokio::select! {
+            biased;
+            () = wait_for_shutdown(self.shutdown_token()) => return Err(ApplyFailure::Shutdown),
+            compiled = crate::compile_thread::compile_off_thread(compile) => match compiled {
+                Ok(result) => result.map_err(|error| ApplyFailure::Invalid(error.to_string()))?,
+                Err(reason) => return Err(ApplyFailure::Invalid(reason)),
+            },
+        };
+        if self.generation() != base {
+            return Err(ApplyFailure::Busy(
+                "the running configuration changed while this change was compiled; retry".into(),
+            ));
+        }
+        Ok(config)
     }
 
     /// The shared whole-generation publication path; `files` are the plain files written at
@@ -1372,6 +1420,214 @@ mod admission_tests {
                 return port;
             }
         }
+    }
+
+    /// A file-backed configuration with a management listener and one
+    /// `socks5_proxy` a settings change can move.
+    fn proxy_config(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("webinfo")).unwrap();
+        let path = root.join("config.yaml");
+        let dns = free_pair();
+        let api = free_pair();
+        std::fs::write(&path, format!("log: {{level: error}}\napi: {{http: '127.0.0.1:{api}'}}\nplugins:\n  - tag: main_proxy\n    type: socks5_proxy\n    args: {{addr: '192.0.2.1:1080'}}\n  - tag: fwd\n    type: forward\n    args: {{upstreams: [{{addr: 'udp://127.0.0.1:15999'}}]}}\n  - tag: entry\n    type: sequence\n    args: [{{exec: $fwd}}]\n  - tag: main\n    type: udp_server\n    args: {{entry: entry, listen: '127.0.0.1:{dns}'}}\n")).unwrap();
+        (root, path)
+    }
+
+    fn with_proxy(
+        settings: &crate::config::settings::Settings,
+        addr: &str,
+    ) -> crate::config::settings::Settings {
+        let mut settings = settings.clone();
+        settings.proxies.insert(
+            "main_proxy".into(),
+            crate::config::settings::Addr { addr: addr.into() },
+        );
+        settings
+    }
+
+    async fn until_ready(control: &super::RuntimeControl) {
+        while control.lifecycle_state() != "ready" {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    }
+
+    /// The production `run` path keeps nothing of the startup generation once a
+    /// hot apply has retired it: the assembly, the management listener and the
+    /// startup DNS listeners all used to hold it for the life of the process.
+    #[test]
+    fn hot_apply_frees_the_startup_generation_under_run() {
+        let (root, path) = proxy_config("native-startup-release");
+        let host = crate::HostAssembly::from_config_file_in(&path, None).unwrap();
+        let control = host.control();
+        let startup = (
+            Rc::downgrade(&host.config_handle()),
+            Rc::downgrade(&host.forwards_handle()),
+            Rc::downgrade(&host.cache_handle()),
+        );
+        let observed = Rc::new(std::cell::Cell::new(None));
+        let seen = Rc::clone(&observed);
+        host.run_until(async move {
+            until_ready(&control).await;
+            let settings = with_proxy(&control.view().config.settings, "192.0.2.2:1080");
+            let generation = control.apply_settings(settings).await.unwrap();
+            seen.set(Some((
+                generation,
+                startup.0.strong_count(),
+                startup.1.strong_count(),
+                startup.2.strong_count(),
+            )));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            observed.get(),
+            Some((1, 0, 0, 0)),
+            "generation 1 published; startup config, upstreams and caches freed"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Two saves at once: compiles take turns, one save publishes and the
+    /// other is refused (busy or conflict) without changing anything.
+    #[test]
+    fn concurrent_settings_saves_publish_exactly_one() {
+        let (root, path) = proxy_config("native-concurrent-saves");
+        let host = crate::HostAssembly::from_config_file_in(&path, None).unwrap();
+        let control = host.control();
+        let outcome = Rc::new(std::cell::RefCell::new(None));
+        let seen = Rc::clone(&outcome);
+        host.run_until(async move {
+            until_ready(&control).await;
+            let base = control.view().config.settings.clone();
+            let (first, second) = tokio::join!(
+                control.apply_settings(with_proxy(&base, "192.0.2.3:1080")),
+                control.apply_settings(with_proxy(&base, "192.0.2.4:1080")),
+            );
+            *seen.borrow_mut() = Some((
+                first.map_err(|error| format!("{error:?}")),
+                second.map_err(|error| format!("{error:?}")),
+                control.generation(),
+                control.view().config.settings.clone(),
+            ));
+            Ok(())
+        })
+        .unwrap();
+        let (first, second, generation, settings) = outcome.borrow_mut().take().unwrap();
+        assert_eq!(generation, 1, "exactly one publication");
+        let winner = match (&first, &second) {
+            (Ok(1), Err(refused)) => {
+                assert!(
+                    refused.contains("Conflict") || refused.to_lowercase().contains("busy"),
+                    "{refused}"
+                );
+                "192.0.2.3:1080"
+            }
+            (Err(refused), Ok(1)) => {
+                assert!(
+                    refused.contains("Conflict") || refused.to_lowercase().contains("busy"),
+                    "{refused}"
+                );
+                "192.0.2.4:1080"
+            }
+            other => panic!("one save must publish and one be refused: {other:?}"),
+        };
+        assert_eq!(settings.proxies["main_proxy"].addr, winner);
+        let file = std::fs::read_to_string(crate::config::settings::Settings::path(&root)).unwrap();
+        assert!(
+            file.contains(winner),
+            "the file holds the published settings: {file}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A candidate built from an older view is refused when another change was
+    /// published while it compiled (a group save queued behind a settings save
+    /// would otherwise publish the old settings with the new file's fingerprint).
+    #[test]
+    fn a_publication_during_the_compile_refuses_the_candidate() {
+        let (root, path) = proxy_config("native-compile-stale");
+        let host = crate::HostAssembly::from_config_file_in(&path, None).unwrap();
+        host.block_on(async {
+            let control = host.control();
+            let (release, wait) = std::sync::mpsc::channel::<()>();
+            let candidate = path.clone();
+            let compiling = tokio::task::spawn_local({
+                let control = control.clone();
+                async move {
+                    control
+                        .compile_candidate(0, move || {
+                            wait.recv().unwrap();
+                            crate::load_and_compile(&candidate)
+                        })
+                        .await
+                }
+            });
+            tokio::task::yield_now().await;
+            let prepared = control
+                .prepare_host(crate::load_and_compile(&path).unwrap())
+                .await
+                .unwrap();
+            control.install(prepared).unwrap();
+            assert_eq!(control.generation(), 1);
+            release.send(()).unwrap();
+            let refused = compiling.await.unwrap();
+            assert!(
+                matches!(&refused, Err(super::ApplyFailure::Busy(_))),
+                "{:?}",
+                refused.err()
+            );
+            control.retire().await.unwrap();
+            control.close().await.unwrap();
+        });
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Shutdown while a candidate compiles returns at once and changes nothing;
+    /// a compile that panics is an invalid change.
+    #[test]
+    fn compile_shutdown_and_panic_change_nothing() {
+        let (root, path) = proxy_config("native-compile-stop");
+        let host = crate::HostAssembly::from_config_file_in(&path, None).unwrap();
+        host.block_on(async {
+            let control = host.control();
+            let panicked = control
+                .compile_candidate(0, || -> Result<crate::config::CompiledConfig, crate::config::ConfigError> {
+                    panic!("compile bug")
+                })
+                .await;
+            assert!(
+                matches!(&panicked, Err(super::ApplyFailure::Invalid(reason)) if reason.contains("panicked")),
+                "{:?}",
+                panicked.err()
+            );
+            let stop = mosdns_upstream_core::TransportCancellation::new();
+            let updates = control.start(&stop);
+            let slow = path.clone();
+            let compiling = tokio::task::spawn_local({
+                let control = control.clone();
+                async move {
+                    control
+                        .compile_candidate(0, move || {
+                            std::thread::sleep(std::time::Duration::from_millis(400));
+                            crate::load_and_compile(&slow)
+                        })
+                        .await
+                }
+            });
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            let began = std::time::Instant::now();
+            stop.cancel();
+            let stopped = compiling.await.unwrap();
+            assert!(matches!(stopped, Err(super::ApplyFailure::Shutdown)));
+            assert!(began.elapsed() < std::time::Duration::from_millis(300));
+            assert_eq!(control.generation(), 0);
+            assert!(!crate::config::settings::Settings::path(&root).exists());
+            drop(updates);
+            control.close().await.unwrap();
+        });
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

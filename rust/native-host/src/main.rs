@@ -54,11 +54,11 @@ fn serve(config: &std::path::Path, dir: Option<&std::path::Path>) -> Result<(), 
             mosdns_native_host::HostAssembly::from_config_file_in(&config_path, root.as_deref())
                 .map_err(|error| error.to_string())?;
         let control = assembly.control();
+        // `run` ends the runtime and every thread it owns before it returns,
+        // so nothing of it survives into a replaced process image.
         let result = assembly.run().map_err(|error| error.to_string());
         let restart = control.restart_requested();
-        // Ends the runtime and every thread it owns before the process image is replaced.
         drop(control);
-        drop(assembly);
         if !restart {
             return result;
         }

@@ -24,11 +24,13 @@ const REFUSED: u8 = 5;
 /// host's current-thread local task set because sequence executors are not
 /// widened to `Send + Sync` by this migration slice.
 pub struct UdpServer {
-    forwards: Rc<ForwardCatalog>,
-    cache: Rc<CacheCatalog>,
+    /// The upstream and cache owners an unsupervised listener closes when it
+    /// stops. A supervised listener holds none: its requests use the admitted
+    /// snapshot and the supervisor closes every generation, so holding them
+    /// here would keep a replaced generation alive.
+    owners: Option<(Rc<ForwardCatalog>, Rc<CacheCatalog>)>,
     socket: Arc<UdpSocket>,
     observer: Arc<QueryObserver>,
-    supervised: bool,
     control: crate::runtime_snapshot::RuntimeControl,
     listener_tag: String,
     listener_addr: SocketAddr,
@@ -63,11 +65,9 @@ impl UdpServer {
             .await
             .map_err(UdpServerError::Bind)?;
         let server = Self {
-            forwards: assembly.forwards_handle(),
-            cache: assembly.cache_handle(),
+            owners: (!supervised).then(|| (assembly.forwards_handle(), assembly.cache_handle())),
             socket: Arc::new(socket),
             observer: assembly.observer_handle(),
-            supervised,
             control: assembly.control(),
             listener_tag: declared.tag.clone(),
             listener_addr: declared.listen,
@@ -86,7 +86,6 @@ impl UdpServer {
 
     pub(crate) async fn bind_snapshot(
         control: crate::runtime_snapshot::RuntimeControl,
-        snapshot: &crate::runtime_snapshot::RuntimeSnapshot,
         observer: Arc<QueryObserver>,
         declared: &crate::config::ListenerConfig,
     ) -> Result<Self, UdpServerError> {
@@ -94,11 +93,9 @@ impl UdpServer {
             .await
             .map_err(UdpServerError::Bind)?;
         let server = Self {
-            forwards: snapshot.forwards.clone(),
-            cache: snapshot.cache.clone(),
+            owners: None,
             socket: Arc::new(bound),
             observer,
-            supervised: true,
             control,
             listener_tag: declared.tag.clone(),
             listener_addr: declared.listen,
@@ -190,17 +187,15 @@ impl UdpServer {
         }
 
         shutdown.cancel();
-        if !self.supervised {
-            self.cache.stop_admission();
+        if let Some((_, cache)) = &self.owners {
+            cache.stop_admission();
         }
         drain_tasks(&mut tasks, &mut task_error).await;
-        if !self.supervised {
-            if let Err(error) = self.cache.stop_refreshes().await {
+        if let Some((forwards, cache)) = &self.owners {
+            if let Err(error) = cache.stop_refreshes().await {
                 task_error = Some(error.to_string());
             }
-        }
-        if !self.supervised {
-            self.forwards.close_all().await;
+            forwards.close_all().await;
         }
         if let Some(error) = task_error {
             return Err(UdpServerError::Task(error));
