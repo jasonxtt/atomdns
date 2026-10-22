@@ -1,7 +1,7 @@
-name: Test mosdns (Rust)
+name: Test rtdns
 
 # Manual only (user decision 2026-10-18): run from the Actions tab or
-# `gh workflow run test.yml --ref rust`.
+# `gh workflow run test.yml --ref main`.
 on:
   workflow_dispatch:
 

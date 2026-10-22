@@ -789,7 +789,7 @@ pub fn compile_yaml_with_base(yaml: &str, base_dir: &Path) -> Result<CompiledCon
 }
 
 /// Like [`compile_yaml_with_base`], with a separate configuration root for
-/// relative plugin-argument paths (`mosdns start -d <root>`). `include` paths
+/// relative plugin-argument paths (`rtdns start -d <root>`). `include` paths
 /// still resolve against `base_dir`, the main configuration's directory.
 pub fn compile_yaml_with_roots(
     yaml: &str,

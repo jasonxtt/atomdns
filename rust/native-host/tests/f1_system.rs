@@ -1,4 +1,4 @@
-//! F-1 system and appearance, against the real `mosdns` binary: the in-place
+//! F-1 system and appearance, against the real `rtdns` binary: the in-place
 //! restart (same process id, saved state loaded again, failure paths), the saved
 //! WebUI port taking effect at the next start, the process metrics and the
 //! appearance upload over a real socket. No public network: the upstream is a
@@ -208,7 +208,7 @@ impl Host {
             std::fs::create_dir_all(root.join("dump")).unwrap();
         }
         let exe = root.join("mosdns");
-        std::fs::copy(env!("CARGO_BIN_EXE_mosdns"), &exe).unwrap();
+        std::fs::copy(env!("CARGO_BIN_EXE_rtdns"), &exe).unwrap();
         std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
         let (stub, upstream) = Stub::start();
         let (api, dns) = (free_port(), free_udp_port());

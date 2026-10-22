@@ -99,6 +99,8 @@
 7. **上游查询形状**（待定契约）：Go 对上游统一 OPT 1200、DO=0；Rust 普通转发原样、ECS 时 1232。是否对齐需先定契约。
 
 **独立为 rtdns 仓库后（2026-10-21 记录）**
-8. **项目改名收尾**（待排期）：在线更新仍查 `jasonxtt/mosdns` 的 Releases（`rust/native-host/src/update/mod.rs` 的 `DEFAULT_API_URL`/`RELEASE_PAGE`），
-   发布包名仍为 `mosdns-rust-*`（构建/清单脚本、F-3a 测试、cutover 工具）；README 正文仍是 Go 版介绍。改名前须决定新的发布包与 tag 命名，
-   并保证生产 rtdns 的在线更新能平滑过渡（旧程序只认旧包名）。
+8. **项目改名收尾**（2026-10-22 任务 `10-22-rtdns-rename-release`：代码、脚本、文档与 VM 演练已完成，**尚未发布 v0.2.0**）：
+   用户决定不做桥接版（旧仓库从未发布 `rust-v*`，Go 更新器有一条路径读 `/releases/latest`）；tag 为 `vX.Y.Z`，发布包 `rtdns-linux-amd64.tar.gz`/`rtdns-update-manifest.json`，
+   在线更新只来自 `jasonxtt/rtdns`，cargo bin 改为 `rtdns`，`native-host` 版本 `0.2.0`；README 已重写，发版与手动替换见 [release.md](../release.md)，
+   演练记录见 [10-22-rtdns-rename](../validation-records/10-22-rtdns-rename/README.md)。生产 `rust-v0.1.4` 由用户手动替换为 `v0.2.0`。
+   仍待决定：WebUI 里的 “MosDNS” 界面文案（待 UI 重做时一并处理）；`scripts/cutover/`、`tools/cutover/` 仍按旧名/`rust-v*` 编写，已不适用于新程序。

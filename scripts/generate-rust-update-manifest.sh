@@ -1,21 +1,24 @@
 #!/usr/bin/env bash
-# Writes mosdns-rust-update-manifest.json for a Rust release: the sha256 of every
-# mosdns-rust-*.tar.gz in the artifact directory, the configuration schema/package ID the
+# Writes rtdns-update-manifest.json for a release: the sha256 of every
+# rtdns-*.tar.gz in the artifact directory, the configuration schema/package ID the
 # program requires (read from the Rust source and checked against the release metadata),
-# and the configuration package URL + sha256 once the package is published.
-#   scripts/generate-rust-update-manifest.sh rust-vX.Y.Z <artifact-dir> [output]
+# and the configuration package URL + sha256 once the package is published. The asset
+# names must equal the constants of the updater (RELEASE_ASSET, MANIFEST_ASSET).
+#   scripts/generate-rust-update-manifest.sh vX.Y.Z <artifact-dir> [output]
 # RUST_RELEASE_METADATA=<file> uses another metadata file (tests).
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 METADATA="${RUST_RELEASE_METADATA:-${ROOT_DIR}/scripts/rust-release-metadata.json}"
 SOURCE="${ROOT_DIR}/rust/native-host/src/update/mod.rs"
-VERSION="${1:?version tag is required (rust-vX.Y.Z)}"
+VERSION="${1:?version tag is required (vX.Y.Z)}"
 ARTIFACT_DIR="${2:?artifact directory is required}"
-OUTPUT="${3:-${ARTIFACT_DIR}/mosdns-rust-update-manifest.json}"
+RELEASE_ASSET="rtdns-linux-amd64.tar.gz"
+MANIFEST_ASSET="rtdns-update-manifest.json"
+OUTPUT="${3:-${ARTIFACT_DIR}/${MANIFEST_ASSET}}"
 
-if ! [[ "${VERSION}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "version must look like rust-vX.Y.Z, got ${VERSION}" >&2
+if ! [[ "${VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "version must look like vX.Y.Z, got ${VERSION}" >&2
   exit 1
 fi
 
@@ -30,14 +33,21 @@ while IFS= read -r file; do
   name="$(basename "${file}")"
   digest="$(hash_file "${file}")"
   artifacts="$(jq --arg name "${name}" --arg digest "${digest}" '. + {($name): {sha256: $digest}}' <<<"${artifacts}")"
-done < <(find "${ARTIFACT_DIR}" -maxdepth 1 -type f -name 'mosdns-rust-*.tar.gz' | LC_ALL=C sort)
+done < <(find "${ARTIFACT_DIR}" -maxdepth 1 -type f -name 'rtdns-*.tar.gz' | LC_ALL=C sort)
 
 if [ "$(jq 'length' <<<"${artifacts}")" -eq 0 ]; then
-  echo "no mosdns-rust-*.tar.gz found in ${ARTIFACT_DIR}" >&2
+  echo "no rtdns-*.tar.gz found in ${ARTIFACT_DIR}" >&2
   exit 1
 fi
-if [ "$(jq 'has("mosdns-rust-linux-amd64.tar.gz")' <<<"${artifacts}")" != "true" ]; then
-  echo "mosdns-rust-linux-amd64.tar.gz is missing from ${ARTIFACT_DIR}" >&2
+if [ "$(jq --arg name "${RELEASE_ASSET}" 'has($name)' <<<"${artifacts}")" != "true" ]; then
+  echo "${RELEASE_ASSET} is missing from ${ARTIFACT_DIR}" >&2
+  exit 1
+fi
+
+code_asset="$(sed -n 's/^pub(crate) const RELEASE_ASSET: &str = "\([^"]*\)";.*/\1/p' "${SOURCE}")"
+code_manifest_asset="$(sed -n 's/^pub(crate) const MANIFEST_ASSET: &str = "\([^"]*\)";.*/\1/p' "${SOURCE}")"
+if [ "${code_asset}" != "${RELEASE_ASSET}" ] || [ "${code_manifest_asset}" != "${MANIFEST_ASSET}" ]; then
+  echo "asset names do not match ${SOURCE}" >&2
   exit 1
 fi
 

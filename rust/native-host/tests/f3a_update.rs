@@ -1,4 +1,4 @@
-//! F-3a online update, against the real `mosdns` binary and a local release server (no
+//! F-3a online update, against the real `rtdns` binary and a local release server (no
 //! public network): status/check with the cache, the refusal paths (sha256, manifest,
 //! package, pre-flight), a full guarded update (same process id, new files, confirmed),
 //! automatic rollback when the candidate fails, start-up recovery after the guard is
@@ -400,7 +400,7 @@ fn manifest_json(tag: &str, archive: &[u8], config: Option<(&str, &[u8])>) -> Ve
         "format": 1, "channel": "rust", "version": tag,
         "required_config_schema": if config.is_some() { 1 } else { 0 },
         "config_package_id": "rust-config-schema-1",
-        "artifacts": {"mosdns-rust-linux-amd64.tar.gz": {"sha256": sha256(archive)}},
+        "artifacts": {"rtdns-linux-amd64.tar.gz": {"sha256": sha256(archive)}},
     });
     if let Some((url, bytes)) = config {
         manifest["config"] = serde_json::json!({"url": url, "sha256": sha256(bytes)});
@@ -420,13 +420,13 @@ fn binary() -> &'static Vec<u8> {
             .arg("--strip-all")
             .arg("-o")
             .arg(&stripped)
-            .arg(env!("CARGO_BIN_EXE_mosdns"))
+            .arg(env!("CARGO_BIN_EXE_rtdns"))
             .status()
             .is_ok_and(|status| status.success());
         let bytes = std::fs::read(if ok {
             stripped.as_path()
         } else {
-            Path::new(env!("CARGO_BIN_EXE_mosdns"))
+            Path::new(env!("CARGO_BIN_EXE_rtdns"))
         })
         .unwrap();
         let _ = std::fs::remove_file(&stripped);
@@ -435,7 +435,7 @@ fn binary() -> &'static Vec<u8> {
 }
 
 fn current_version() -> String {
-    let output = Command::new(env!("CARGO_BIN_EXE_mosdns"))
+    let output = Command::new(env!("CARGO_BIN_EXE_rtdns"))
         .arg("version")
         .output()
         .unwrap();
@@ -585,7 +585,7 @@ impl Host {
 
     /// Publishes one release `tag` with the given executable (as a tar.gz) and manifest.
     fn publish(&self, tag: &str, program: &[u8], config: Option<&[u8]>) {
-        let archive = tar_gz("mosdns", program);
+        let archive = tar_gz("rtdns", program);
         let config_url = self.server.url(&format!("/dl/{tag}/config_rust_up.zip"));
         let manifest = manifest_json(
             tag,
@@ -593,12 +593,12 @@ impl Host {
             config.map(|bytes| (config_url.as_str(), bytes)),
         );
         self.server.set(
-            &format!("/dl/{tag}/mosdns-rust-linux-amd64.tar.gz"),
+            &format!("/dl/{tag}/rtdns-linux-amd64.tar.gz"),
             "application/gzip",
             archive,
         );
         self.server.set(
-            &format!("/dl/{tag}/mosdns-rust-update-manifest.json"),
+            &format!("/dl/{tag}/rtdns-update-manifest.json"),
             "application/json",
             manifest,
         );
@@ -613,10 +613,7 @@ impl Host {
             tag,
             false,
             false,
-            &[
-                "mosdns-rust-linux-amd64.tar.gz",
-                "mosdns-rust-update-manifest.json",
-            ],
+            &["rtdns-linux-amd64.tar.gz", "rtdns-update-manifest.json"],
         )]);
     }
 }
@@ -647,37 +644,37 @@ fn start_ticks(pid: u32) -> String {
 // ===== status and check ==================================================================
 
 #[test]
-fn status_and_check_use_the_cache_ignore_go_releases_and_degrade_on_failure() {
+fn status_and_check_use_the_cache_ignore_other_tag_families_and_degrade_on_failure() {
     let host = Host::start("status", None);
     let version = current_version();
+    // Everything but `v99.0.0` is newer than it, so it would win if it were accepted.
     host.server.list(vec![
         host.server
-            .release("v99.0.0", false, false, &["mosdns-rust-linux-amd64.tar.gz"]),
-        host.server.release("lite-v99.0.0", false, false, &[]),
-        host.server.release(
-            "rust-v99.0.0",
-            false,
-            false,
-            &["mosdns-rust-linux-amd64.tar.gz"],
-        ),
-        host.server.release("rust-v99.5.0", true, false, &[]),
-        host.server.release("rust-v99.6.0", false, true, &[]),
-        host.server.release("rust-v98.0.0", false, false, &[]),
+            .release("v99.0.0", false, false, &["rtdns-linux-amd64.tar.gz"]),
+        host.server.release("rust-v99.9.0", false, false, &[]),
+        host.server.release("lite-v99.9.0", false, false, &[]),
+        host.server.release("openwrt-v99.9.0", false, false, &[]),
+        host.server.release("V99.8.0", false, false, &[]),
+        host.server.release("v99.7", false, false, &[]),
+        host.server.release("v99.7.0-rc1", false, false, &[]),
+        host.server.release("v99.5.0", true, false, &[]),
+        host.server.release("v99.6.0", false, true, &[]),
+        host.server.release("v98.0.0", false, false, &[]),
     ]);
     let status = host.api("GET", "/api/v1/update/status", b"");
     assert_eq!(status.status, 200);
     let status = status.json();
     assert_eq!(status["current_version"], version);
-    assert_eq!(status["latest_version"], "rust-v99.0.0");
+    assert_eq!(status["latest_version"], "v99.0.0");
     assert_eq!(status["update_available"], true);
     assert_eq!(status["cached"], false);
     assert_eq!(status["architecture"], "linux/amd64");
-    assert_eq!(status["asset_name"], "mosdns-rust-linux-amd64.tar.gz");
+    assert_eq!(status["asset_name"], "rtdns-linux-amd64.tar.gz");
     assert!(
         status["download_url"]
             .as_str()
             .unwrap()
-            .ends_with("/rust-v99.0.0/mosdns-rust-linux-amd64.tar.gz")
+            .ends_with("/v99.0.0/rtdns-linux-amd64.tar.gz")
     );
     assert_eq!(status["config_schema_required"], 1);
     assert!(status.get("pending_restart").is_none() && status.get("rollback_performed").is_none());
@@ -685,7 +682,7 @@ fn status_and_check_use_the_cache_ignore_go_releases_and_degrade_on_failure() {
         status["release_url"]
             .as_str()
             .unwrap()
-            .ends_with("/releases/tag/rust-v99.0.0")
+            .ends_with("/releases/tag/v99.0.0")
     );
     // A second read is served from the cache; a forced check goes to the server again.
     assert_eq!(host.server.count("/releases"), 1);
@@ -715,12 +712,12 @@ fn status_and_check_use_the_cache_ignore_go_releases_and_degrade_on_failure() {
             .unwrap()
             .starts_with("检查更新失败")
     );
-    // Only Go releases: nothing of ours.
+    // Only the old `rust-v*` family: nothing of ours.
     host.server
-        .list(vec![host.server.release("v1.2.3", false, false, &[])]);
+        .list(vec![host.server.release("rust-v1.2.3", false, false, &[])]);
     let none = host.api("POST", "/api/v1/update/check", b"{}").json();
     assert!(
-        none["message"].as_str().unwrap().contains("rust-v*"),
+        none["message"].as_str().unwrap().contains("vX.Y.Z"),
         "{none}"
     );
     // Methods and bodies.
@@ -751,10 +748,10 @@ fn an_update_is_refused_without_touching_anything_when_a_check_fails() {
     };
 
     // The archive does not match the manifest's sha256.
-    host.publish("rust-v99.0.0", &real, None);
-    let wrong = tar_gz("mosdns", b"tampered");
+    host.publish("v99.0.0", &real, None);
+    let wrong = tar_gz("rtdns", b"tampered");
     host.server.set(
-        "/dl/rust-v99.0.0/mosdns-rust-linux-amd64.tar.gz",
+        "/dl/v99.0.0/rtdns-linux-amd64.tar.gz",
         "application/gzip",
         wrong,
     );
@@ -768,12 +765,12 @@ fn an_update_is_refused_without_touching_anything_when_a_check_fails() {
     nothing_changed(&host);
 
     // No manifest asset in the release.
-    host.publish("rust-v99.0.0", &real, None);
+    host.publish("v99.0.0", &real, None);
     host.server.list(vec![host.server.release(
-        "rust-v99.0.0",
+        "v99.0.0",
         false,
         false,
-        &["mosdns-rust-linux-amd64.tar.gz"],
+        &["rtdns-linux-amd64.tar.gz"],
     )]);
     let reply = apply(&host);
     assert_eq!(reply.status, 502);
@@ -788,11 +785,11 @@ fn an_update_is_refused_without_touching_anything_when_a_check_fails() {
     nothing_changed(&host);
 
     // The manifest names another version.
-    host.publish("rust-v99.0.0", &real, None);
+    host.publish("v99.0.0", &real, None);
     host.server.set(
-        "/dl/rust-v99.0.0/mosdns-rust-update-manifest.json",
+        "/dl/v99.0.0/rtdns-update-manifest.json",
         "application/json",
-        manifest_json("rust-v99.0.1", &tar_gz("mosdns", &real), None),
+        manifest_json("v99.0.1", &tar_gz("rtdns", &real), None),
     );
     let reply = apply(&host);
     assert_eq!(reply.status, 502);
@@ -803,18 +800,18 @@ fn an_update_is_refused_without_touching_anything_when_a_check_fails() {
     );
     nothing_changed(&host);
 
-    // The archive has no `mosdns` file.
+    // The archive has no `rtdns` file.
     let no_binary = tar_gz("README", b"text");
-    host.publish("rust-v99.0.0", &real, None);
+    host.publish("v99.0.0", &real, None);
     host.server.set(
-        "/dl/rust-v99.0.0/mosdns-rust-linux-amd64.tar.gz",
+        "/dl/v99.0.0/rtdns-linux-amd64.tar.gz",
         "application/gzip",
         no_binary.clone(),
     );
     host.server.set(
-        "/dl/rust-v99.0.0/mosdns-rust-update-manifest.json",
+        "/dl/v99.0.0/rtdns-update-manifest.json",
         "application/json",
-        manifest_json("rust-v99.0.0", &no_binary, None),
+        manifest_json("v99.0.0", &no_binary, None),
     );
     let reply = apply(&host);
     assert_eq!(reply.status, 502);
@@ -826,7 +823,7 @@ fn an_update_is_refused_without_touching_anything_when_a_check_fails() {
     nothing_changed(&host);
 
     // The candidate reports another version than the release tag.
-    host.publish("rust-v99.0.0", &real, None);
+    host.publish("v99.0.0", &real, None);
     let reply = apply(&host);
     assert_eq!(reply.status, 502);
     assert!(

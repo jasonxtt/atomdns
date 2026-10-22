@@ -8,7 +8,7 @@ const GAPS: &str = "tests/fixtures/check/gaps/config.yaml";
 const SUPPORTED: &str = "tests/fixtures/check/supported/config.yaml";
 
 fn run_binary(args: &[&str]) -> (i32, String, String) {
-    let output = Command::new(env!("CARGO_BIN_EXE_mosdns"))
+    let output = Command::new(env!("CARGO_BIN_EXE_rtdns"))
         .args(args)
         .output()
         .expect("run mosdns");
@@ -177,7 +177,7 @@ fn parsed_structural_rejections_are_findings_not_errors() {
         if let Some(include) = include {
             std::fs::write(root.path().join("sub.yaml"), include).unwrap();
         }
-        let output = Command::new(env!("CARGO_BIN_EXE_mosdns"))
+        let output = Command::new(env!("CARGO_BIN_EXE_rtdns"))
             .args(["check", "-c", "config.yaml"])
             .current_dir(root.path())
             .output()
@@ -224,7 +224,7 @@ fn start_still_fails_fast_on_the_first_rejection() {
     let (code, stdout, stderr) = run_binary(&["start", "-c", GAPS]);
     assert_eq!(code, 2);
     assert!(stdout.is_empty());
-    assert_eq!(stderr, "mosdns: $.log.production: unsupported field\n");
+    assert_eq!(stderr, "rtdns: $.log.production: unsupported field\n");
 }
 
 /// Recursive content and metadata snapshot (atime excluded).

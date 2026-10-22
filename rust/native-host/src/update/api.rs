@@ -19,8 +19,8 @@ use super::package::{self, Package};
 use super::transaction::{self, StageInput, Transaction};
 use super::{
     CheckEnv, MANIFEST_ASSET, MAX_ARCHIVE_BYTES, MAX_BINARY_BYTES, MAX_CONFIG_PACKAGE_BYTES,
-    MAX_MANIFEST_BYTES, RELEASE_ASSET, REQUIRED_CONFIG_PACKAGE_ID, REQUIRED_CONFIG_SCHEMA,
-    UpdateStatus, manager,
+    MAX_MANIFEST_BYTES, RELEASE_ASSET, RELEASE_BINARY, REQUIRED_CONFIG_PACKAGE_ID,
+    REQUIRED_CONFIG_SCHEMA, UpdateStatus, manager,
 };
 use crate::config::CompiledConfig;
 use crate::rule_sources::Reply;
@@ -404,8 +404,13 @@ async fn apply(ctx: &Context<'_>, body: &[u8]) -> Reply {
         if !super::sha256_hex(&archive).eq_ignore_ascii_case(expected.trim()) {
             return Err("二进制校验失败: SHA-256 与更新清单不一致".to_owned());
         }
-        extract_tar_gz_file(&archive, "mosdns", MAX_BINARY_BYTES, MAX_BINARY_BYTES * 2)
-            .map_err(|reason| format!("解压失败: {reason}"))
+        extract_tar_gz_file(
+            &archive,
+            RELEASE_BINARY,
+            MAX_BINARY_BYTES,
+            MAX_BINARY_BYTES * 2,
+        )
+        .map_err(|reason| format!("解压失败: {reason}"))
     })
     .await
     .unwrap_or_else(|error| Err(format!("解压失败: {error}")));

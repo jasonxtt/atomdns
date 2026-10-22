@@ -534,8 +534,8 @@ mod tests {
                 health_url: "http://127.0.0.1:9/api/v1/system/health".into(),
                 health_timeout_secs: 5,
                 kind,
-                previous_version: "rust-v0.1.0",
-                target_version: "rust-v0.2.0",
+                previous_version: "v0.1.0",
+                target_version: "v0.2.0",
                 asset_signature: "asset:abc",
                 candidate: (kind == "binary").then_some(b"NEW-PROGRAM".as_slice()),
                 package: with_package.then_some((&package, bytes.as_slice())),
@@ -833,7 +833,7 @@ mod tests {
         cleanup(&fixture.root);
         assert!(!path.exists() && !second.exists());
         assert_eq!(installed_signature(&fixture.root), "");
-        write_installed(&fixture.root, "rust-v0.2.0", "asset:abc").unwrap();
+        write_installed(&fixture.root, "v0.2.0", "asset:abc").unwrap();
         assert_eq!(installed_signature(&fixture.root), "asset:abc");
         std::fs::remove_dir_all(fixture.root).unwrap();
     }
