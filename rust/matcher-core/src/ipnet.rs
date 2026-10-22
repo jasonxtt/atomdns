@@ -95,6 +95,17 @@ impl IpPrefixList {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    /// Sorted, masked and folded prefixes, with mapped IPv4 shown as IPv4.
+    pub fn prefixes(&self) -> impl Iterator<Item = (IpAddr, u8)> + '_ {
+        self.entries.iter().map(|(address, bits)| {
+            if let Some(v4) = address.to_ipv4_mapped() {
+                (IpAddr::V4(v4), bits.saturating_sub(96))
+            } else {
+                (IpAddr::V6(*address), *bits)
+            }
+        })
+    }
 }
 
 impl Default for IpPrefixList {

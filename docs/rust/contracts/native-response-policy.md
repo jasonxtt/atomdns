@@ -24,7 +24,7 @@ Named `hosts` accepts entries/files; `redirect` rules/files; `ip_set` ips/files 
 | Blank/comment-only file | valid empty snapshot |
 | Bad overwritten rule | error; replacement cannot hide malformed input |
 
-Source byte budgets include comments and repeated rules count toward the rule budget. Anonymous IP sources share the owning sequence's budget. Inline ip_set items must contain exactly one IP/CIDR; text IP files may include trailing fields. No request-time file reads or hot reload.
+Source byte budgets include comments and repeated rules count toward the rule budget. Anonymous IP sources share the owning sequence's budget. Inline ip_set items must contain exactly one IP/CIDR; text IP files may include trailing fields. Query matching never reads files. External file edits do not reload automatically; named ip_set API replacement is described below.
 
 ## 5. Good/Base/Bad Cases
 
@@ -112,7 +112,7 @@ All compiled response-IP expressions now execute natively. The S1 placeholder an
 
 ## 2. Signatures
 
-`ResponseIpMatcher::new(Vec<Rc<IpPrefixList>>)` receives ready immutable provider/anonymous snapshots; `Matcher::evaluate(&ExecutionState)` returns a read-only `MatchOutcome`.
+`ResponseIpMatcher::new(Vec<Rc<IpListHandle>>)` receives provider handles or fixed anonymous snapshots; `Matcher::evaluate(&ExecutionState)` returns a read-only `MatchOutcome`. Named ip_set and si_set handles read their latest complete published prefix list.
 
 ## 3. Contracts
 
@@ -133,6 +133,52 @@ Real UDP sequence cases in policy_wire verify dual-stack subnet inclusion/exclus
 ## 7. Wrong vs Correct
 
 Wrong: accepting expanded syntax but serving a pending matcher or reading rules during requests. Correct: execute the already-built immutable prefix snapshots through one matcher for every expression shape.
+
+# Named ip_set management (2026-10-22)
+
+`GET /plugins/<ip_set tag>/show` returns `200 text/plain; charset=utf-8`, one
+sorted, masked prefix per line with a trailing newline; mapped IPv4 is shown as
+IPv4. Duplicate/contained prefixes fold as in the query index. It reads the live
+snapshot, including for query-only configuration shapes.
+
+`POST /plugins/<ip_set tag>/post` accepts `{"values":["192.0.2.0/24", "2001:db8::/32"]}`.
+Invalid IP/CIDR strings are discarded; the remaining prefixes are sorted/folded.
+Success returns `200 text/plain; charset=utf-8`, body `ip_set replaced with N entries`
+(no final newline). Empty/missing/null values replace with an empty list. Bad JSON
+or field types return 400 `invalid JSON`. Exceeding the rule-count or input-byte
+budget returns 400 `IP rule resource limit exceeded`, without changing the file
+or live snapshot; persistence/build failures remain 500.
+
+POST requires no inline `ips`, exactly one `.txt` file, and exclusive ownership
+of that source. Multi-file, inline, no-file, non-text-extension or shared sources
+return 400 with the reason and leave memory/files unchanged; startup matching
+and show remain available. This deliberately avoids Go's ambiguous multi-file
+full-list fanout and the reappearance of YAML inline entries on restart.
+Ownership uses actual normalized load paths, canonical paths and existing inode
+aliases; it checks all recorded compiler reads (including anonymous IP sources),
+configuration/state/dump artifacts and rule-provider sources, including disabled
+manifest entries. A rule source added through PUT is checked again at POST under
+the existing provider write locks so a concurrent source edit cannot invalidate
+the ownership check during persistence.
+
+IP candidate work runs on the existing rule-build thread; the existing file
+write lock serializes replacements. The managed-rule same-directory temporary
+file/rename helper persists first, then one synchronous handle swap publishes
+the new list to every client_ip and resp_ip reference. Failed writes leave the
+previous bytes and live list intact and remove the temporary file. Success
+survives process restart; no power-loss durability promise is added.
+
+POST holds the normal management lease. Whole-generation settings/group apply
+drains admitted writes and checks compiler input fingerprints before committing:
+a candidate that read the old file is refused with 409 after a successful POST,
+rather than installing its old matcher. Queries admitted afterward use the new
+handle; queries do not perform file I/O. Existing cache answers are not flushed
+or versioned by this operation. Unknown/wrong-type tags retain their existing
+routes; ip_set save/flush are not added (404).
+
+The existing `rules.local.manage` UI operation also becomes available when an
+eligible ip_set exists; `rules.local.read` remains available. Individual POST
+eligibility is authoritative. No new capability field or API level is introduced.
 
 # Policy composition and retained dumps (S5)
 

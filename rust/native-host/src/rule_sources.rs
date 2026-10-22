@@ -188,6 +188,26 @@ impl Provider {
             .is_some_and(|spec| spec.writable_file().is_some())
     }
 
+    /// Also reserve disabled sources: a later enable/download may read them.
+    pub(crate) fn source_files(&self) -> Vec<PathBuf> {
+        if let Some(spec) = &self.light {
+            return spec.files.iter().map(|(_, file)| file.clone()).collect();
+        }
+        let owner = self.owner();
+        std::iter::once(owner.spec.manifest.clone())
+            .chain(
+                owner
+                    .sources
+                    .borrow()
+                    .iter()
+                    .filter(|source| {
+                        owner.spec.schema == Schema::Adguard || !source.files.is_empty()
+                    })
+                    .map(|source| owner.spec.source_file(source)),
+            )
+            .collect()
+    }
+
     fn owner(&self) -> &ManifestOwner {
         self.manifest.as_ref().expect("manifest provider")
     }
@@ -386,6 +406,32 @@ impl RuleSources {
             .iter()
             .find(|provider| provider.tag == tag)
             .cloned()
+    }
+
+    /// Hold manifest/list writers while an IP POST checks current source
+    /// ownership and persists. Source paths may have changed through PUT
+    /// since startup; a second check under these locks closes that race.
+    pub(crate) async fn lock_file_readers(&self) -> Vec<tokio::sync::OwnedMutexGuard<()>> {
+        let mut locks = Vec::<Arc<tokio::sync::Mutex<()>>>::new();
+        for provider in &self.inner.providers {
+            if !locks.iter().any(|lock| Arc::ptr_eq(lock, &provider.mutate)) {
+                locks.push(Arc::clone(&provider.mutate));
+            }
+        }
+        let mut guards = Vec::new();
+        for lock in locks {
+            guards.push(lock.lock_owned().await);
+        }
+        guards
+    }
+
+    pub(crate) fn reads_file(&self, file: &Path) -> bool {
+        self.inner.providers.iter().any(|provider| {
+            provider.source_files().iter().any(|source| {
+                crate::managed_ip::actual_path(source) == file
+                    || crate::switch::paths_collide(source, file)
+            })
+        })
     }
 
     pub(crate) fn has_kind(&self, kinds: &[Kind]) -> bool {
@@ -1581,7 +1627,7 @@ pub(crate) fn is_due(entry: &SourceEntry, now: i64) -> bool {
 
 /// The process-wide write lock of one manifest or rule file. Every
 /// generation's provider for the same file gets the same lock.
-fn write_lock(path: PathBuf) -> Arc<tokio::sync::Mutex<()>> {
+pub(crate) fn write_lock(path: PathBuf) -> Arc<tokio::sync::Mutex<()>> {
     static LOCKS: std::sync::OnceLock<
         std::sync::Mutex<std::collections::HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
     > = std::sync::OnceLock::new();

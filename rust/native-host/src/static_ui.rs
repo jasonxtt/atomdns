@@ -70,6 +70,7 @@ pub(crate) fn mime(path: &str) -> &'static str {
 
 /// Preserve only a syntactically valid query whose decoded bytes contain no
 /// control characters. Redirect headers never reflect unsafe input.
+#[cfg(target_os = "linux")]
 pub(crate) fn redirect_target(path: &str, target: &str) -> Option<String> {
     let Some((_, query)) = target.split_once('?') else {
         return Some(path.to_owned());

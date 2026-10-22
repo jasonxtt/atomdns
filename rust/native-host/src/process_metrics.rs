@@ -24,6 +24,7 @@ pub(crate) struct ProcessSample {
 
 /// The fields of `/proc/<pid>/stat` after the parenthesised command name:
 /// `(utime + stime in ticks, threads, start ticks after boot, vsize bytes, rss pages)`.
+#[cfg(any(target_os = "linux", test))]
 fn parse_stat(text: &str) -> Option<(u64, u64, u64, u64, u64)> {
     let fields: Vec<&str> = text.rsplit_once(')')?.1.split_whitespace().collect();
     // Field numbers of proc(5) minus 3: the state is the first field after the name.
@@ -38,6 +39,7 @@ fn parse_stat(text: &str) -> Option<(u64, u64, u64, u64, u64)> {
 }
 
 /// `btime` (seconds since the epoch at boot) from `/proc/stat`.
+#[cfg(any(target_os = "linux", test))]
 fn parse_boot_time(text: &str) -> Option<u64> {
     text.lines()
         .find_map(|line| line.strip_prefix("btime "))?
@@ -47,6 +49,7 @@ fn parse_boot_time(text: &str) -> Option<u64> {
 }
 
 /// The soft `Max open files` limit from `/proc/<pid>/limits`; `None` when unlimited or unreadable.
+#[cfg(any(target_os = "linux", test))]
 fn parse_max_fds(text: &str) -> Option<u64> {
     let line = text
         .lines()

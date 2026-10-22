@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CandidateInputSet {
     pub files: BTreeMap<PathBuf, Option<String>>,
+    /// Each load, including repeated loads through other declarations/aliases.
+    pub reads: Vec<PathBuf>,
 }
 
 impl CandidateInputSet {
@@ -22,6 +24,7 @@ impl CandidateInputSet {
     }
 
     fn record(&mut self, path: &Path, digest: Option<String>) -> Result<(), String> {
+        self.reads.push(path.to_path_buf());
         let path = lexical_path(path);
         if let Some(previous) = self.files.get(&path) {
             if previous != &digest {

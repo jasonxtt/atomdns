@@ -351,7 +351,11 @@ impl DomainSetHandle {
 /// final rename. A failure removes the temporary file and never touches the
 /// existing target. This gives whole-file replacement and process-restart
 /// retention; it does not claim power-loss durability.
-fn persist_rules_atomically(path: &Path, rules: &[String], fault: PersistFault) -> io::Result<()> {
+pub(crate) fn persist_rules_atomically(
+    path: &Path,
+    rules: &[String],
+    fault: PersistFault,
+) -> io::Result<()> {
     let directory = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())

@@ -4,15 +4,19 @@
 //! A directory without a manifest is not a mosdns UI package and is served as the generic static
 //! mount it always was.
 
+#[cfg(any(target_os = "linux", test))]
 use serde::Deserialize;
 
 /// The interface level this host serves (the `/api/...`, `/plugins/...`, `/metrics` and
 /// capability surface the maintained UI talks to). Backward-compatible additions do not change
 /// it (the UI degrades per `/api/v1/capabilities`); a breaking change raises it.
+#[cfg(any(target_os = "linux", test))]
 pub(crate) const HOST_API_LEVEL: u64 = 1;
 /// The oldest UI interface level this host still serves.
+#[cfg(any(target_os = "linux", test))]
 pub(crate) const MIN_UI_API_LEVEL: u64 = 1;
 /// The largest manifest read.
+#[cfg(target_os = "linux")]
 pub(crate) const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 
 /// What a compatible manifest tells the operator.
@@ -23,6 +27,7 @@ pub(crate) struct UiInfo {
 }
 
 #[derive(Deserialize)]
+#[cfg(any(target_os = "linux", test))]
 struct Manifest {
     manifest_schema: Option<u64>,
     ui_version: Option<String>,
@@ -31,12 +36,14 @@ struct Manifest {
     requires_api_level: Option<u64>,
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn displayable(text: &str, limit: usize) -> bool {
     !text.trim().is_empty() && text.chars().count() <= limit && !text.chars().any(char::is_control)
 }
 
 /// Checks a manifest against this host. The error is a short fixed-form reason (shown to the
 /// operator in the WebUI) that never repeats file contents beyond the numbers it compares.
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn evaluate(bytes: &[u8]) -> Result<UiInfo, String> {
     let manifest: Manifest = serde_json::from_slice(bytes)
         .map_err(|_| "ui-manifest.json 不是合法的 JSON，或字段类型不对".to_owned())?;

@@ -849,7 +849,7 @@ fn compile_with_settings(
         &raw,
         base_dir,
         root_dir,
-        origin.map(|_| &mut inputs),
+        Some(&mut inputs),
         origin,
         settings,
         groups,
@@ -2152,14 +2152,20 @@ fn compile_definitions(
                     policy_sources(plugin, "ips", &["ips", "files", "sets"], &[])?;
                 known_artifacts.extend(files.iter().cloned());
                 let mut candidate_inputs = candidate_inputs.borrow_mut();
+                let prefixes = policy::ip_list_with_inputs(
+                    &inline,
+                    &files,
+                    &format!("{}.args", plugin.source_path),
+                    candidate_inputs.as_mut(),
+                )?;
                 ip_sets.push(IpSetConfig {
                     tag: plugin.tag.clone(),
-                    prefixes: policy::ip_list_with_inputs(
+                    management: Some(crate::managed_ip::ManagedIpSet::new(
                         &inline,
                         &files,
-                        &format!("{}.args", plugin.source_path),
-                        candidate_inputs.as_mut(),
-                    )?,
+                        Rc::clone(&prefixes),
+                    )),
+                    prefixes,
                 });
             }
             PluginKind::DomainSet | PluginKind::Sequence => {}
@@ -2209,6 +2215,7 @@ fn compile_definitions(
                 ip_sets.push(IpSetConfig {
                     tag: plugin.tag.clone(),
                     prefixes: Rc::clone(&handle),
+                    management: None,
                 });
                 rule_providers.push(Rc::new(crate::rule_sources::Provider::manifest(
                     spec,
@@ -2328,6 +2335,10 @@ fn compile_definitions(
             }
         }
     }
+    for provider in &rule_providers {
+        known_artifacts.extend(provider.source_files());
+    }
+    let declared_artifacts = known_artifacts.clone();
     if let Some(inputs) = candidate_inputs.borrow().as_ref() {
         known_artifacts.extend(inputs.files.keys().cloned());
     }
@@ -2791,6 +2802,28 @@ fn compile_definitions(
     for (tag, live) in adguard_direct.borrow().iter() {
         if let Some(provider) = rule_providers.iter().find(|p| p.tag == *tag) {
             provider.attach_filtered(Rc::clone(live));
+        }
+    }
+    // Decide eligibility only after every sequence (including anonymous &file
+    // IP sources) has compiled. A second read through any alias is a conflict.
+    for set in &mut ip_sets {
+        let Some(management) = &mut set.management else {
+            continue;
+        };
+        let Some(file) = &management.file else {
+            continue;
+        };
+        let aliases = |path: &&PathBuf| {
+            crate::managed_ip::actual_path(path) == *file
+                || crate::switch::paths_collide(file, path)
+        };
+        let declared = declared_artifacts.iter().filter(aliases).count();
+        let reads = candidate_inputs
+            .borrow()
+            .as_ref()
+            .map_or(0, |inputs| inputs.reads.iter().filter(aliases).count());
+        if declared > 1 || reads > 1 {
+            management.reason = Some("the file is shared with other configuration readers".into());
         }
     }
     let compiled = CompiledConfig {
