@@ -44,6 +44,7 @@ worktree is no longer used for new work.
 
 - For binaries that embed the Vue UI, use `scripts/build-rust-native.sh` (it builds the UI bundle into `rust/native-host/ui/` before `cargo build`; release artifacts: `scripts/build-rust-release.sh`, external UI package: `npm run build:external` in `webui-log`). Do not run frontend and Rust builds in parallel.
 - Production runs this program as `rtdns` since 2026-10-21 (manual cutover; the Go `mosdns` service stays installed for rollback). Do not publish a GitHub Release or deploy without explicit user approval.
+- Naming (2026-10-22): the cargo bin is `rtdns`; releases and online updates come only from `jasonxtt/rtdns`, tags `vX.Y.Z`, assets `rtdns-linux-amd64.tar.gz` (file `rtdns`) and `rtdns-update-manifest.json`. Crate names (`mosdns-*`), `MOSDNS_*` environment variables, metrics/API field names and the configuration package identifiers (`channel "rust"`, `rust-config-schema-1`, `config_rust_up.zip`) keep their old names. Release and manual-replacement steps: `docs/rust/release.md`.
 - Config compatibility and switch-bit reservations are documented in `docs/ai/config-notes.md`; do not change them casually.
 - When real deployment verification is requested, build locally, validate on `mos-test`, and promote to `mosdns` only after confirmation. Prefer the SSH aliases in `~/.ssh/config`.
 

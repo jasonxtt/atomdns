@@ -11,7 +11,7 @@
 - Go schema 4 的 `config_all.zip` 原文以及对应 `config_up.zip`。后者给出受管清单与 hash，前者用于确认现有受管 YAML 没有人手改过。
 - 可选的输入 sha256 JSON：键为 `rust_binary`、`migrate`、`config_package`、`go_reference`、`go_package`，值为各文件的 sha256；用 `--sha256-manifest /绝对路径/inputs-sha256.json` 指定。hash 清单必须来自已核对的发布输入，不能只拿来证明下载文件与自己相同。
 
-需有 Python 3、bash、systemd/systemd-run、dig；脚本只使用 Python 标准库。当前 Go 服务必须 active，health 返回就绪，DNS 查询可成功。原生候选的版本必须是 `rust-vX.Y.Z`。
+需有 Python 3、bash、systemd/systemd-run、dig；脚本只使用 Python 标准库。当前 Go 服务必须 active，health 返回就绪，DNS 查询可成功。原生候选的版本必须是 `rust-vX.Y.Z`。**注意（2026-10-22）**：程序已改名为 `rtdns`，自报版本改为 `vX.Y.Z`，这套脚本仍按旧程序名和 `rust-vX.Y.Z` 编写，不适用于新程序；生产已于 2026-10-21 完成切换，本文只作历史与回滚参考。
 
 配置根不能是独立挂载点，程序与配置根路径及其内部不能有符号链接/特殊文件/嵌套挂载；若预检因此拒绝，请先人工评估真实目录结构，不要绕过检查。目录整体 rename 需要配置根父目录可写，程序必须位于配置根外。
 

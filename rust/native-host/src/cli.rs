@@ -38,7 +38,7 @@ impl std::fmt::Display for CliError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            "{}; usage: mosdns start [-d <dir>] -c <config> | mosdns check [-d <dir>] -c <config> | mosdns version",
+            "{}; usage: rtdns start [-d <dir>] -c <config> | rtdns check [-d <dir>] -c <config> | rtdns version",
             self.message
         )
     }
@@ -46,7 +46,7 @@ impl std::fmt::Display for CliError {
 
 impl std::error::Error for CliError {}
 
-/// Parses `mosdns start|check [-d <dir>] -c <path>` and the `--config` /
+/// Parses `rtdns start|check [-d <dir>] -c <path>` and the `--config` /
 /// `--dir` spellings, options in either order.
 pub fn parse_args<I, S>(args: I) -> Result<CliCommand, CliError>
 where

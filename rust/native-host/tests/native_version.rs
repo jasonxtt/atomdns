@@ -1,7 +1,7 @@
 //! The version branch must run without config or runtime construction.
 #[test]
 fn version_is_a_bounded_standalone_command() {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_mosdns"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_rtdns"))
         .arg("version")
         .current_dir(std::env::temp_dir())
         .output()
@@ -11,11 +11,10 @@ fn version_is_a_bounded_standalone_command() {
         String::from_utf8(output.stdout).unwrap(),
         format!(
             "{}\n",
-            option_env!("MOSDNS_BUILD_VERSION")
-                .unwrap_or(concat!("rust-v", env!("CARGO_PKG_VERSION")))
+            option_env!("MOSDNS_BUILD_VERSION").unwrap_or(concat!("v", env!("CARGO_PKG_VERSION")))
         )
     );
-    let extra = std::process::Command::new(env!("CARGO_BIN_EXE_mosdns"))
+    let extra = std::process::Command::new(env!("CARGO_BIN_EXE_rtdns"))
         .args(["version", "extra"])
         .output()
         .unwrap();

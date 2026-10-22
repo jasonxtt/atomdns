@@ -19,10 +19,10 @@ behavioural reference (see `tools/go-reference/README.md`).
 
 ## Repository map
 
-- `rust/`: the Cargo workspace. `native-host` is the product (`mosdns` binary, built-in `/` UI, management API, update guard); `dns-core`, `cache-core`, `matcher-core`, `sequence-core`, `upstream-core` are its libraries
+- `rust/`: the Cargo workspace. `native-host` is the product (`rtdns` binary, built-in `/` UI, management API, update guard); `dns-core`, `cache-core`, `matcher-core`, `sequence-core`, `upstream-core` are its libraries
 - `rust/native-host/ui/`: the built `/` UI (checked in; produced from `webui-log/src` by `npm run build`, embedded by `rust/native-host/build.rs`)
 - `webui-log/`: active Vue frontend workspace (historical name); `src/` builds the maintained UI (built in at `/`, or as an external package for any `ui/<name>/` with `npm run build:external`)
-- `scripts/`: Rust build and release scripts (`build-rust-native.sh`, `build-rust-release.sh`, `generate-rust-update-manifest.sh`) and measurement helpers
+- `scripts/`: Rust build and release scripts (`build-rust-native.sh`, `build-rust-release.sh`, `generate-rust-update-manifest.sh`; release steps in `docs/rust/release.md`) and measurement helpers
 - `tools/`: differential and evidence tools (Python, plus thin Go wrappers built from the Go repository by `tools/go-reference/build.sh`)
 - `tests/phase5a-baseline/`: workload/config fixtures read by Rust tests, and the standalone Go load-generator helper (own `go.mod`, not needed by the Rust build)
 - `docs/rust/contracts/`: public product and migration contracts

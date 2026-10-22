@@ -211,7 +211,7 @@ fn the_binary_accepts_dash_d_and_reads_a_relative_config_from_it() {
     std::fs::copy(dir.path().join("cfg/config.yaml"), &data_config).unwrap();
     std::fs::copy(dir.path().join("cfg/inc.yaml"), data.join("inc.yaml")).unwrap();
     let run = |args: &[&str]| {
-        let output = Command::new(env!("CARGO_BIN_EXE_mosdns"))
+        let output = Command::new(env!("CARGO_BIN_EXE_rtdns"))
             .args(args)
             .current_dir(std::env::temp_dir())
             .output()
@@ -567,7 +567,7 @@ fn run_with_log(level: &str, file_line: &str) -> (String, std::process::Output) 
             listener("udp", "udp_server", &format!("127.0.0.1:{dns}"), "")
         ),
     );
-        let mut command = Command::new(env!("CARGO_BIN_EXE_mosdns"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_rtdns"));
         command
             .args(["start", "-d"])
             .arg(dir.path())
@@ -631,7 +631,7 @@ fn a_fatal_startup_error_reaches_both_stderr_and_the_log_file() {
             listener("tcp", "tcp_server", &format!("127.0.0.1:{port}"), "")
         ),
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_mosdns"))
+    let output = Command::new(env!("CARGO_BIN_EXE_rtdns"))
         .args(["start", "-d"])
         .arg(dir.path())
         .args(["-c", "config.yaml"])
@@ -660,7 +660,7 @@ fn log_file_is_appended_not_truncated() {
             listener("udp", "udp_server", &format!("127.0.0.1:{port}"), "")
         ),
     );
-        let mut command = Command::new(env!("CARGO_BIN_EXE_mosdns"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_rtdns"));
         command
             .args(["start", "-d"])
             .arg(dir.path())
@@ -732,7 +732,7 @@ fn a_configuration_naming_native_management_is_refused_with_a_clear_message() {
             "{value}: {error}"
         );
 
-        let output = Command::new(env!("CARGO_BIN_EXE_mosdns"))
+        let output = Command::new(env!("CARGO_BIN_EXE_rtdns"))
             .args(["check", "-c"])
             .arg(&config)
             .output()
@@ -742,7 +742,7 @@ fn a_configuration_naming_native_management_is_refused_with_a_clear_message() {
         assert!(stdout.contains(MANAGEMENT_REMOVED), "{value}: {stdout}");
         assert!(stdout.contains("SUMMARY "), "{value}: {stdout}");
 
-        let output = Command::new(env!("CARGO_BIN_EXE_mosdns"))
+        let output = Command::new(env!("CARGO_BIN_EXE_rtdns"))
             .args(["start", "-c"])
             .arg(&config)
             .output()

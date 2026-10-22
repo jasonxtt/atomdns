@@ -1,6 +1,6 @@
 //! Online update of the native program and its configuration package.
 //!
-//! Releases come from GitHub Releases of `jasonxtt/mosdns`, tags `rust-vX.Y.Z` only. An
+//! Releases come from GitHub Releases of `jasonxtt/rtdns`, tags `vX.Y.Z` only. An
 //! update downloads the program and, when the release needs a newer configuration
 //! package, that package; verifies every sha256; pre-checks the candidate; and then
 //! hands over to a guard process (`update-guard`, see `guard.rs`) that replaces the
@@ -30,13 +30,15 @@ pub(crate) const REQUIRED_CONFIG_SCHEMA: u32 = 1;
 pub(crate) const REQUIRED_CONFIG_PACKAGE_ID: &str = "rust-config-schema-1";
 /// The `channel` of the configuration package and of the update manifest.
 pub(crate) const CHANNEL: &str = "rust";
-/// The release asset holding the executable (a `tar.gz` with a file named `mosdns`).
-pub(crate) const RELEASE_ASSET: &str = "mosdns-rust-linux-amd64.tar.gz";
+/// The release asset holding the executable (a `tar.gz` with a file named `rtdns`).
+pub(crate) const RELEASE_ASSET: &str = "rtdns-linux-amd64.tar.gz";
+/// The executable's name inside `RELEASE_ASSET`.
+pub(crate) const RELEASE_BINARY: &str = "rtdns";
 /// The release asset naming every artifact's sha256 and the configuration package.
-pub(crate) const MANIFEST_ASSET: &str = "mosdns-rust-update-manifest.json";
-const DEFAULT_API_URL: &str = "https://api.github.com/repos/jasonxtt/mosdns/releases?per_page=100";
-const RELEASE_PAGE: &str = "https://github.com/jasonxtt/mosdns/releases/tag/";
-const TAG_PREFIX: &str = "rust-v";
+pub(crate) const MANIFEST_ASSET: &str = "rtdns-update-manifest.json";
+const DEFAULT_API_URL: &str = "https://api.github.com/repos/jasonxtt/rtdns/releases?per_page=100";
+const RELEASE_PAGE: &str = "https://github.com/jasonxtt/rtdns/releases/tag/";
+const TAG_PREFIX: &str = "v";
 const CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -66,14 +68,14 @@ pub(crate) fn platform_supported() -> bool {
     cfg!(all(target_os = "linux", target_arch = "x86_64"))
 }
 
-/// `X.Y.Z` of a `rust-vX.Y.Z` tag.
+/// `X.Y.Z` of a `vX.Y.Z` tag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Version(u64, u64, u64);
 
-/// Parses `rust-vX.Y.Z` (and nothing else: Go's `v…`/`lite-v…` tags are not ours).
+/// Parses `vX.Y.Z` exactly as written (and nothing else: `rust-v…`/`lite-v…` tags are not
+/// ours, and the guard compares the candidate's version with the tag byte for byte).
 pub(crate) fn parse_tag(tag: &str) -> Option<Version> {
-    let lowered = tag.trim().to_ascii_lowercase();
-    let rest = lowered.strip_prefix(TAG_PREFIX)?;
+    let rest = tag.strip_prefix(TAG_PREFIX)?;
     let mut parts = rest.split('.');
     let mut next = || {
         let part = parts.next()?;
@@ -160,7 +162,7 @@ impl Release {
     }
 }
 
-/// The newest non-draft, non-prerelease `rust-v*` release.
+/// The newest non-draft, non-prerelease `vX.Y.Z` release.
 pub(crate) fn latest_release(releases: Vec<Release>) -> Option<(Version, Release)> {
     releases
         .into_iter()
@@ -169,7 +171,7 @@ pub(crate) fn latest_release(releases: Vec<Release>) -> Option<(Version, Release
         .max_by_key(|(version, _)| *version)
 }
 
-/// `mosdns-rust-update-manifest.json`.
+/// `rtdns-update-manifest.json`.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UpdateManifest {
@@ -382,7 +384,7 @@ impl Manager {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// The newest `rust-v*` release, with the 15-minute cache unless `force`. Returns the
+    /// The newest `vX.Y.Z` release, with the 15-minute cache unless `force`. Returns the
     /// status and the release it describes.
     pub(crate) async fn check(
         &self,
@@ -400,7 +402,7 @@ impl Manager {
         }
         let releases = fetch_releases(env).await?;
         let (version, release) =
-            latest_release(releases).ok_or_else(|| "未找到 rust-v* 发布版本".to_owned())?;
+            latest_release(releases).ok_or_else(|| "未找到 vX.Y.Z 发布版本".to_owned())?;
         let current_tag = crate::build_identity::VERSION;
         let current = parse_tag(current_tag);
         let mut status = UpdateStatus {
@@ -512,26 +514,41 @@ mod tests {
     }
 
     #[test]
-    fn only_rust_tags_parse_and_compare_numerically() {
-        assert_eq!(parse_tag("rust-v0.1.0"), Some(Version(0, 1, 0)));
-        assert_eq!(parse_tag("  RUST-V10.2.30 "), Some(Version(10, 2, 30)));
-        assert!(parse_tag("rust-v0.10.0") > parse_tag("rust-v0.9.9"));
+    fn only_vx_y_z_tags_parse_and_compare_numerically() {
+        assert_eq!(parse_tag("v0.2.0"), Some(Version(0, 2, 0)));
+        assert_eq!(parse_tag("v10.2.30"), Some(Version(10, 2, 30)));
+        assert!(parse_tag("v0.10.0") > parse_tag("v0.9.9"));
         for bad in [
-            "v0.7.1",
+            "rust-v0.1.4",
             "lite-v1.0.0",
-            "rust-v1.0",
-            "rust-v1.0.0.1",
-            "rust-v1.0.x",
-            "rust-v-1.0.0",
-            "rust-v1.0.0-rc1",
-            "rust-v",
-            "rust-1.0.0",
+            "openwrt-v1.0.0",
+            "V1.0.0",
+            " v1.0.0",
+            "v1.0.0 ",
+            "v1.0",
+            "v1.0.0.1",
+            "v1.0.x",
+            "v-1.0.0",
+            "v1.0.0-rc1",
+            "v",
+            "1.0.0",
             "",
-            "rust-v1..0",
-            "rust-v1.0.+1",
+            "v1..0",
+            "v1.0.+1",
         ] {
             assert_eq!(parse_tag(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn the_update_source_is_the_rtdns_repository() {
+        for url in [DEFAULT_API_URL, RELEASE_PAGE] {
+            assert!(url.contains("jasonxtt/rtdns/"), "{url}");
+            assert!(!url.contains("jasonxtt/mosdns"), "{url}");
+        }
+        assert_eq!(RELEASE_ASSET, "rtdns-linux-amd64.tar.gz");
+        assert_eq!(MANIFEST_ASSET, "rtdns-update-manifest.json");
+        assert_eq!(RELEASE_BINARY, "rtdns");
     }
 
     fn release(tag: &str, draft: bool, prerelease: bool) -> Release {
@@ -544,18 +561,19 @@ mod tests {
     }
 
     #[test]
-    fn the_newest_published_rust_release_wins_and_go_releases_are_ignored() {
+    fn the_newest_published_release_wins_and_other_tag_families_are_ignored() {
         let picked = latest_release(vec![
-            release("v9.9.9", false, false),
-            release("rust-v0.1.0", false, false),
-            release("rust-v0.3.0", true, false),
-            release("rust-v0.2.0", false, true),
-            release("rust-v0.1.5", false, false),
+            release("v0.1.0", false, false),
+            release("v0.3.0", true, false),
+            release("v0.2.0", false, true),
+            release("v0.1.5", false, false),
+            release("rust-v9.9.9", false, false),
             release("lite-v5.0.0", false, false),
+            release("openwrt-v5.0.0", false, false),
         ])
         .unwrap();
-        assert_eq!(picked.1.tag_name, "rust-v0.1.5");
-        assert!(latest_release(vec![release("v1.0.0", false, false)]).is_none());
+        assert_eq!(picked.1.tag_name, "v0.1.5");
+        assert!(latest_release(vec![release("rust-v1.0.0", false, false)]).is_none());
         assert!(latest_release(Vec::new()).is_none());
     }
 
@@ -572,41 +590,31 @@ mod tests {
 
     #[test]
     fn the_manifest_must_match_the_release_and_carry_valid_digests() {
-        let ok = parse_manifest(
-            manifest_json("rust-v1.2.3", "rust").as_bytes(),
-            "rust-v1.2.3",
-        )
-        .unwrap();
+        let ok = parse_manifest(manifest_json("v1.2.3", "rust").as_bytes(), "v1.2.3").unwrap();
         assert_eq!(ok.required_config_schema, 1);
         assert!(
-            parse_manifest(
-                manifest_json("rust-v1.2.4", "rust").as_bytes(),
-                "rust-v1.2.3"
-            )
-            .unwrap_err()
-            .contains("不一致")
+            parse_manifest(manifest_json("v1.2.4", "rust").as_bytes(), "v1.2.3")
+                .unwrap_err()
+                .contains("不一致")
         );
         assert!(
-            parse_manifest(
-                manifest_json("rust-v1.2.3", "main").as_bytes(),
-                "rust-v1.2.3"
-            )
-            .unwrap_err()
-            .contains("通道")
+            parse_manifest(manifest_json("v1.2.3", "main").as_bytes(), "v1.2.3")
+                .unwrap_err()
+                .contains("通道")
         );
-        let bad_digest = manifest_json("rust-v1.2.3", "rust").replace(&"a".repeat(64), "zz");
-        assert!(parse_manifest(bad_digest.as_bytes(), "rust-v1.2.3").is_err());
-        let unknown = manifest_json("rust-v1.2.3", "rust").replacen('{', r#"{"surprise":1,"#, 1);
-        assert!(parse_manifest(unknown.as_bytes(), "rust-v1.2.3").is_err());
-        let no_asset = manifest_json("rust-v1.2.3", "rust").replace(RELEASE_ASSET, "other.tar.gz");
+        let bad_digest = manifest_json("v1.2.3", "rust").replace(&"a".repeat(64), "zz");
+        assert!(parse_manifest(bad_digest.as_bytes(), "v1.2.3").is_err());
+        let unknown = manifest_json("v1.2.3", "rust").replacen('{', r#"{"surprise":1,"#, 1);
+        assert!(parse_manifest(unknown.as_bytes(), "v1.2.3").is_err());
+        let no_asset = manifest_json("v1.2.3", "rust").replace(RELEASE_ASSET, "other.tar.gz");
         assert!(
-            parse_manifest(no_asset.as_bytes(), "rust-v1.2.3")
+            parse_manifest(no_asset.as_bytes(), "v1.2.3")
                 .unwrap_err()
                 .contains("未包含")
         );
-        let format2 = manifest_json("rust-v1.2.3", "rust").replace("\"format\":1", "\"format\":2");
-        assert!(parse_manifest(format2.as_bytes(), "rust-v1.2.3").is_err());
-        assert!(parse_manifest(b"not json", "rust-v1.2.3").is_err());
+        let format2 = manifest_json("v1.2.3", "rust").replace("\"format\":1", "\"format\":2");
+        assert!(parse_manifest(format2.as_bytes(), "v1.2.3").is_err());
+        assert!(parse_manifest(b"not json", "v1.2.3").is_err());
     }
 
     #[test]
@@ -627,7 +635,7 @@ mod tests {
     #[test]
     fn a_status_leaves_out_empty_optional_fields_like_the_reference() {
         let status = UpdateStatus {
-            current_version: "rust-v0.1.0".to_owned(),
+            current_version: "v0.1.0".to_owned(),
             architecture: "linux/amd64".to_owned(),
             ..UpdateStatus::default()
         };

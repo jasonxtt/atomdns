@@ -323,7 +323,7 @@ builds the maintained Vue UI (the compatibility UI is Go-only and not built), va
 only then runs locked Cargo release for the native host in a source/asset-hash-keyed
 Cargo directory, preventing restored older mtimes from reusing a stale executable. `BUILD_VERSION` overrides
 repository `git describe --dirty` (fallback dev). The URL-encoded asset query stamp
-decodes to the exact product version. `OUTPUT` defaults to `release/mosdns-native`.
+decodes to the exact product version. `OUTPUT` defaults to `release/rtdns-native`.
 Its adjacent `.manifest.json` records actual source/asset hashes, compiler,
 artifact SHA-256 and CLI version. Source ID is null unless `BUILD_SOURCE_ID` is
 explicitly supplied; dirty code is not represented as clean HEAD. Build-time Node

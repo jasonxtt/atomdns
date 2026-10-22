@@ -1,4 +1,4 @@
-//! F-2 diagnostics, against the real `mosdns` binary: the log capture routes
+//! F-2 diagnostics, against the real `rtdns` binary: the log capture routes
 //! (`/api/v1/capture/*`: contract, per-query lines, expiry, restart of the
 //! window, level restoration), the `mosdns_aliapi_*` upstream series of
 //! `/metrics` with exact counts, and the absence of `/debug/pprof`. No public
@@ -195,7 +195,7 @@ impl Host {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let exe = root.join("mosdns");
-        std::fs::copy(env!("CARGO_BIN_EXE_mosdns"), &exe).unwrap();
+        std::fs::copy(env!("CARGO_BIN_EXE_rtdns"), &exe).unwrap();
         std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
         let (stub, upstream) = Stub::start();
         let (api, dns) = (free_port(), free_udp_port());

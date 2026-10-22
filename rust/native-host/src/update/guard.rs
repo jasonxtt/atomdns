@@ -2,7 +2,7 @@
 //! new files, runs the candidate as its child, and either confirms it or rolls back.
 //!
 //! The guard is entered by `exec` from the running host (same process id, so a service
-//! manager never sees the service stop) as `mosdns update-guard --transaction <file>`.
+//! manager never sees the service stop) as `rtdns update-guard --transaction <file>`.
 //! It has no sockets and loads no configuration. See `transaction.rs` for the states.
 
 use std::io::{Read, Write};
@@ -28,7 +28,7 @@ const MAX_HEALTH_BYTES: usize = 256 << 10;
 const GUARD_PID_ENV: &str = "MOSDNS_UPDATE_GUARD_PID";
 
 fn log(message: &str) {
-    eprintln!("mosdns update-guard: {message}");
+    eprintln!("rtdns update-guard: {message}");
 }
 
 /// Replaces this process with `executable` and `args` (`args[0]` is `argv[0]`). The guard
@@ -45,7 +45,7 @@ fn exec_program(executable: &str, args: &[String]) -> std::io::Error {
 }
 
 /// A candidate started by the guard dies with it, instead of staying behind holding the
-/// service's ports. Called by `mosdns start` when the guard marker is present.
+/// service's ports. Called by `rtdns start` when the guard marker is present.
 ///
 /// The signal is only sent when the parent dies *after* it is set, so the guard's pid is
 /// checked as well: a guard that was killed between `spawn` and this call has already left
@@ -61,7 +61,7 @@ pub fn arm_parent_death_signal() {
     let parent =
         rustix::process::getppid().and_then(|pid| u32::try_from(pid.as_raw_nonzero().get()).ok());
     if guard_is_gone(expected, parent) {
-        eprintln!("mosdns: the update guard is gone, not starting");
+        eprintln!("rtdns: the update guard is gone, not starting");
         std::process::exit(1);
     }
 }
@@ -481,36 +481,36 @@ mod tests {
 
     #[test]
     fn health_needs_200_ready_the_target_version_and_the_config_schema() {
-        let ok = r#"{"ready":true,"version":"rust-v0.2.0","applied_config_schema":1}"#;
+        let ok = r#"{"ready":true,"version":"v0.2.0","applied_config_schema":1}"#;
         for (body, status, schema, expected) in [
             (ok, 200, 1, true),
             (ok, 200, 0, true),
             (ok, 200, 2, false),
             (ok, 503, 1, false),
             (
-                r#"{"ready":false,"version":"rust-v0.2.0","applied_config_schema":1}"#,
+                r#"{"ready":false,"version":"v0.2.0","applied_config_schema":1}"#,
                 200,
                 1,
                 false,
             ),
             (
-                r#"{"ready":true,"version":"rust-v0.1.0","applied_config_schema":1}"#,
+                r#"{"ready":true,"version":"v0.1.0","applied_config_schema":1}"#,
                 200,
                 1,
                 false,
             ),
             (
-                r#"{"ready":true,"version":"rust-v0.2.0","applied_config_schema":null}"#,
+                r#"{"ready":true,"version":"v0.2.0","applied_config_schema":null}"#,
                 200,
                 1,
                 false,
             ),
-            (r#"{"ready":true,"version":"rust-v0.2.0"}"#, 200, 0, true),
+            (r#"{"ready":true,"version":"v0.2.0"}"#, 200, 0, true),
             ("not json", 200, 0, false),
         ] {
             let (url, handle) = serve_once(body, status);
             assert_eq!(
-                is_healthy(&url, "rust-v0.2.0", schema),
+                is_healthy(&url, "v0.2.0", schema),
                 expected,
                 "{body} {status} {schema}"
             );
@@ -555,26 +555,18 @@ mod tests {
         let good = script(
             &dir,
             "good",
-            r#"case "$1" in version) echo rust-v0.2.0;; check) exit 0;; esac"#,
+            r#"case "$1" in version) echo v0.2.0;; check) exit 0;; esac"#,
         );
-        assert!(preflight(&good, Some("rust-v0.2.0"), None).is_ok());
-        assert!(
-            preflight(
-                &good,
-                Some("rust-v0.2.0"),
-                Some((&dir, "config_custom.yaml"))
-            )
-            .is_ok()
-        );
-        let error = preflight(&good, Some("rust-v0.3.0"), None).unwrap_err();
+        assert!(preflight(&good, Some("v0.2.0"), None).is_ok());
+        assert!(preflight(&good, Some("v0.2.0"), Some((&dir, "config_custom.yaml"))).is_ok());
+        let error = preflight(&good, Some("v0.3.0"), None).unwrap_err();
         assert!(error.contains("不一致"), "{error}");
         let wrong_config = script(
             &dir,
             "badcheck",
-            r#"case "$1" in version) echo rust-v0.2.0;; check) echo "SUMMARY gaps=2" >&2; exit 1;; esac"#,
+            r#"case "$1" in version) echo v0.2.0;; check) echo "SUMMARY gaps=2" >&2; exit 1;; esac"#,
         );
-        let error =
-            preflight(&wrong_config, Some("rust-v0.2.0"), Some((&dir, "c.yaml"))).unwrap_err();
+        let error = preflight(&wrong_config, Some("v0.2.0"), Some((&dir, "c.yaml"))).unwrap_err();
         assert!(
             error.contains("检查未通过") && error.contains("gaps=2"),
             "{error}"

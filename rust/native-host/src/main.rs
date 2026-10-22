@@ -34,7 +34,7 @@ fn main() {
         Err(error) => Err(error.to_string()),
     };
     if let Err(error) = result {
-        eprintln!("mosdns: {error}");
+        eprintln!("rtdns: {error}");
         mosdns_native_host::record_fatal(&error);
         std::process::exit(2);
     }
@@ -71,11 +71,11 @@ fn serve(config: &std::path::Path, dir: Option<&std::path::Path>) -> Result<(), 
         // requested restart into an exit that leaves the service down for the service
         // manager's restart delay: it is reported and the restart goes ahead.
         if let Err(error) = &result {
-            eprintln!("mosdns: {error} (restarting anyway)");
+            eprintln!("rtdns: {error} (restarting anyway)");
         }
-        eprintln!("mosdns: restarting in place");
+        eprintln!("rtdns: restarting in place");
         let error = target.exec();
-        eprintln!("mosdns: restart failed ({error}); starting again in this process");
+        eprintln!("rtdns: restart failed ({error}); starting again in this process");
         mosdns_native_host::abandon_failed_update_exec(target, &error.to_string());
     }
 }
@@ -98,7 +98,7 @@ fn recover_interrupted_update(
     let recovered = mosdns_native_host::recover_interrupted_update(&root)
         .map_err(|error| format!("update recovery failed: {error}"))?;
     if let Some((executable, args)) = recovered {
-        eprintln!("mosdns: an interrupted update was rolled back; starting the previous version");
+        eprintln!("rtdns: an interrupted update was rolled back; starting the previous version");
         let mut command = std::process::Command::new(&executable);
         if let Some(argv0) = args.first() {
             std::os::unix::process::CommandExt::arg0(&mut command, argv0);

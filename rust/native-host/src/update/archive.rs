@@ -1,7 +1,7 @@
 //! Minimal, bounded archive readers and writers for the updater.
 //!
 //! No `zip`/`tar` crate is available offline, and the updater only needs three small
-//! things: pull the `mosdns` executable out of a release `tar.gz`, read a configuration
+//! things: pull the `rtdns` executable out of a release `tar.gz`, read a configuration
 //! package (a zip of stored or deflated files), and write a stored zip for the
 //! configuration export. Every reader bounds entry counts and sizes before it
 //! allocates, rejects anything it does not understand, and never trusts a name.

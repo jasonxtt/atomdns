@@ -342,7 +342,7 @@ fn native_process_sigterm_drains_owners_and_reports_all_final_save_failures_with
         );
         let config = root.join("config.yaml");
         std::fs::write(&config, yaml).unwrap();
-        let mut command = Command::new(env!("CARGO_BIN_EXE_mosdns"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_rtdns"));
         command
             .args(["start", "-c"])
             .arg(&config)

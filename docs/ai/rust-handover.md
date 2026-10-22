@@ -112,13 +112,10 @@ no actionable issue, matched all129 source/manifests locally/remotely and reran
 
 ## Branch and worktree
 
-- Dedicated worktree `/Users/tom/github/mosdns-rust` on branch `rust`.
-- Base commit `3896a4a7e0ce4311b40a7e4c80c93f2c8b3b4f1d`, base release `v0.7.1`.
-- Do not switch to `main` merely from the folder name. `main` stays Go-only; the
-  `rust` branch is a future pure Rust-native replacement, not an intermediate
-  production runtime. Since Phase 6a (2026-10-18) the `rust` branch contains no Go
-  source or cgo bridge; Go references are built from `/Users/tom/github/mosdns` with
-  `tools/go-reference/build.sh`.
+- Since 2026-10-21 the work lives in `/Users/tom/github/rtdns` (`jasonxtt/rtdns`, branch `main`); the old worktree `/Users/tom/github/mosdns-rust` and the `rust` branch of `jasonxtt/mosdns` are no longer used for new work (history and commit IDs are the same).
+- Original base commit `3896a4a7e0ce4311b40a7e4c80c93f2c8b3b4f1d`, base release `v0.7.1` (Go).
+- This repository contains no Go source or cgo bridge (since Phase 6a, 2026-10-18); Go references are built from `/Users/tom/github/mosdns` with `tools/go-reference/build.sh`.
+- Production has run this program as `rtdns` since 2026-10-21. Releases and online updates come only from `jasonxtt/rtdns` (tags `vX.Y.Z`, assets `rtdns-linux-amd64.tar.gz` and `rtdns-update-manifest.json`; the program reports `vX.Y.Z`); the manually deployed `rust-v0.1.4` is replaced by hand with `v0.2.0` (see `docs/rust/release.md`). Older sections of this file use the old names (`mosdns` binary, `rust-v*`).
 
 ## Status as of 2026-09-24
 
