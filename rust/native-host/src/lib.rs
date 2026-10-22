@@ -11,6 +11,7 @@ mod cache_dump;
 mod cache_placement;
 mod capture;
 mod cli;
+mod compile_thread;
 mod config;
 mod diag;
 mod domain_output;

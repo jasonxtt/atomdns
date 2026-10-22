@@ -166,6 +166,8 @@ def execute(event, start, root, port, log):
                                     reached=bool(polls) and event['until'] in polls[-1]['body'])
         elif event['action'] == 'probe':
             record['result'] = udp_probe(event)
+        elif event['action'] == 'snapshot':
+            record['result'] = proc_snapshot(event)
         elif event['action'] == 'note':
             record['result'] = 'note'
         else:
@@ -174,6 +176,30 @@ def execute(event, start, root, port, log):
         record['result'] = repr(error)
     record['finished'] = time.monotonic()
     log.append(record)
+
+
+def proc_snapshot(event):
+    """The host's resident memory by kind (KiB) from /proc: VmRSS, VmHWM (peak since start or
+    the last reset) and the Rss of `[heap]`, other anonymous, stack and file-backed mappings.
+    `reset_hwm` then resets VmHWM, so a later snapshot reports the peak since this one."""
+    proc = pathlib.Path(f"/proc/{event['pid']}")
+    status = dict(line.split(':', 1) for line in (proc / 'status').read_text().splitlines() if ':' in line)
+    kinds, current = dict(heap=0, anon=0, stack=0, file=0), None
+    for line in (proc / 'smaps').read_text().splitlines():
+        fields = line.split()
+        if fields and '-' in fields[0] and not fields[0].endswith(':'):
+            name = fields[5] if len(fields) > 5 else ''
+            current = ('heap' if name == '[heap]' else 'stack' if name.startswith('[stack') else
+                       'anon' if not name or name.startswith('[anon') else 'file' if name.startswith('/') else None)
+        elif fields[:1] == ['Rss:'] and current:
+            kinds[current] += int(fields[1])
+    result = dict(rss_kib=int(status['VmRSS'].split()[0]), hwm_kib=int(status['VmHWM'].split()[0]),
+                  rss_by_kind_kib=kinds, anon_huge_kib=sum(
+                      int(line.split()[1]) for line in (proc / 'smaps_rollup').read_text().splitlines()
+                      if line.startswith('AnonHugePages:')))
+    if event.get('reset_hwm'):
+        (proc / 'clear_refs').write_text('5')
+    return result
 
 
 def measure(spec):

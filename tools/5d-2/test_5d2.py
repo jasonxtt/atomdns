@@ -126,6 +126,15 @@ class Live(unittest.TestCase):
             self.assertTrue(probe['result']['answered'])
             self.assertEqual(len(events), 3)
 
+    @unittest.skipUnless(pathlib.Path('/proc/self/smaps').exists(), 'needs Linux /proc')
+    def test_proc_snapshot_reports_resident_memory_by_kind(self):
+        result = fload.proc_snapshot(dict(pid=os.getpid()))
+        self.assertGreater(result['rss_kib'], 0)
+        self.assertGreaterEqual(result['hwm_kib'], result['rss_kib'])
+        self.assertEqual(set(result['rss_by_kind_kib']), {'heap', 'anon', 'stack', 'file'})
+        self.assertGreater(result['rss_by_kind_kib']['file'], 0)
+        self.assertLessEqual(sum(result['rss_by_kind_kib'].values()), result['rss_kib'] + 64)
+
 
 class WarmupProfile(unittest.TestCase):
     def test_the_budget_figure_comes_from_the_warmup_stage_only(self):

@@ -12,6 +12,7 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import time
 import urllib.parse
 
 import yaml
@@ -22,6 +23,7 @@ sys.path.insert(0, str(HERE.parent / 'e2e-1'))
 sys.path.insert(0, str(HERE.parent / '5d-1'))
 import analyze  # noqa: E402
 from dnswire import answer, decode, question  # noqa: E402
+from fload import proc_snapshot  # noqa: E402
 from harness import Env  # noqa: E402
 from load import semantic  # noqa: E402
 from mock import GROUPS, MARKERS, validate_faults  # noqa: E402
@@ -169,6 +171,13 @@ def build_scenarios():
     s['H2'] = dict(base, name='H2', title='rule source refresh rebuilds the mapper', prepare=[local_downloads],
                    ops=[25, 50])
     s['H3'] = dict(base, name='H3', title='special group save (with a dedicated port)', prepare=[], ops=[25, 50])
+    # Control: the same load with no operation (latency and RSS without a hot apply).
+    s['H0'] = dict(base, name='H0', title='control: same load, no operation', prepare=[], ops=[])
+    # Memory after hot applies (M2-3): six applies 10 s apart under load, then 300 s idle.
+    memory = dict(base, duration=150, ops=[40, 50, 60, 70, 80, 90], idle_after=300, prepare=[])
+    s['M0'] = dict(memory, name='M0', title='memory control: same schedule, no operation', ops=[])
+    s['M1'] = dict(memory, name='M1', title='memory: six settings applies (proxy address)')
+    s['M3'] = dict(memory, name='M3', title='memory: six special-group applies (create, delete)')
     s['H4'] = dict(base, name='H4', title='requery task', prepare=[fast_requery], ops=[25], duration=110,
                    wrong_allowed='the requery task runs its configured flush_rules (caches and the remembered '
                                  'name lists), so routing legitimately differs from the pre-task oracle until the '
@@ -222,6 +231,18 @@ def h_events(env, name, ops):
                        dict(at=at + 4, action='probe', port=3999, name='h3-probe.example.com', label='probe dedicated port'),
                        dict(at=at + 8, label='delete group', **api('DELETE', '/api/v1/special-groups/50')),
                        dict(at=at + 12, action='probe', port=3999, name='h3-probe.example.com', timeout=2, label='probe after delete')]
+    elif name == 'M1':
+        for index, at in enumerate(ops):
+            proxy = '127.0.0.1:17892' if index % 2 == 0 else '127.0.0.1:17891'
+            events.append(dict(at=at, label='proxy address', **api('POST', '/api/v1/overrides', dict(socks5=proxy, ecs='', replacements=[]))))
+    elif name == 'M3':
+        group = dict(name='m3', listen_port=3999, custom_port_only=True, upstream_sources=[dict(kind='group', plugin_tag='foreign')])
+        status, text, _ = env.api('GET', '/api/v1/special-groups')
+        if status != 200 or json.loads(text):
+            raise RuntimeError('M3 expects no existing special groups')
+        for index, at in enumerate(ops):
+            events.append(dict(at=at, label='create group', **api('POST', '/api/v1/special-groups', group)) if index % 2 == 0
+                          else dict(at=at, label='delete group', **api('DELETE', '/api/v1/special-groups/50')))
     elif name == 'H4':
         events += [dict(at=ops[0], label='requery trigger', **api('POST', '/plugins/requery/trigger')),
                    dict(at=ops[0] + 1, action='poll', path='/plugins/requery/status', until='"task_state":"idle"', interval=2,
@@ -254,6 +275,10 @@ def run_scenario(spec, work, role, binary, output, seed=501):
             oracle = json.loads((work / ('native-oracle.json' if role == 'native' else 'oracle.json')).read_text())
             mode = 'weighted'
             events = f6_events() if spec['name'] == 'F6' else h_events(env, spec['name'], spec['ops'])
+            if spec.get('idle_after'):
+                # RSS by kind before the first operation (VmHWM reset there) and at the end of the load.
+                events += [dict(at=35, action='snapshot', pid=env.host.pid, reset_hwm=True, label='before'),
+                           dict(at=spec['duration'] - 5, action='snapshot', pid=env.host.pid, label='after load')]
         (output / 'corpus.json').write_text(json.dumps(rows))
         (output / 'oracle.json').write_text(json.dumps(oracle))
         job = dict(corpus=str(output / 'corpus.json'), oracle=str(output / 'oracle.json'), output=str(output / 'load'),
@@ -266,6 +291,12 @@ def run_scenario(spec, work, role, binary, output, seed=501):
             raise RuntimeError('sender failed; inspect sender.log')
         if env.host.poll() is not None:
             raise RuntimeError('host exited during the scenario')
+        if spec.get('idle_after'):
+            idle, began = [], time.monotonic()
+            while time.monotonic() - began < spec['idle_after']:
+                time.sleep(10)
+                idle.append(dict(t=round(time.monotonic() - began, 1), **proc_snapshot(dict(pid=env.host.pid))))
+            (output / 'idle.json').write_text(json.dumps(idle))
         log = env.root / 'tmp/mosdns.log'
         (output / 'host-log-tail.txt').write_text(log.read_text(errors='replace')[-400000:] if log.exists() else '')
     result = analysis(spec, role, output, events)
@@ -463,7 +494,7 @@ def h_checks(spec, result, rows, samples, start, output, recorded, check, role):
     ops = spec['ops']
     lost = sum(1 for r in rows if r['status'] in ('timeout', 'send_error', 'unsent'))
     check('no_lost_queries', lost == 0, f'lost={lost}')
-    baseline = analyze.window(rows, 15, ops[0])
+    baseline = analyze.window(rows, 15, ops[0] if ops else spec['duration'])
     result['windows'] = {'baseline': baseline}
     base_p99 = (baseline['answer_latency_ms'] or {}).get('p99') or 0
     result['operations'] = []
@@ -511,6 +542,15 @@ def h_checks(spec, result, rows, samples, start, output, recorded, check, role):
     result['resources'] = {'all': analyze.resources(samples, start, 0, spec['duration'])}
     peak = result['resources']['all']['rss_kib']['peak'] if result['resources']['all'] else None
     check('rss_peak_below_256_mib', peak is not None and peak <= 256 * 1024, f'peak {peak} KiB')
+    if spec.get('idle_after'):
+        marks = {e['label']: e['result'] for e in recorded if e['action'] == 'snapshot' and isinstance(e['result'], dict)}
+        idle_path = output / 'idle.json'
+        idle = json.loads(idle_path.read_text()) if idle_path.exists() else []
+        before = (marks.get('before') or {}).get('rss_kib')
+        result['memory'] = dict(before=marks.get('before'), after_load=marks.get('after load'), idle_last=idle[-1] if idle else None,
+                                # VmHWM was reset at the `before` snapshot: the peak of the operations.
+                                operation_peak_kib=(marks.get('after load') or {}).get('hwm_kib'),
+                                idle_ratio=round(idle[-1]['rss_kib'] / before, 3) if before and idle else None)
     journal = output / 'runtime/mock.jsonl'
     if spec['name'] == 'H1' and role == 'native':
         expectations = {'probe before': (17891, 'https'), 'probe changed': (17892, 'tcp'),

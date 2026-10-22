@@ -109,11 +109,14 @@ recovery-required, stopping and closed return 503/ready:false. Other methods405.
 ## UDP receive buffer and apply pause
 
 Saving settings (`native-settings.md`) or a special group (`native-special-groups.md`)
-compiles the candidate configuration on the single DNS thread, so DNS answers
-pause for about 0.4–0.65 s (measured with the production rule set; the value
-grows with the rule set). UDP queries that arrive meanwhile wait in the kernel
-receive buffer of the listener and are answered when the thread resumes; they
-are not dropped as long as the buffer holds them. Every UDP DNS listener
+compiles the candidate configuration on a thread of its own (M2-3; before it, the
+compile ran on the single DNS thread and DNS answers paused for about 0.4–0.65 s
+with the production rule set). Publishing the candidate and retiring the old
+generation still run on the DNS thread and can hold answers back briefly (the
+measured figures are in `docs/rust/validation-records/10-22-offthread-apply/`).
+UDP queries that arrive meanwhile wait in the kernel receive buffer of the
+listener and are answered when the thread resumes; they are not dropped as long
+as the buffer holds them. Every UDP DNS listener
 therefore asks for an effective receive buffer of 4 MiB (about 3 400 small
 packets, ten times the 500 qps × 0.65 s burst): first `SO_RCVBUF` (half of that,
 since Linux stores double), then, if `net.core.rmem_max` capped it, `SO_RCVBUFFORCE`
@@ -122,8 +125,7 @@ value the system granted is kept, a warning names it, and `udp_receive_buffers`
 in the health document shows it. On a host whose `rmem_max` is below 2 MiB and
 which cannot force the option, a longer burst can still overflow the buffer;
 raise `net.core.rmem_max`. TCP listeners are unaffected (connection-level flow
-control). Removing the pause itself (compiling off the DNS thread) is the M2-3
-backlog item.
+control).
 
 ## System and appearance operations (F-1)
 

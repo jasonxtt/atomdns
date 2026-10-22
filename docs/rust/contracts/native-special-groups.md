@@ -206,11 +206,13 @@ through the managed transaction coordinator.
 
 ## Save pause
 
-Creating, changing or deleting a group compiles the candidate on the DNS thread,
-so DNS pauses for about 0.4–0.65 s (production rule set; 5D-2b/5D-2c). UDP queries
-that arrive meanwhile queue in the listener's enlarged kernel receive buffer and
-are not dropped within its capacity; see "UDP receive buffer and apply pause" in
-`native-webui-hosting.md`. Compiling off the DNS thread is the M2-3 backlog item.
+Creating, changing or deleting a group compiles the candidate on a thread of its
+own (one compile at a time), so DNS keeps answering during the compile (M2-3;
+before it, DNS paused for about 0.4–0.65 s with the production rule set). Publishing
+the candidate and retiring the old generation still run on the DNS thread and can
+delay answers briefly; UDP queries that arrive meanwhile queue in the listener's
+enlarged kernel receive buffer and are not dropped within its capacity; see
+"UDP receive buffer and apply pause" in `native-webui-hosting.md`.
 
 ## S2 runtime snapshot boundaries
 

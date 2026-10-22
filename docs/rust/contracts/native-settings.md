@@ -64,8 +64,10 @@ A change builds new settings, recompiles the same YAML with them (any error reje
 **Commit order:** (1) caches whose identity changed get an empty dump written; (2) the settings file is replaced durably (temporary file and parent directory are fsynced around the rename) after checking it still holds the bytes the candidate was built against (else
 409); (3) the generation is published. Failure before (2) changes nothing; failure of (2) leaves the old file and generation (dumps may be empty: harmless, caches are only read at start); a crash
 after (2) restarts into the new state, which the candidate compile already proved loadable; a failure while publishing stops the host the same way. A query keeps the generation it started with; the next
-query uses the new one. The candidate compile runs on the DNS thread (its cost with the production rule set is in the validation record): DNS answers pause for about 0.4–0.65 s, and UDP queries arriving meanwhile wait in the
-listener's enlarged kernel receive buffer instead of being dropped (see "UDP receive buffer and apply pause" in native-webui-hosting.md; compiling off the DNS thread is the M2-3 backlog item).
+query uses the new one. The candidate compile runs on a thread of its own, one compile at a time (a later save waits for the earlier compile); the DNS thread keeps answering meanwhile.
+A save whose compile overlapped another publication is refused with 409 (busy) and changes nothing; one that reaches publication while another is still publishing is refused as before. Shutdown during the compile abandons the change (nothing is written). Publishing the candidate and retiring the
+old generation still run on the DNS thread and can delay answers briefly; UDP queries arriving meanwhile wait in the listener's enlarged kernel receive buffer (see
+"UDP receive buffer and apply pause" in native-webui-hosting.md; measurements in `docs/rust/validation-records/10-22-offthread-apply/`).
 
 ## API
 
