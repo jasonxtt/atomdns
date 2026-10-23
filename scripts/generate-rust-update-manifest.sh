@@ -6,6 +6,8 @@
 # names must equal the constants of the updater (RELEASE_ASSET, MANIFEST_ASSET).
 #   scripts/generate-rust-update-manifest.sh vX.Y.Z <artifact-dir> [output]
 # RUST_RELEASE_METADATA=<file> uses another metadata file (tests).
+# RUST_CONFIG_PACKAGE=<config_rust_up.zip> checks that local file against the metadata instead of
+# downloading config.url (the package is a release asset, so the URL does not exist before the release).
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -64,9 +66,13 @@ fi
 config_url="$(jq -r '.config.url // empty' "${METADATA}")"
 config_sha="$(jq -r '.config.sha256 // empty' "${METADATA}")"
 if [ -n "${config_url}" ]; then
-  config_tmp="$(mktemp)"
-  trap 'rm -f "${config_tmp}"' EXIT
-  curl -fsSL --retry 3 "${config_url}" -o "${config_tmp}"
+  if [ -n "${RUST_CONFIG_PACKAGE:-}" ]; then
+    config_tmp="${RUST_CONFIG_PACKAGE}"
+  else
+    config_tmp="$(mktemp)"
+    trap 'rm -f "${config_tmp}"' EXIT
+    curl -fsSL --retry 3 "${config_url}" -o "${config_tmp}"
+  fi
   if [ "$(hash_file "${config_tmp}")" != "${config_sha}" ]; then
     echo "config package hash does not match release metadata" >&2
     exit 1
