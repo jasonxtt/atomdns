@@ -13,7 +13,6 @@ impl Tree {
             std::fs::create_dir_all(root.join(directory)).unwrap();
         }
         std::fs::write(root.join("sub_config/special_groups.yaml"), "plugins:\n  - tag: special_upstream_matcher\n    type: domain_mapper\n    args: {rules: []}\n  - tag: sequence_special\n    type: sequence\n    args: []\n").unwrap();
-        std::fs::write(root.join("rule/switch4.txt"), "A").unwrap();
         std::fs::write(
             root.join("config.yaml"),
             format!(
@@ -21,9 +20,9 @@ impl Tree {
 include: [sub_config/special_groups.yaml]
 plugins:
 {proxies}
-  - tag: switch4
-    type: switch4
-    args: {{initial_value: rule/switch4.txt}}
+  - tag: lazy_cache
+    type: feature_flag
+    args: {{label: 过期缓存, description: 测试, section: cache, kind: bool, default: true}}
   - tag: normal
     type: aliapi
     args:
@@ -84,6 +83,28 @@ fn owned_proxy_requires_exactly_one_object_and_never_falls_back() {
             .any(|item| item.object == "special_upstream_50"
                 && item.value.contains("127.0.0.1:17890")),
         "missing effective group proxy"
+    );
+}
+
+/// The generated group sequence caches through `flag lazy_cache` (M2-1): a configuration
+/// with special groups must declare that bool flag.
+#[test]
+fn generated_groups_need_the_lazy_cache_flag() {
+    let tree = Tree::new("no-lazy-cache", ONE, true);
+    let path = tree.0.join("config.yaml");
+    let yaml = std::fs::read_to_string(&path).unwrap();
+    let without = yaml.replace(
+        "  - tag: lazy_cache\n    type: feature_flag\n    args: {label: 过期缓存, description: 测试, section: cache, kind: bool, default: true}\n",
+        "",
+    );
+    assert_ne!(yaml, without);
+    std::fs::write(&path, without).unwrap();
+    let error = load_and_compile(&path).err().expect("refused");
+    assert!(
+        error
+            .to_string()
+            .contains("unknown feature_flag `lazy_cache`"),
+        "{error}"
     );
 }
 
@@ -382,9 +403,9 @@ api: {{http: '127.0.0.1:{api}'}}
 include: [sub_config/special_groups.yaml]
 plugins:
 {ONE}
-  - tag: switch4
-    type: switch4
-    args: {{initial_value: rule/switch4.txt}}
+  - tag: lazy_cache
+    type: feature_flag
+    args: {{label: 过期缓存, description: 测试, section: cache, kind: bool, default: true}}
   - tag: normal
     type: aliapi
     args: {{proxy: $p, upstreams: [{{tag: original, addr: 'udp://127.0.0.1:{a}'}}]}}
@@ -477,9 +498,9 @@ api: {{http: '127.0.0.1:{api}'}}
 include: [sub_config/special_groups.yaml]
 plugins:
 {ONE}
-  - tag: switch4
-    type: switch4
-    args: {{initial_value: rule/switch4.txt}}
+  - tag: lazy_cache
+    type: feature_flag
+    args: {{label: 过期缓存, description: 测试, section: cache, kind: bool, default: true}}
   - tag: normal
     type: aliapi
     args: {{proxy: $p, upstreams: [{{tag: original, addr: 'udp://127.0.0.1:{upstream}'}}]}}

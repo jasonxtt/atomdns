@@ -5,6 +5,12 @@
 
 ## M2-1：具名、带类型的功能开关（取代 `switch1`–`switch17`）
 
+**2026-10-23 已完成（任务 `10-23-rust-native-feature-flags`，未单独发版，随 UI 重做发 v0.3.0）**：`feature_flag` 声明 + `flag 名字[=选项]` 引用，13 个开关
+（switch1 拆为空结果/黑名单屏蔽、switch2+12 合并为三选一客户端分流、删除无引用的 10/11/14/15）；值存 `settings.json` 的 `flags` 段（只存差异，空段保留），
+首次正常启动从 `rule/switchN.txt` 迁移、更新试运行期间不写；修改走设置热应用；删除 `/plugins/switchN/*` 与开关注册表；配置 schema 3。
+用户否决了下文"合并按开关复制的流程段"：流程结构不动，只换引用写法，差分证明分流不变。WebUI 开关页按声明自动生成留给 UI 重做。
+契约 [native-feature-flags](../contracts/native-feature-flags.md)，验证 [10-23-feature-flags](../validation-records/10-23-feature-flags/README.md)。
+
 ### 现状问题
 - 17 个开关只有编号，含义只写在注释与 WebUI 代码里（如 `switch3` 泄露/不泄露、`switch4` 过期缓存 1、`switch5` 屏蔽 SOA/PTR/HTTPS、`switch6` 屏蔽 AAAA）；
   值只有 `'A'`/`'B'`，存于 `rule/switchN.txt`；`config_rust` 中约 84 处 `matches: switchN 'X'`。
@@ -121,3 +127,9 @@ requery 不再清空学习名单（缓存照旧清空）；配置 schema 升到 
    在线更新只来自 `jasonxtt/rtdns`，cargo bin 改为 `rtdns`，`native-host` 版本 `0.2.0`；README 已重写，发版与手动替换见 [release.md](../release.md)，
    演练记录见 [10-22-rtdns-rename](../validation-records/10-22-rtdns-rename/README.md)。生产 `rust-v0.1.4` 由用户手动替换为 `v0.2.0`。
    仍待决定：WebUI 里的 “MosDNS” 界面文案（待 UI 重做时一并处理）；`scripts/cutover/`、`tools/cutover/` 仍按旧名/`rust-v*` 编写，已不适用于新程序。
+
+**M2-1 差分发现（2026-10-23 记录，后续小项）**
+9. **新学到域名的审计标签滞后**（P2，v0.2.2 已有）：域名刚被 `route_learner` 学到后，审计的 `matched_rule_source` 立即是学习类别，
+   但 `domain_set`（如“记忆直连”）要到下一次整代热应用后才变成学习标签。应答与分流不受影响，只是审计/日志显示滞后。
+   M2-1 的 H 组差分因此多出过 455 行标签差异（两边先做一次相同的设置热应用后消失），见 [10-23-feature-flags](../validation-records/10-23-feature-flags/README.md)。
+   在 v0.3.0 发版前修。

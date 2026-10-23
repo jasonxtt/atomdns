@@ -1,8 +1,8 @@
 {
   "format": 1,
   "channel": "rust",
-  "required_config_schema": 2,
-  "config_package_id": "rust-config-schema-2",
+  "required_config_schema": 3,
+  "config_package_id": "rust-config-schema-3",
   "config": {
     "url": "https://github.com/jasonxtt/rtdns/releases/download/v0.2.2/config_rust_up.zip",
     "sha256": "df496d9059643ee3d9a270570322e2ed29b60490555985a83587bb25a4cf1913"

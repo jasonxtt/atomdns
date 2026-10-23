@@ -281,9 +281,10 @@ fn check_has_no_side_effects() {
             .replace("{API_PORT}", &api_port.to_string()),
     )
     .unwrap();
-    // Existing state and dump artifacts must stay byte- and mtime-identical.
-    std::fs::create_dir_all(root.path().join("state")).unwrap();
-    std::fs::write(root.path().join("state/switch1.txt"), "B").unwrap();
+    // Existing state and dump artifacts must stay byte- and mtime-identical; a
+    // legacy switch file is read for the flag value but never migrated.
+    std::fs::create_dir_all(root.path().join("rule")).unwrap();
+    std::fs::write(root.path().join("rule/switch4.txt"), "B").unwrap();
     std::fs::create_dir_all(root.path().join("cache")).unwrap();
     std::fs::write(root.path().join("cache/cache.dump"), b"opaque dump").unwrap();
     let before = snapshot(root.path());

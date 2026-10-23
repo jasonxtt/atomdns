@@ -1,6 +1,6 @@
 # Native typed settings (M1-f1)
 
-Scope: the values the WebUI adjusts at run time — proxy address, ECS address, `aliapi` upstream lists, the `domain_output` generation switches — as named
+Scope: the values the WebUI adjusts at run time — proxy address, ECS address, `aliapi` upstream lists, the `domain_output` generation switches, the `feature_flag` values ([native-feature-flags](native-feature-flags.md)) — as named
 configuration objects referenced with `$tag`, a versioned `webinfo/settings.json` that stores only differences from the YAML, one function that combines
 both, and hot apply of a change. The reference host's `upstream_overrides.json`, `config_overrides.json`, global `replacements` and
 `domain_generation_settings.json` are **not read**. Evidence: `docs/rust/validation-records/10-08-m1-f1/`. Design notes: the task's `research/design.md`.
@@ -32,7 +32,8 @@ Both are non-executable (`exec: $main_proxy` is an error). References are `$tag`
  "upstreams":{"foreign":[{"tag":"cf","enabled":true,"protocol":"tcp","addr":"1.1.1.1","use_proxy":true}]},
  "domain_generation":{"enabled":false,"plugins":{"my_realiplist":{"enabled":false}}}}
 ```
-Only differences are stored: a value equal to what the YAML says (an address, an upstream list, a switch) is removed from the file by the API (sections omitted when empty; keys sorted; two-space indent; trailing newline). `upstreams.<tag>` replaces that `aliapi`'s whole YAML list (only `enabled`
+Only differences are stored: a value equal to what the YAML says (an address, an upstream list, a switch) is removed from the file by the API (sections omitted when empty; keys sorted; two-space indent; trailing newline).
+`flags` (`{"<key>": true|false|"<option>"}`) is the one section kept when empty: its presence records the one-time migration of the schema-2 switch files, and every save (any route, the migration) keeps it unchanged unless it is the flag route itself. `upstreams.<tag>` replaces that `aliapi`'s whole YAML list (only `enabled`
 entries compile; `concurrent` stays the YAML value; all entries disabled is an error). Entry fields are the WebUI's: `tag`, `enabled`, `protocol`
 (`udp|tcp|tls|https`, aliases `dot|doh`), `addr` (a scheme-less address gets the protocol's scheme), `dial_addr`, `upstream_query_timeout` (ms), `insecure_skip_verify`, `bootstrap`,
 `bootstrap_version`, `use_proxy` (the reference's `use_socks_proxy` is accepted on input). Refused with a reason: `protocol: aliapi` / signed-API fields, a literal `socks5`,

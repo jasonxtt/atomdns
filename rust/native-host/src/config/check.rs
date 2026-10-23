@@ -299,6 +299,7 @@ pub fn check_config_in(path: &Path, root: Option<&Path>) -> Result<CheckReport, 
         config_origin: None,
         include_paths: &include_paths,
         settings: &settings,
+        flag_root: Some(root_dir),
         standard: standard.then_some((root_dir, None)),
     };
     let mut active = vec![true; total];

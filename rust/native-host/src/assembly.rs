@@ -207,8 +207,9 @@ impl HostAssembly {
             .map_err(|error| AssemblyError::Runtime(format!("cannot open log file: {error}")))?;
         // File-backed startup always has a base, including a bare basename.
         // An empty in-memory base intentionally does not mount external UI.
-        let config = crate::config::compile_file_with_roots(&yaml, path, state_root, root_dir)
+        let mut config = crate::config::compile_file_with_roots(&yaml, path, state_root, root_dir)
             .map_err(AssemblyError::Config)?;
+        crate::config::flags::persist_migration(&mut config);
         Self::with_options_and_state_root(config, HostOptions::default(), state_root)
     }
 

@@ -218,8 +218,6 @@ fn retained_audit_api_response_bytes_equal_base_fixture() {
                     target: target.to_owned(),
                     content_type: None,
                     if_none_match: None,
-                    config_generation: None,
-                    config_generation_duplicate: false,
                     body: body.as_bytes().to_vec(),
                 },
             )

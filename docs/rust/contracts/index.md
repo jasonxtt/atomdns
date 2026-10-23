@@ -20,7 +20,7 @@ These files are short, source-backed rules for MosDNS-T backend and Rust migrati
 | [Native UDP response](native-udp-response.md) | Client UDP/EDNS budgets, name compression, whole-RR truncation, full cache preservation and final audit |
 | [Native cache lifecycle](native-cache-lifecycle.md) | Cache publication/refresh, v2 persistence, management HTTP and Vue workflow |
 | [Native special groups](native-special-groups.md) | Opt-in managed compiler, generated routing, CNAME/audit preservation, S5 management HTTP, S6 Vue workflow, and S7 isolated whole-chain evidence; S7 and cumulative exact-source reviews passed; production cutover remains gated |
-| [Native switch state](native-switch-state.md) | Configured switch1–17 state, immutable query admission, durable HTTP control, capability inventory, and truthful native Vue controls |
+| [Native feature flags](native-feature-flags.md) | Named `feature_flag` declarations, the `flag` matcher, values in `settings.json` with hot apply, `/api/v1/flags`, one-time migration from `rule/switchN.txt`, config schema 3 (replaces [native switch state](native-switch-state.md), removed) |
 
 | [Native aliapi/rewrite/webinfo](native-aliapi-rewrite-webinfo.md) | YAML-only `aliapi` with SOCKS5 for TCP-based upstreams, `rewrite` rules and API, `webinfo` document API (M1-b1); runtime overrides excluded |
 | [Native typed settings](native-settings.md) | `socks5_proxy`/`ecs_address` objects and `$tag` references, `webinfo/settings.json`, effective configuration with sources, hot apply, WebUI settings routes |

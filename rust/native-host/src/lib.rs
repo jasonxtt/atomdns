@@ -41,10 +41,6 @@ pub mod settings_migrate;
 mod special_groups;
 mod standard_groups_api;
 mod static_ui;
-mod switch;
-#[cfg(test)]
-mod switch_admission_tests;
-mod switch_state;
 mod system_api;
 mod tcp;
 mod transaction;
@@ -122,7 +118,6 @@ pub fn abandon_failed_update_exec(target: &RestartTarget, reason: &str) {
         update::transaction::abandon_staged(path, &format!("无法启动更新守护: {reason}"));
     }
 }
-pub use switch::SwitchDeclaration;
 pub use tcp::{TcpServer, TcpServerError};
 pub use udp::{UdpServer, UdpServerError};
 

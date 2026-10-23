@@ -1,12 +1,13 @@
 //! HTTP routes of the typed settings layer: the WebUI's `/api/v1/overrides`,
-//! `/api/v1/domain-generation`, the effective-settings report and the
-//! settings-backed `POST /api/v1/upstream/config`. Every change builds new
+//! `/api/v1/domain-generation`, `/api/v1/flags`, the effective-settings report
+//! and the settings-backed `POST /api/v1/upstream/config`. Every change builds new
 //! settings and goes through `RuntimeControl::apply_settings` (a whole
 //! generation, or nothing). See `docs/rust/contracts/native-settings.md`.
 
 use serde::Deserialize;
 
 use crate::config::CompiledConfig;
+use crate::config::flags::{Flag, FlagValue};
 use crate::config::settings::{
     NO_V4, NO_V6, PluginSwitch, REMEMBER_DIRECT, REMEMBER_PROXY, UpstreamEntry,
 };
@@ -197,6 +198,11 @@ pub(crate) fn generation_available(config: &CompiledConfig) -> bool {
         && (!config.local.domain_outputs.is_empty() || !config.local.learners.is_empty())
 }
 
+/// The flag routes exist when a file-backed configuration declares a flag.
+pub(crate) fn flags_available(config: &CompiledConfig) -> bool {
+    config.reload.is_some() && !config.flags.is_empty()
+}
+
 /// The tags of one plugin kind in the effective report, in order.
 fn objects<'a>(config: &'a CompiledConfig, kind: &str) -> Vec<&'a crate::config::EffectiveItem> {
     config
@@ -206,8 +212,8 @@ fn objects<'a>(config: &'a CompiledConfig, kind: &str) -> Vec<&'a crate::config:
         .collect()
 }
 
-/// `/api/v1/overrides`, `/api/v1/domain-generation`, `/api/v1/settings/effective`;
-/// `None` for any other path.
+/// `/api/v1/overrides`, `/api/v1/domain-generation`, `/api/v1/flags[/{key}]`,
+/// `/api/v1/settings/effective`; `None` for any other path.
 pub(crate) async fn handle(
     control: Option<&RuntimeControl>,
     config: &CompiledConfig,
@@ -220,6 +226,24 @@ pub(crate) async fn handle(
             "GET" => effective(config),
             _ => not_allowed(),
         },
+        "/api/v1/flags" if !flags_available(config) => return None,
+        "/api/v1/flags" => match method {
+            "GET" => flags_get(config),
+            _ => not_allowed(),
+        },
+        other if other.starts_with("/api/v1/flags/") => {
+            if !flags_available(config) {
+                return None;
+            }
+            let key = &other["/api/v1/flags/".len()..];
+            match method {
+                "POST" | "DELETE" => match control {
+                    Some(control) => flag_change(control, method, key, body).await,
+                    None => text(503, "runtime control is unavailable"),
+                },
+                _ => not_allowed(),
+            }
+        }
         "/api/v1/overrides" if !overrides_available(config) => return None,
         "/api/v1/domain-generation" if !generation_available(config) => return None,
         "/api/v1/overrides" => match method {
@@ -241,6 +265,101 @@ pub(crate) async fn handle(
         _ => return None,
     };
     Some(reply)
+}
+
+fn flag_json(flag: &Flag) -> serde_json::Value {
+    let mut value = serde_json::json!({
+        "key": flag.key,
+        "label": flag.label,
+        "description": flag.description,
+        "section": flag.section,
+        "kind": flag.kind(),
+        "default": flag.default,
+        "value": flag.value,
+        "modified": flag.value != flag.default,
+        "source": flag.source,
+    });
+    if let Some(options) = &flag.options {
+        value["options"] = options
+            .iter()
+            .map(|option| serde_json::json!({"value": option.value, "label": option.label}))
+            .collect();
+    }
+    value
+}
+
+fn flags_get(config: &CompiledConfig) -> Reply {
+    json(
+        200,
+        &serde_json::json!({
+            "settings_file": crate::config::settings::SETTINGS_FILE,
+            "migrated": config.settings.flags.is_some(),
+            "flags": config.flags.iter().map(flag_json).collect::<Vec<_>>(),
+        }),
+    )
+}
+
+/// `POST /api/v1/flags/{key}` (`{"value": …}`) and `DELETE` (back to the
+/// default). Only the differences from the defaults are stored; a flag set to
+/// its default leaves the `flags` section (which stays, possibly empty).
+async fn flag_change(control: &RuntimeControl, method: &str, key: &str, body: &[u8]) -> Reply {
+    let current = control.view();
+    let Some(flag) = current.config.flags.iter().find(|flag| flag.key == key) else {
+        return text(404, &format!("no feature_flag `{key}`"));
+    };
+    let value = if method == "DELETE" {
+        flag.default.clone()
+    } else {
+        let Ok(serde_json::Value::Object(object)) = serde_json::from_slice(body) else {
+            return text(400, "expected a JSON object {\"value\": ...}");
+        };
+        if object.len() != 1 {
+            return text(400, "expected exactly one field: value");
+        }
+        let value = match object.get("value") {
+            Some(serde_json::Value::Bool(value)) => FlagValue::Bool(*value),
+            Some(serde_json::Value::String(value)) => FlagValue::Choice(value.clone()),
+            _ => return text(400, "value must be a boolean or an option string"),
+        };
+        if !flag.accepts(&value) {
+            return text(
+                400,
+                &format!(
+                    "`{value}` is not a valid value of the {} flag `{key}`",
+                    flag.kind()
+                ),
+            );
+        }
+        value
+    };
+    if crate::config::flags::update_trial() {
+        return text(503, "配置更新试运行中，暂不能修改开关");
+    }
+    if value == flag.value {
+        return json(200, &flag_json(flag));
+    }
+    let mut settings = current.config.settings.clone();
+    // Before the first migration the values may come from the legacy switch
+    // files; the first change stores all of them.
+    let mut stored = settings
+        .flags
+        .take()
+        .unwrap_or_else(|| crate::config::flags::differences(&current.config.flags));
+    if value == flag.default {
+        stored.remove(key);
+    } else {
+        stored.insert(key.to_owned(), value);
+    }
+    settings.flags = Some(stored);
+    drop(current);
+    if let Err(error) = control.apply_settings(settings).await {
+        return failure(error);
+    }
+    let view = control.view();
+    match view.config.flags.iter().find(|flag| flag.key == key) {
+        Some(flag) => json(200, &flag_json(flag)),
+        None => text(500, "the flag is gone after the change"),
+    }
 }
 
 fn effective(config: &CompiledConfig) -> Reply {

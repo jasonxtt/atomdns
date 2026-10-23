@@ -222,15 +222,6 @@ fn get(path: &str) -> String {
     format!("GET {path} HTTP/1.1\r\nHost: native\r\nConnection: close\r\n\r\n")
 }
 
-fn get_with_headers(path: &str, headers: &[(&str, &str)]) -> String {
-    use std::fmt::Write as _;
-    let mut extra = String::new();
-    for (key, value) in headers {
-        write!(&mut extra, "{key}: {value}\r\n").expect("write request header");
-    }
-    format!("GET {path} HTTP/1.1\r\nHost: native\r\n{extra}Connection: close\r\n\r\n")
-}
-
 fn raw(method: &str, path: &str) -> String {
     format!("{method} {path} HTTP/1.1\r\nHost: native\r\nConnection: close\r\n\r\n")
 }
@@ -240,54 +231,6 @@ fn post(path: &str, body: &str) -> String {
         "POST {path} HTTP/1.1\r\nHost: native\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )
-}
-
-fn post_with_headers(path: &str, body: &str, headers: &[(&str, &str)]) -> String {
-    use std::fmt::Write as _;
-    let mut extra = String::new();
-    for (key, value) in headers {
-        write!(&mut extra, "{key}: {value}\r\n").expect("write request header");
-    }
-    format!(
-        "POST {path} HTTP/1.1\r\nHost: native\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    )
-}
-
-fn switch_fixture(name: &str, dns_port: u16, api_port: u16) -> Fixture {
-    let fixture = Fixture::new(name);
-    fixture.write("state/custom switch.txt", " A \n");
-    let yaml = format!(
-        r#"log:
-  level: error
-api:
-  http: "127.0.0.1:{api_port}"
-plugins:
-  - tag: sequence_main
-    type: sequence
-    args:
-      - matches: switch3 A
-        exec: reject 3
-      - exec: $forward_main
-  - tag: "custom switch"
-    type: switch3
-    args:
-      initial_value: "state/custom switch.txt"
-  - tag: forward_main
-    type: forward
-    args:
-      upstreams:
-        - addr: "udp://127.0.0.1:25999"
-  - tag: listener
-    type: udp_server
-    args:
-      entry: sequence_main
-      listen: "127.0.0.1:{dns_port}"
-      enable_audit: false
-"#
-    );
-    fixture.write("config.yaml", &yaml);
-    fixture
 }
 
 /// A port that was just free; used to prove a failed bind released the other
@@ -399,183 +342,6 @@ fn management_routes_match_the_go_visible_contract() {
         task.await.expect("supervisor task")
     });
 
-    result.expect("supervisor shutdown is clean");
-}
-
-#[allow(clippy::too_many_lines)]
-#[test]
-fn configured_switch_http_uses_inventory_tags_and_strict_value_inputs() {
-    let fixture = switch_fixture("switch-http", free_udp_port(), free_tcp_port());
-    let assembly = assembly_for(&fixture);
-    let bound = assembly
-        .block_on(assembly.bind_host())
-        .expect("bound host listeners");
-    let api = bound.api_addr().expect("management listener address");
-    let shutdown = TransportCancellation::new();
-
-    let result = assembly.block_on(async {
-        let task = tokio::task::spawn_local(bound.serve(shutdown.clone()));
-
-        let capabilities = http_request(api, &get("/api/v1/capabilities")).await;
-        assert_eq!(capabilities.status, 200);
-        let capabilities: serde_json::Value =
-            serde_json::from_str(&capabilities.body).expect("capability JSON");
-        assert_eq!(capabilities["ui_operations"]["switches.manage"]["supported"], true);
-        assert_eq!(capabilities["switches"]["schema_version"], 1);
-        assert_eq!(capabilities["switches"]["config_generation"], "0");
-        assert_eq!(capabilities["switches"]["instances"][0]["type"], "switch3");
-        assert_eq!(capabilities["switches"]["instances"][0]["tag"], "custom switch");
-        assert_eq!(capabilities["switches"]["instances"][0]["readable"], true);
-        assert_eq!(capabilities["switches"]["instances"][0]["writable"], true);
-
-        let encoded = http_request(api, &get("/plugins/custom%20switch/show")).await;
-        assert_eq!(encoded.status, 200, "{encoded:?}");
-        assert_eq!(encoded.body, "A");
-
-        let custom = http_request(
-            api,
-            &post_with_headers(
-                "/plugins/custom%20switch/post",
-                r#"{"value":"custom value"}"#,
-                &[
-                    ("Content-Type", "Application/JSON; charset=UTF-8"),
-                    ("X-Mosdns-Config-Generation", "0"),
-                ],
-            ),
-        )
-        .await;
-        assert_eq!(custom.status, 200, "{custom:?}");
-        assert_eq!(custom.body, "updated to: custom value\n");
-        assert_eq!(fixture.read("state/custom switch.txt"), "custom value");
-        assert_eq!(
-            http_request(api, &get("/plugins/custom%20switch/show")).await.body,
-            "custom value"
-        );
-
-        let form = http_request(
-            api,
-            &post_with_headers(
-                "/plugins/custom%20switch/post",
-                "value=",
-                &[("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")],
-            ),
-        )
-        .await;
-        assert_eq!(form.status, 200, "{form:?}");
-        assert_eq!(form.body, "updated to: \n");
-        assert_eq!(fixture.read("state/custom switch.txt"), "");
-
-        let legacy_json = http_request(
-            api,
-            &post_with_headers(
-                "/plugins/custom%20switch/post",
-                r#"{"Value":"B"}"#,
-                &[],
-            ),
-        )
-        .await;
-        assert_eq!(legacy_json.status, 200, "{legacy_json:?}");
-        assert_eq!(fixture.read("state/custom switch.txt"), "B");
-
-        for (body, expected) in [
-            (r#"{"value":"A","Value":"B"}"#, 400),
-            (r#"{"value":1}"#, 400),
-        ] {
-            let invalid = http_request(
-                api,
-                &post_with_headers(
-                    "/plugins/custom%20switch/post",
-                    body,
-                    &[("Content-Type", "application/json")],
-                ),
-            )
-            .await;
-            assert_eq!(invalid.status, expected, "{body}: {invalid:?}");
-        }
-        let duplicate_form = http_request(
-            api,
-            &post_with_headers(
-                "/plugins/custom%20switch/post",
-                "value=A&value=B",
-                &[("Content-Type", "application/x-www-form-urlencoded")],
-            ),
-        )
-        .await;
-        assert_eq!(duplicate_form.status, 400);
-        let unsupported = http_request(
-            api,
-            &post_with_headers(
-                "/plugins/custom%20switch/post",
-                "value=A",
-                &[("Content-Type", "text/plain")],
-            ),
-        )
-        .await;
-        assert_eq!(unsupported.status, 415);
-
-        let oversized = http_request(
-            api,
-            &format!(
-                "POST /plugins/custom%20switch/post HTTP/1.1\r\nHost: native\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                1024 * 1024 + 1
-            ),
-        )
-        .await;
-        assert_eq!(oversized.status, 413);
-        assert_eq!(fixture.read("state/custom switch.txt"), "B");
-
-        let malformed_generation = http_request(
-            api,
-            &post_with_headers(
-                "/plugins/custom%20switch/post",
-                r#"{"value":"A"}"#,
-                &[("X-Mosdns-Config-Generation", "01")],
-            ),
-        )
-        .await;
-        assert_eq!(malformed_generation.status, 400);
-        let stale = http_request(
-            api,
-            &post_with_headers(
-                "/plugins/custom%20switch/post",
-                r#"{"value":"A"}"#,
-                &[("X-Mosdns-Config-Generation", "1")],
-            ),
-        )
-        .await;
-        assert_eq!(stale.status, 409);
-        assert_eq!(fixture.read("state/custom switch.txt"), "B");
-
-        // Generation is a precondition only after a configured switch route
-        // has been identified. Unrelated plugin and non-plugin requests keep
-        // their normal route semantics even with malformed input.
-        let unrelated_plugin = http_request(
-            api,
-            &get_with_headers(
-                "/plugins/absent%20switch/show",
-                &[("X-Mosdns-Config-Generation", "01")],
-            ),
-        )
-        .await;
-        assert_eq!(unrelated_plugin.status, 404, "{unrelated_plugin:?}");
-        let unrelated_api = http_request(
-            api,
-            &get_with_headers(
-                "/api/v1/capabilities",
-                &[("X-Mosdns-Config-Generation", "not-a-number")],
-            ),
-        )
-        .await;
-        assert_eq!(unrelated_api.status, 200, "{unrelated_api:?}");
-
-        let wrong_method = http_request(api, &raw("DELETE", "/plugins/custom%20switch/show")).await;
-        assert_eq!(wrong_method.status, 405);
-        let unknown = http_request(api, &get("/plugins/absent%20switch/show")).await;
-        assert_eq!(unknown.status, 404);
-
-        shutdown.cancel();
-        task.await.expect("supervisor task")
-    });
     result.expect("supervisor shutdown is clean");
 }
 
@@ -1532,7 +1298,7 @@ fn capability_matrix_is_complete_and_matches_host_eligibility() {
                 "groups.upstreams",
                 "rules.adguard",
                 "client.aliases",
-                "switches.manage",
+                "flags.manage",
                 "cache.requery",
                 "lists.remembered",
                 // An in-process test host has no captured restart target (only `main` captures one).
@@ -1561,7 +1327,7 @@ fn capability_matrix_is_complete_and_matches_host_eligibility() {
             for path in [
                 "/plugins/adguard/rules",
                 "/plugins/clientname",
-                "/plugins/switch3/show",
+                "/api/v1/flags",
                 "/plugins/requery/status",
                 "/api/v1/domain-generation",
                 "/api/v1/overrides",

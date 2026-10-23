@@ -17,7 +17,7 @@ Read `docs/ai/config-notes.md` before changing configuration generation, upgrade
   versions preserve old UI details. The exact matrix is in the task's
   research/forward-contracts.md and native-audit-control.md below. This is a
   user-approved migration plan, not an implemented endpoint claim.
-- Switch IDs share a bit namespace with `fast_mark`; consult `docs/ai/config-notes.md` before allocation. Bit 48 is reserved and `switch17` uses bit 49.
+- The host reserves no `fast_mark` bits since configuration schema 3 (switches became `feature_flag`s, see `native-feature-flags.md`); bit 48 stays the `unified_matcher1` sentinel convention of `config_rust`.
 
 ## Rust backend selection
 

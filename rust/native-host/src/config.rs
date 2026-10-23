@@ -35,6 +35,7 @@ use crate::webinfo::WebInfo;
 
 pub(crate) mod aliapi;
 mod check;
+pub(crate) mod flags;
 pub(crate) mod providers;
 pub(crate) mod settings;
 pub(crate) mod standard_groups;
@@ -626,9 +627,11 @@ pub struct CompiledConfig {
     pub listener: ListenerConfig,
     /// Every compiled `domain_set` with its management eligibility.
     pub domain_sets: Vec<DomainSetConfig>,
-    /// Every declared switch1..17 owner in stable type order. Declarations
-    /// are immutable compile output; live values live in the host registry.
-    pub switches: Vec<crate::switch::SwitchDeclaration>,
+    /// Every `feature_flag` in declaration order with the value this
+    /// generation was compiled with.
+    pub(crate) flags: Vec<flags::Flag>,
+    /// Legacy switch files the flag values could not be taken from.
+    pub(crate) flag_legacy_notes: flags::LegacyNotes,
     /// The scoped management HTTP listener, when one is configured.
     pub api: Option<ApiConfig>,
     pub program: ValidatedProgram,
@@ -1030,6 +1033,7 @@ fn compile_raw(
         config_origin,
         include_paths: &include_paths,
         settings,
+        flag_root: config_origin.map(|_| root_dir),
         standard: standard.then_some((root_dir, groups)),
     };
     finish_compile(log, api, definitions, inputs, &sources)
@@ -1044,7 +1048,7 @@ fn finish_compile(
     sources: &CompileSources<'_>,
 ) -> Result<CompiledConfig, ConfigError> {
     let mut definitions = definitions;
-    let mut applied = settings::apply(&mut definitions, sources.settings)?;
+    let mut applied = settings::apply(&mut definitions, sources.settings, sources.flag_root)?;
     let standard = match sources.standard {
         Some((base, groups)) => Some(standard_groups::apply(
             base,
@@ -1063,9 +1067,11 @@ fn finish_compile(
         .map_err(|reason| ConfigError::new(standard_groups::STATE, reason))?;
     }
     let dependency_definitions = definitions.clone();
-    let mut compiled = compile_definitions(log, api, definitions, inputs, sources)?;
+    let mut compiled = compile_definitions(log, api, definitions, inputs, sources, &applied.flags)?;
     compiled.cache_dependencies = cache_dependency_fingerprints(&compiled, &dependency_definitions);
     compiled.settings = sources.settings.clone();
+    compiled.flags = std::mem::take(&mut applied.flags);
+    compiled.flag_legacy_notes = std::mem::take(&mut applied.legacy_notes);
     compiled.settings_report = applied.items;
     compiled.effective_upstreams = applied.upstreams;
     compiled.yaml_defaults = applied.defaults;
@@ -1837,6 +1843,54 @@ pub(crate) fn canonicalized_path(path: &Path) -> Option<PathBuf> {
         .ok()
 }
 
+/// The `FileKey` identity of an existing regular file, used to detect
+/// hard-link aliases between product artifacts.
+#[cfg(unix)]
+pub(crate) fn file_identity(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let path = path.to_path_buf();
+    let metadata = crate::transaction::blocking_io(move || std::fs::metadata(path))
+        .ok()?
+        .ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    Some((metadata.dev(), metadata.ino()))
+}
+
+/// Lexically normalized artifact identity for collision comparison.
+pub(crate) fn normalized_artifact(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    crate::special_groups::lexical_path(&absolute)
+}
+
+/// Reports whether two paths name the same underlying file: by lexical
+/// normalization always, and by canonical path or inode identity when both
+/// files currently exist. Non-existing paths only collide lexically.
+pub(crate) fn paths_collide(first: &Path, second: &Path) -> bool {
+    if normalized_artifact(first) == normalized_artifact(second) {
+        return true;
+    }
+    if let (Some(first), Some(second)) = (canonicalized_path(first), canonicalized_path(second)) {
+        if first == second {
+            return true;
+        }
+    }
+    #[cfg(unix)]
+    {
+        if let (Some(first), Some(second)) = (file_identity(first), file_identity(second)) {
+            return first == second;
+        }
+    }
+    false
+}
+
 /// The declared kind of one plugin definition. Domain sets and sequences are
 /// compiled into the program; forwards and caches become host-fulfilled
 /// external executables; listeners are collected separately.
@@ -1854,7 +1908,7 @@ enum PluginKind {
     FastMark,
     FlowSetter,
     Fallback,
-    Switch,
+    FeatureFlag,
     DomainSetLight,
     SdSetLight,
     AdguardRule,
@@ -1889,6 +1943,8 @@ struct PluginCatalog<'a> {
     adguard_direct:
         &'a RefCell<BTreeMap<String, Rc<crate::rule_sources::Live<providers::Filtered>>>>,
     fast_marks: &'a [(String, FastMarkConfig)],
+    /// Every `feature_flag` with this generation's value.
+    flags: &'a [flags::Flag],
     forwards: &'a RefCell<ForwardCompiler>,
     preferences: &'a RefCell<Vec<(String, PreferenceFamily)>>,
     /// Every sleep external (named plugin, quick callsite or preset use) and
@@ -1954,6 +2010,9 @@ struct CompileSources<'a> {
     include_paths: &'a [PathBuf],
     /// The typed settings to overlay on the definitions.
     settings: &'a settings::Settings,
+    /// The configuration root whose `rule/switchN.txt` files give the flag
+    /// values before the first migration (file-backed compiles and `check`).
+    flag_root: Option<&'a Path>,
     standard: Option<(&'a Path, Option<&'a [standard_groups::Group]>)>,
 }
 
@@ -1963,6 +2022,7 @@ fn compile_definitions(
     definitions: Vec<RawPlugin>,
     inputs: Option<&mut crate::special_groups::CandidateInputSet>,
     sources: &CompileSources<'_>,
+    flags: &[flags::Flag],
 ) -> Result<CompiledConfig, ConfigError> {
     let candidate_inputs = RefCell::new(inputs.as_deref().cloned());
     let mut kinds: Vec<(String, PluginKind, usize)> = Vec::with_capacity(definitions.len());
@@ -1995,7 +2055,17 @@ fn compile_definitions(
             "requery" => PluginKind::Requery,
             "socks5_proxy" => PluginKind::Socks5Proxy,
             "ecs_address" => PluginKind::EcsAddress,
-            other if crate::switch::switch_type_number(other).is_some() => PluginKind::Switch,
+            "feature_flag" => PluginKind::FeatureFlag,
+            other if flags::legacy_switch(other) => {
+                return Err(ConfigError::new(
+                    format!("{}.type", plugin.source_path),
+                    format!(
+                        "plugin type `{other}` was removed in configuration schema 3; declare a \
+                         feature_flag (sub_config/flags.yaml) and update the config_rust package \
+                         (rust-config-schema-3)"
+                    ),
+                ));
+            }
             other => {
                 return Err(ConfigError::new(
                     format!("{}.type", plugin.source_path),
@@ -2032,8 +2102,7 @@ fn compile_definitions(
     }
     let mut file_owners: BTreeMap<PathBuf, BTreeSet<String>> = BTreeMap::new();
     // Every persistent file the compiled configuration reads or writes that
-    // is visible to the compiler. Switch state files are durable POST
-    // targets and may never alias any of these artifacts.
+    // is visible to the compiler.
     let mut known_artifacts: Vec<PathBuf> = Vec::new();
     if let Some(origin) = sources.config_origin {
         known_artifacts.push(origin.to_path_buf());
@@ -2100,7 +2169,6 @@ fn compile_definitions(
     let response_ip_rules = RefCell::new(Vec::new());
     let ip_budgets = RefCell::new(BTreeMap::new());
     let mut forwards = Vec::new();
-    let mut switches: Vec<crate::switch::SwitchDeclaration> = Vec::new();
     let mut fast_marks = Vec::new();
     let mut flow_setters = Vec::new();
     let mut tag_setters = Vec::new();
@@ -2253,22 +2321,8 @@ fn compile_definitions(
                 )));
             }
             PluginKind::DomainMapper => {}
-            PluginKind::Switch => {
-                let declaration = compile_switch_declaration(plugin)?;
-                if let Some(existing) = switches
-                    .iter()
-                    .find(|existing| existing.type_number == declaration.type_number)
-                {
-                    return Err(ConfigError::new(
-                        format!("{}.type", plugin.source_path),
-                        format!(
-                            "duplicate switch{} declaration `{}`; at most one instance of each                              switch type is supported (already declared as `{}`)",
-                            declaration.type_number, declaration.tag, existing.tag
-                        ),
-                    ));
-                }
-                switches.push(declaration);
-            }
+            // Validated and resolved by the settings layer (`flags`).
+            PluginKind::FeatureFlag => {}
             PluginKind::FastMark => {
                 let config = compile_fast_mark(plugin)?;
                 fast_marks.push((plugin.tag.clone(), config));
@@ -2373,40 +2427,7 @@ fn compile_definitions(
     for provider in &rule_providers {
         known_artifacts.extend(provider.source_files());
     }
-    let declared_artifacts = known_artifacts.clone();
-    if let Some(inputs) = candidate_inputs.borrow().as_ref() {
-        known_artifacts.extend(inputs.files.keys().cloned());
-    }
-    // A switch state file is a durable POST target. Rejecting every alias
-    // here keeps one owner's write from rewriting another switch's state or
-    // a known configuration, rule, or cache-dump artifact.
-    for (index, declaration) in switches.iter().enumerate() {
-        for other in switches.iter().skip(index + 1) {
-            if crate::switch::paths_collide(&declaration.state_file, &other.state_file) {
-                return Err(ConfigError::new(
-                    format!("{}.args.initial_value", other.source_path),
-                    format!(
-                        "switch state file `{}` collides with switch `{}`",
-                        other.state_file.display(),
-                        declaration.tag
-                    ),
-                ));
-            }
-        }
-        for artifact in &known_artifacts {
-            if crate::switch::paths_collide(&declaration.state_file, artifact) {
-                return Err(ConfigError::new(
-                    format!("{}.args.initial_value", declaration.source_path),
-                    format!(
-                        "switch state file `{}` collides with known artifact `{}`",
-                        declaration.state_file.display(),
-                        artifact.display()
-                    ),
-                ));
-            }
-        }
-    }
-    switches.sort_by_key(|declaration| declaration.type_number);
+    let declared_artifacts = known_artifacts;
 
     // Mappers compile after every provider is loaded, so a rule may name a
     // provider declared later without changing the result.
@@ -2508,6 +2529,7 @@ fn compile_definitions(
         adguard_rules: &adguard_rules,
         adguard_direct: &adguard_direct,
         fast_marks: &fast_marks,
+        flags,
         forwards: &forward_compiler,
         preferences: &preference_invocations,
         sleeps: &named_sleeps,
@@ -2539,12 +2561,6 @@ fn compile_definitions(
         fixtures.push(mosdns_sequence_core::FixtureSpec::new(
             plugin_fixture_name(tag),
             config.executor(),
-        ));
-    }
-    for declaration in &switches {
-        fixtures.push(mosdns_sequence_core::FixtureSpec::new(
-            plugin_fixture_name(&declaration.tag),
-            Box::new(crate::switch::SwitchNoopExecutor),
         ));
     }
     for mapper in &domain_mappers {
@@ -2909,8 +2925,7 @@ fn compile_definitions(
             continue;
         };
         let aliases = |path: &&PathBuf| {
-            crate::managed_ip::actual_path(path) == *file
-                || crate::switch::paths_collide(file, path)
+            crate::managed_ip::actual_path(path) == *file || paths_collide(file, path)
         };
         let declared = declared_artifacts.iter().filter(aliases).count();
         let reads = candidate_inputs
@@ -2965,7 +2980,8 @@ fn compile_definitions(
         },
         listener,
         domain_sets: domain_set_configs,
-        switches,
+        flags: Vec::new(),
+        flag_legacy_notes: Vec::new(),
         api,
         program,
         rule_sources: Rc::new(crate::rule_sources::RuleSources::new(
@@ -3287,36 +3303,6 @@ fn hex_identity(value: &str) -> String {
         let _ = write!(output, "{byte:02x}");
     }
     output
-}
-
-/// Compiles one `switchN` declaration. The state file is resolved but never
-/// read, created, or validated for readability: compilation stays
-/// side-effect-free and startup owns the bounded file admission.
-fn compile_switch_declaration(
-    plugin: &RawPlugin,
-) -> Result<crate::switch::SwitchDeclaration, ConfigError> {
-    let path = format!("{}.args", plugin.source_path);
-    let args = expect_map(&plugin.args, &path, "switch args must be a mapping")?;
-    args.reject_unknown(&["initial_value"], &path)?;
-    let declared = expect_string(
-        args.required("initial_value", &path)?,
-        &format!("{path}.initial_value"),
-    )?;
-    if declared.is_empty() {
-        return Err(ConfigError::new(
-            format!("{path}.initial_value"),
-            "switch initial_value must name a state file",
-        ));
-    }
-    let type_number = crate::switch::switch_type_number(&plugin.kind)
-        .expect("switch kind is validated before compilation");
-    let state_file = crate::switch::resolved_state_file(&declared, &plugin.root_dir, &path)?;
-    Ok(crate::switch::SwitchDeclaration {
-        type_number,
-        tag: plugin.tag.clone(),
-        state_file,
-        source_path: plugin.source_path.clone(),
-    })
 }
 
 fn compile_fast_mark(plugin: &RawPlugin) -> Result<FastMarkConfig, ConfigError> {
@@ -3897,7 +3883,6 @@ fn resolve_policy_target_name(
             PluginKind::FastMark
             | PluginKind::FlowSetter
             | PluginKind::TagSetter
-            | PluginKind::Switch
             | PluginKind::DomainMapper,
         ) => Ok(PolicyTargetName::Fixture(plugin_fixture_name(tag))),
         Some(
@@ -3912,7 +3897,8 @@ fn resolve_policy_target_name(
             | PluginKind::Requery
             | PluginKind::RouteLearner
             | PluginKind::Socks5Proxy
-            | PluginKind::EcsAddress,
+            | PluginKind::EcsAddress
+            | PluginKind::FeatureFlag,
         ) => Err(ConfigError::new(
             path,
             format!("`${tag}` is not executable"),
@@ -4411,12 +4397,12 @@ fn compile_matcher(
             }
             let config = match catalog.fast_mark(tag) {
                 Some(config) => config,
-                None if catalog.kind_of(tag) == Some(PluginKind::Switch) => {
+                None if catalog.kind_of(tag) == Some(PluginKind::FeatureFlag) => {
                     return Err(ConfigError::new(
                         path,
                         format!(
-                            "switch plugin `${tag}` is not a matcher; use the `switchN <value>` \
-                             quick matcher"
+                            "feature_flag `${tag}` is not a matcher; use `flag {tag}` or \
+                             `flag {tag}=<option>`"
                         ),
                     ));
                 }
@@ -4431,13 +4417,21 @@ fn compile_matcher(
             };
             config.matcher()
         }
-        name if crate::switch::switch_type_number(name).is_some() => {
-            let type_number = crate::switch::switch_type_number(name)
-                .expect("switch kind is validated before compilation");
-            Box::new(crate::switch::SwitchMatcher::new(
-                type_number,
-                crate::switch::trim_expectation(args).to_owned(),
-            ))
+        "flag" => {
+            if flags::matches(args, path, catalog.flags)? {
+                Box::new(TrueMatcher)
+            } else {
+                Box::new(FalseMatcher)
+            }
+        }
+        name if flags::legacy_switch(name) => {
+            return Err(ConfigError::new(
+                path,
+                format!(
+                    "the `{name}` matcher was removed in configuration schema 3; use \
+                     `flag <key>` or `flag <key>=<option>`"
+                ),
+            ));
         }
         "fast_mark" => FastMarkConfig::parse(args)
             .map_err(|reason| ConfigError::new(path, reason))?
@@ -4645,13 +4639,6 @@ fn compile_exec_item(
         None => (expression, ""),
     };
     match name {
-        name if crate::switch::switch_type_number(name).is_some() => Err(ConfigError::new(
-            path,
-            format!(
-                "switch `{name}` has no quick executable; reference its configured tag as \
-                     `$tag`"
-            ),
-        )),
         "cname_remover" => {
             if !args.is_empty() {
                 return Err(ConfigError::new(path, "cname_remover takes no arguments"));
@@ -4957,7 +4944,6 @@ fn compile_exec_item(
                     PluginKind::FastMark
                     | PluginKind::FlowSetter
                     | PluginKind::TagSetter
-                    | PluginKind::Switch
                     | PluginKind::DomainMapper,
                 ) => Ok(ExecutableSpec::Fixture {
                     target: mosdns_sequence_core::FixtureRef::new(plugin_fixture_name(tag)),
@@ -4974,7 +4960,8 @@ fn compile_exec_item(
                     | PluginKind::Requery
                     | PluginKind::RouteLearner
                     | PluginKind::Socks5Proxy
-                    | PluginKind::EcsAddress,
+                    | PluginKind::EcsAddress
+                    | PluginKind::FeatureFlag,
                 ) => Err(ConfigError::new(
                     path,
                     format!("`{name}` is not executable"),
@@ -5790,7 +5777,7 @@ mod tests {
             ("!has_resp", "not(anonymous_match(has_resp: ))"),
             ("! $my_matcher", "not(my_matcher)"),
             ("!qtype 28 65", "not(anonymous_match(qtype: 28 65))"),
-            ("switch6 on", "anonymous_match(switch6: on)"),
+            ("flag block_aaaa", "anonymous_match(flag: block_aaaa)"),
         ] {
             assert_eq!(matcher_trace_name(expression), expected, "{expression}");
         }

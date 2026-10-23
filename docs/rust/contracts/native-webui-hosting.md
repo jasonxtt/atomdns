@@ -302,8 +302,9 @@ failed refresh keeps the actual mutation ACK factual and existing drafts visible
 
 Initial reads, all modes/tabs, refresh paths and handlers use the same operation
 admission. Unsupported operations remain visibly disabled with family reasons.
-Actual `/plugins/switch*/show|post` uses switches.manage, and follow-up requery is
-independently gated. Aliases and Go-only system/config/update functions stay
+The former `/plugins/switch*/show|post` controls and `switches.manage` were removed
+in configuration schema 3 (M2-1); the current Vue switch page fails until the UI
+redo renders [feature flags](native-feature-flags.md) (`flags.manage`). Aliases and Go-only system/config/update functions stay
 suppressed (capture is supported since F-2; remembered lists, server appearance and
 process metrics are supported where their own sections say so).
 `rules.adguard` is supported when an `adguard_rule` tagged `adguard` exists, and
@@ -314,13 +315,8 @@ catalogs keep the native local-text workflow (see native-rule-providers.md).
 Local theme/color storage works. Native identity displays Rust/product version,
 without fabricated zero Go metrics. Audit/details, named-cache catalog/list/flush,
 eligible local rules and native managed group/upstream workflows remain available.
-Native switch-capable peers additionally return the value-free `switches` inventory
-extension: schema 1, canonical string `config_generation`, and one entry per
-configured switch with type, tag, read/write eligibility, and a read-only reason.
-Both Vue shells use this inventory for custom-tag switch controls; they do not
-invent product-specific cache or feature follow-ups for native owners. The full
-state, HTTP, generation, and query-admission contract is in
-[Native switch state](native-switch-state.md).
+The value-free `switches` capability extension (switch inventory) was removed with
+the switches; flags are listed by `GET /api/v1/flags`.
 
 ## Opt-in build and evidence
 

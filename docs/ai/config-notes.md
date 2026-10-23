@@ -35,7 +35,7 @@ managed-file boundaries, and published packages consistent.
 ### Rust (native) config package
 
 The native host has its own schema and package ID, independent of the Go ones:
-`REQUIRED_CONFIG_SCHEMA` / `REQUIRED_CONFIG_PACKAGE_ID` (`2`, `rust-config-schema-2`) in
+`REQUIRED_CONFIG_SCHEMA` / `REQUIRED_CONFIG_PACKAGE_ID` (`3`, `rust-config-schema-3`) in
 `rust/native-host/src/update/mod.rs`, checked against `scripts/rust-release-metadata.json` by
 `scripts/generate-rust-update-manifest.sh`. Same rules as above: binary-only releases keep both
 values, a structural change of the managed files bumps both and republishes the package.
@@ -66,18 +66,21 @@ Dedicated groups bind lists to upstream groups and generated routing entries.
 Rule order is behavior: earlier generated matches usually win, so UI changes to
 list order or priority change runtime routing.
 
-## Switch bits and fast marks
+## Feature flags and fast marks (config schema 3)
 
-Switch-plugin allocation shares a namespace with query-context fast marks and
-config `fast_mark` values. Before adding or renumbering a switcher, inspect the
-current mask range, active config packages, and the corresponding Rust/Go
-adapter behavior.
+The former `switch1`–`switch17` are named `feature_flag` objects since config schema 3
+(`config_rust/sub_config/flags.yaml`, values in `webinfo/settings.json` `flags`,
+migrated once from `rule/switchN.txt`; contract `docs/rust/contracts/native-feature-flags.md`).
+Flags take no fast-flag bits: the host reserves none, and 32–47/49 are free for `fast_mark`
+and mapper `mark`. The configuration's own convention stays: `fast_mark 48` is the
+unified-matcher sentinel; reusing it can skip `unified_matcher1`, produce
+`unmatched_rule`, and fall through to FakeIP. Verify deployed audit fields such as
+`domain_set`, `effective_tag`, `final_sequence`, `final_upstream`, and
+`matched_rule_source`.
 
-Current config reservations include `fast_mark 48` for the unified-matcher
-sentinel and bit 49 for `switch17`. A collision can skip `unified_matcher1`,
-produce `unmatched_rule`, and fall through to FakeIP. Verify deployed audit
-fields such as `domain_set`, `effective_tag`, `final_sequence`,
-`final_upstream`, and `matched_rule_source`.
+Flag keys and option values appear in `settings.json` and the API: renaming one needs a
+migration. Every settings save must keep the `flags` section, including an empty one
+(its presence records that the switch files were migrated).
 
 ## Rust compatibility boundary
 
