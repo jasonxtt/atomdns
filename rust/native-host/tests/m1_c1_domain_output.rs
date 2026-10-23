@@ -1,6 +1,6 @@
 //! M1-c1: the native `domain_output` plugin — recording, the reference file
 //! formats, periodic / early / final writes, in-process and HTTP rule
-//! publication, immediate `target_mapper` injection and the management API,
+//! publication, the removed `target_mapper` arguments and the management API,
 //! through real UDP queries and the real management listener. No test reaches
 //! the public network.
 
@@ -280,14 +280,14 @@ fn is_date(text: &str) -> bool {
 // ----- tests ------------------------------------------------------------------
 
 #[test]
-fn a_new_name_takes_effect_at_once_and_is_published_in_process_without_losing_the_hot_entry() {
+fn a_new_name_is_published_in_process_and_rebuilds_the_rule_provider() {
     let tree = Tree::new("hot");
     let ports = ports();
     config(
         &tree,
         &ports,
         &format!(
-            "  - tag: sv4list\n    type: domain_output\n    args:\n      target_mapper: unified\n      target_mark: 4\n      target_tag: special\n      file_stat: gen/sv4list.txt\n      file_rule: gen/sv4rule.txt\n      dump_interval: 1\n      domain_set_url: \"http://127.0.0.1:{}/plugins/sv4rule/post\"\n",
+            "  - tag: sv4list\n    type: domain_output\n    args:\n      file_stat: gen/sv4list.txt\n      file_rule: gen/sv4rule.txt\n      dump_interval: 1\n      domain_set_url: \"http://127.0.0.1:{}/plugins/sv4rule/post\"\n",
             ports.api
         ),
         &["sv4list"],
@@ -295,11 +295,9 @@ fn a_new_name_takes_effect_at_once_and_is_published_in_process_without_losing_th
     let host = host(&tree);
     host.block_on(async {
         let (shutdown, task) = serve(&host).await;
-        // First sight: the mapper ran before the output, so the default mark.
+        // The output only counts; the mapper default applies until the
+        // published list is loaded.
         assert_eq!(rcode(ports.dns, "New.Test").await, 7);
-        // The very next query already carries the injected mark; no rebuild
-        // and no wait are involved.
-        assert_eq!(rcode(ports.dns, "new.test").await, 4);
         assert_eq!(rcode(ports.dns, "other.test").await, 7);
 
         // The periodic write (1 s) produces the reference formats...
@@ -307,15 +305,14 @@ fn a_new_name_takes_effect_at_once_and_is_published_in_process_without_losing_th
             eventually_text(&tree, "gen/sv4list.txt", |text| text.contains("new.test")).await;
         let lines: Vec<(u64, String, String)> = stat.lines().map(parse_line).collect();
         let new = lines.iter().find(|line| line.2 == "new.test").unwrap();
-        assert!(new.0 >= 2 && is_date(&new.1), "{stat}");
+        assert!(new.0 >= 1 && is_date(&new.1), "{stat}");
         let rule = eventually_text(&tree, "gen/sv4rule.txt", |text| {
             text.contains("full:new.test")
         })
         .await;
         assert!(rule.lines().all(|line| line.starts_with("full:")), "{rule}");
         // ...and publishes the list into the domain_set_light in-process, which
-        // rebuilds the mapper: the name now matches rule mark 9 as well. The
-        // hot entry is kept, so both marks apply (9 answers first).
+        // rebuilds the mapper: the name now matches rule mark 9.
         eventually_rcode(ports.dns, "new.test", 9).await;
         let shown = api(ports.api, "GET", "/plugins/sv4rule/show", "").await;
         assert!(shown.body.contains("full:new.test"), "{}", shown.body);
@@ -657,11 +654,12 @@ fn a_foreign_domain_set_url_gets_an_http_post_with_the_reference_body() {
 #[test]
 fn bad_arguments_fail_the_configuration() {
     for (arguments, expected) in [
-        ("      target_mapper: nosuchmapper\n", "target_mapper"),
         (
-            "      target_mapper: unified\n      target_mark: 64\n",
-            "target_mark",
+            "      target_mapper: unified\n",
+            "removed in config schema 2",
         ),
+        ("      target_mark: 4\n", "route_learner"),
+        ("      target_tag: x\n", "target_tag"),
         ("      unknown_field: 1\n", "unknown_field"),
         ("      max_entries: x\n", "max_entries"),
     ] {
@@ -752,42 +750,6 @@ fn files_written_by_the_reference_are_read_and_listed_identically() {
         native.sort();
         reference.sort();
         assert_eq!(native, reference);
-        shutdown.cancel();
-        task.await.unwrap();
-    });
-}
-
-#[test]
-fn flush_forgets_injected_names_and_a_restart_injects_what_was_learned() {
-    let tree = Tree::new("learn");
-    let ports = ports();
-    config(
-        &tree,
-        &ports,
-        "  - tag: sv4list\n    type: domain_output\n    args:\n      target_mapper: unified\n      target_mark: 4\n      target_tag: special\n      file_stat: gen/sv4list.txt\n      dump_interval: 3600\n",
-        &["sv4list"],
-    );
-    let host = host(&tree);
-    host.block_on(async {
-        let (shutdown, task) = serve(&host).await;
-        assert_eq!(rcode(ports.dns, "learn.test").await, 7);
-        assert_eq!(rcode(ports.dns, "learn.test").await, 4);
-        // Flushing the statistics also drops what they injected.
-        api(ports.api, "GET", "/plugins/sv4list/flush", "").await;
-        assert_eq!(rcode(ports.dns, "learn.test").await, 7);
-        // It is learned again like any new name.
-        assert_eq!(rcode(ports.dns, "learn.test").await, 4);
-        shutdown.cancel();
-        task.await.unwrap();
-    });
-    // The final save wrote the statistics; a new host injects the learned
-    // names before its first query, with no rule file involved.
-    assert!(tree.text("gen/sv4list.txt").contains("learn.test"));
-    let host = self::host(&tree);
-    host.block_on(async {
-        let (shutdown, task) = serve(&host).await;
-        assert_eq!(rcode(ports.dns, "learn.test").await, 4);
-        assert_eq!(rcode(ports.dns, "unknown.test").await, 7);
         shutdown.cancel();
         task.await.unwrap();
     });

@@ -193,7 +193,8 @@ pub(crate) fn overrides_available(config: &CompiledConfig) -> bool {
 
 /// The domain-generation switches exist when a `domain_output` does.
 pub(crate) fn generation_available(config: &CompiledConfig) -> bool {
-    config.reload.is_some() && !config.local.domain_outputs.is_empty()
+    config.reload.is_some()
+        && (!config.local.domain_outputs.is_empty() || !config.local.learners.is_empty())
 }
 
 /// The tags of one plugin kind in the effective report, in order.
@@ -464,6 +465,14 @@ async fn generation_post(control: &RuntimeControl, body: &[u8]) -> Reply {
         .domain_outputs
         .iter()
         .map(|output| output.tag.clone())
+        .chain(
+            current
+                .config
+                .local
+                .learners
+                .iter()
+                .flat_map(|learner| learner.runtime.category_tags().map(str::to_owned)),
+        )
         .collect();
     // The reference flushes a list whose switch went from on to off; the master
     // switch going off flushes every list.

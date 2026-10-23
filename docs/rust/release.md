@@ -50,7 +50,11 @@
    这是对外发布动作，需要先得到负责人确认。
 5. 如果本次发布需要新的配置包（结构性改动，`required_config_schema` 与 `config_package_id` 同时提高），
    先发布配置包并把 URL 与 sha256 写进 `scripts/rust-release-metadata.json` 的 `config`，再重新生成清单；仅程序改动的发布不需要。
-   配置包标识（`channel "rust"`、`rust-config-schema-1`、`config_rust_up.zip`）不随改名变化。
+   配置包标识（`channel "rust"`、`rust-config-schema-N`、`config_rust_up.zip`）不随改名变化。
+
+   **配置 schema 2（2026-10-23，路由学习重做）**：新程序要求 `rust-config-schema-2` 的配置包；旧 schema 1 的配置（`domain_output` 带 `target_mapper`）在新程序里加载失败。
+   经在线更新升级时程序与配置包一起换；手动替换程序时必须同时更新配置包。旧的 `gen/*list.txt`、`gen/*rule.txt` 不再被读取，可手动删除；
+   学习状态从空开始，写在 `gen/route_learner.json`（见 [native-route-learner](contracts/native-route-learner.md)）。
 
 已部署的 `v0.2.0` 及之后的 rtdns 会在系统设置里看到新版本，点“立即更新”走带自动回滚的事务（见契约文档）。
 

@@ -11,6 +11,12 @@ pub(crate) fn local_date() -> String {
     let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| i64::try_from(elapsed.as_secs()).unwrap_or(0));
+    local_date_at(seconds)
+}
+
+/// `YYYY-MM-DD` of a Unix time in the process's local time zone.
+#[must_use]
+pub(crate) fn local_date_at(seconds: i64) -> String {
     let (year, month, day) = civil(seconds);
     format!("{year:04}-{month:02}-{day:02}")
 }

@@ -37,6 +37,9 @@ class Pure(unittest.TestCase):
         servfail = dnswire.decode(mock.corrupt(mock.answer(query, *mock.MARKERS["domestic"]), "servfail", {}))
         self.assertEqual((servfail["rcode"], servfail["id"], servfail["questions"], servfail["answers"]),
                          (2, good["id"], good["questions"], []))
+        empty = dnswire.decode(mock.corrupt(mock.answer(query, *mock.MARKERS["domestic"]), "empty", {}))
+        self.assertEqual((empty["rcode"], empty["id"], empty["questions"], empty["answers"]),
+                         (0, good["id"], good["questions"], []))
         wrong = dnswire.decode(mock.corrupt(mock.answer(query, *mock.MARKERS["domestic"]), "wrong_question", {}))
         self.assertNotEqual(wrong["questions"], good["questions"])
         cut = mock.corrupt(mock.answer(query, *mock.MARKERS["domestic"]), "truncated", {"truncate": 17})

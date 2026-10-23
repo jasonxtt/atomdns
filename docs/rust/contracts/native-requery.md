@@ -19,13 +19,22 @@ by the reference are read and answered identically, and the reference reads nati
 
 Only one task runs at a time. A task: (1) `GET` each `save_rules` URL in order, `url_call_delay_ms` apart; (2) read the source files and merge
 the names: `full:<name>` lines and statistics lines `count date name[|AD|CD|DO]` whose date is within `date_range_days` (UTC), exact
-duplicates removed, missing files skipped; **no names: the task ends as `idle` and nothing is flushed**; (3) `GET` each `flush_rules`
-URL; (4) ask `resolver_address` for the A and AAAA records of each name at `queries_per_second` names per second (UDP, a fresh socket and a 2 s
+duplicates removed, missing files skipped; **no names: the task ends as `idle` and nothing is flushed**; (3) `GET` each `flush_rules` URL, **except those that flush a learned-route category** (see below); (4) ask `resolver_address` for the A and AAAA records of each name at `queries_per_second` names per second (UDP, a fresh socket and a 2 s
 limit per query, answers ignored; AD/CD from the name's suffixes, DO as a 4096-byte OPT; at most 1024 queries in flight; names go through the
 host's whole chain, which rebuilds cache and lists); (5) `GET` the `save_rules` URLs again. Progress is written every 100 names and at the end.
 A URL step fails the task unless the answer is 2xx (`failed during <step> step: bad response from URL U: status N, body: B`); cancelling
 during the query phase ends as `cancelled` (`task cancelled by user`), cancelling during a URL step or the merge fails the task
 (`context canceled`), as in the reference. A host stop cancels a running task and records `cancelled` / `task cancelled by host shutdown`.
+
+### Learned routes are never flushed (config schema 2)
+
+A `flush_rules` URL that names this host's API (the same host rule as below) with the path `/plugins/<tag>/flush`, where `<tag>` is a category of a `route_learner`
+(`my_realiplist`, `my_fakeiplist`, `my_nov4list`, `my_nov6list`, `my_sv4list` in the shipped configuration), is skipped: one info log line is written and the number is recorded as
+`status.skipped_flush_urls` (an additive integer, omitted from the state file and the API when 0; the reference ignores unknown fields). Every other `flush_rules` URL — the caches, `top_domains`, any URL of another
+host — is called as before, so the caches are still emptied and rebuilt by the re-query phase while the learned names stay and expire on their own `ttl` ([`native-route-learner.md`](native-route-learner.md)).
+In the shipped `config_rust` the re-query entry sequence (`sequence_requery`) does not answer a name early because of its remembered no-V4 / no-V6 mark, so the re-query probes it and the rule confirms it again; that is how
+remembered no-V4 and special names, which normal traffic cannot learn, are renewed before their `ttl` (8 days) runs out. The state file and its `flush_rules` list are not edited. The re-queries run through the host's whole chain, so names that are not learned (or have expired) are probed and learned again, and the flows reserved for this
+resolver learn the categories that normal traffic cannot (remembered no-V4, special names).
 
 ## URL actions (shared with `domain_output`)
 

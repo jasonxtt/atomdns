@@ -35,7 +35,7 @@ managed-file boundaries, and published packages consistent.
 ### Rust (native) config package
 
 The native host has its own schema and package ID, independent of the Go ones:
-`REQUIRED_CONFIG_SCHEMA` / `REQUIRED_CONFIG_PACKAGE_ID` (`1`, `rust-config-schema-1`) in
+`REQUIRED_CONFIG_SCHEMA` / `REQUIRED_CONFIG_PACKAGE_ID` (`2`, `rust-config-schema-2`) in
 `rust/native-host/src/update/mod.rs`, checked against `scripts/rust-release-metadata.json` by
 `scripts/generate-rust-update-manifest.sh`. Same rules as above: binary-only releases keep both
 values, a structural change of the managed files bumps both and republishes the package.
@@ -51,6 +51,12 @@ values, a structural change of the managed files bumps both and republishes the 
 - A fresh native install (the F-3b deployment script) must write `rust_config_update_state.json` with
   `applied_schema` equal to the package it installed, otherwise the first update would re-apply the package.
 - Contract and failure handling: `docs/rust/contracts/native-update.md`.
+
+### Learned routes (`route_learner`, config schema 2)
+
+Remembered direct / proxy / no-V4 / no-V6 and special names are not `domain_output` lists any more: `sub_config/route_learner.yaml` defines one `route_learner` (categories with `mark`, `label`, `ttl`;
+state in `gen/route_learner.json`) and the `route_learn` rules that flow sequences call as `exec: $learn_xxx`. The category tags, the labels and the marks 2/3/4/11/12 are unchanged and must stay that way (WebUI,
+settings switches and the host's `effective_tag` logic use them). The old `gen/*list.txt` / `gen/*rule.txt` are not read. Contract: `docs/rust/contracts/native-route-learner.md`.
 
 ## Dedicated routing and rule order
 
