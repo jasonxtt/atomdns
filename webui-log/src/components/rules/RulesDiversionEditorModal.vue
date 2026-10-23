@@ -55,7 +55,7 @@ defineEmits([
           <label>名称</label>
           <input v-model="editor.name" @input="$emit('name-input')" />
           <label>本地文件</label>
-          <input v-model="editor.files" :placeholder="nativeLocalText ? '例如 rules/custom.txt' : '例如 /cus/mosdns/srs/geo/cn.json'" @input="$emit('files-input')" />
+          <input v-model="editor.files" :placeholder="nativeLocalText ? '例如 rules/custom.txt' : '例如 /cus/rtdns/srs/geo/cn.json'" @input="$emit('files-input')" />
           <label>{{ nativeLocalText ? '更新间隔（不可用）' : '更新间隔 (小时)' }}</label>
           <input v-model.number="editor.update_interval_hours" type="number" min="1" :disabled="nativeLocalText" />
           <label>启用</label>

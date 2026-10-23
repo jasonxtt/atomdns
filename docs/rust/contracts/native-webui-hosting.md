@@ -127,29 +127,21 @@ which cannot force the option, a longer burst can still overflow the buffer;
 raise `net.core.rmem_max`. TCP listeners are unaffected (connection-level flow
 control).
 
-## System and appearance operations (F-1)
+## System operations (F-1)
 
-Four operations that were reported unsupported are real now; each is gated by its
+Three operations that were reported unsupported are real now; each is gated by its
 `ui_operations` entry and answers exactly the routes the maintained WebUI calls. Only the
-maintained shell at `/` is in scope; the compatibility shell at `/log` is untouched and
-scheduled for removal.
+maintained shell at `/` is in scope.
 
-**Appearance (`appearance.server`)** — `/api/v1/appearance/…` with the reference host's methods,
-status codes, bodies and state files under `webinfo/` (`appearance_settings.json`,
-`appearance_text_settings.json`, `appearance_button_settings.json`, `panel_background.bin`,
-`panel_background_history/<id>.<ext>`), so either host reads what the other wrote (verified in
-both directions with `tools/f1-interop`). Errors are `{"error": "..."}`. A save is a same-directory
-temporary file plus rename: a failure leaves the previous file. Uploads are multipart field `file`,
-at most 20 MiB (the request body may be 20 MiB + 1 KiB, the only route allowed more than 1 MiB),
-and the content must sniff as an image (ico/cursor, bmp, gif, webp, png, jpeg — the reference's
-detector; svg is not accepted). Only **one upload is read at a time**: the slot is claimed when
-the request head has been read, before the body, and the body must arrive within 120 s; a second
-concurrent upload is answered 503 at once. This bounds the memory a burst of 20 MiB bodies could
-take on the unauthenticated management listener (the body buffer becomes the request body without
-a second copy). The history has no entry limit (as in the reference); each upload
-is bounded. A corrupt state file reads as the defaults and is never rewritten by a read. Not
-reproduced: range and conditional requests for the image routes, and the reference's migration of
-state files from older locations (`state/`, the root) — only `webinfo/` is read.
+**Appearance — removed (UI redo part 1, 2026-10-23).** The former `appearance.server`
+operation and every `/api/v1/appearance/…` route (panel background upload/history/image, text
+and button colours) are gone: the routes answer `404` and the operation is no longer in
+`ui_operations`. The management listener again accepts at most 1 MiB per request body (the cache
+`load_dump` route keeps its own limit); the single-upload slot and the 120 s body deadline went with
+the upload. The theme is a browser-side choice (light / dark / follow the system). State files an
+older host wrote under `webinfo/` (`appearance_settings.json`, `appearance_text_settings.json`,
+`appearance_button_settings.json`, `panel_background.bin`, `panel_background_history/`) are neither
+read nor deleted; an external UI that wants a background ships it in its own static package.
 
 **WebUI port (`system.webui_port`)** — `GET/POST /api/v1/system/webui-port`. The port is saved in
 `webinfo/webui_port_settings.json` (`{"port": N}`) and **replaces the `api.http` port at the next
@@ -181,7 +173,7 @@ read from `/proc/self`): `process_cpu_seconds_total`, `process_start_time_second
 `process_max_fds`, and the native gauge `mosdns_process_threads`. Go-runtime figures
 (`go_gc_*`, `go_goroutines`, `go_info`, `go_memstats_*`) and the system network counters of the
 reference's `process_network_*` do not exist in this runtime and are **not emitted**; the WebUI
-shows the available figures and marks the rest "不适用于 Rust 运行时". The start time is the
+shows only the available figures. The start time is the
 process's (unchanged by an in-place restart, as in the reference). The upstream and cache series
 of `/metrics` are described under "Diagnostics (F-2)" below.
 
@@ -280,9 +272,11 @@ above, `/metrics`, and `perf` on the host (`perf record -e cpu-clock -F 999 --ca
 
 ## Capability discovery and UI
 
-Schema1 retains its existing keys and adds `ui_operations`: all 30 IDs from
-[the approved matrix](../plans/native-webui-runtime-capabilities.md), each with
-boolean `supported` and true→null / false→displayable-string `reason`. Eligibility
+Schema1 retains its existing keys and adds `ui_operations`: 30 IDs (the
+[approved matrix](../plans/native-webui-runtime-capabilities.md) with `switches.manage`
+replaced by `flags.manage` in M2-1 and `appearance.server` removed in the UI redo), each with
+boolean `supported` and true→null / false→displayable-string `reason`. The built-in UI
+requires the complete matrix. Eligibility
 comes from actual handlers/providers: a group profile alone does not
 make local-rule writes available. Existing per-item format/read-only contracts
 remain authoritative. Missing Go-only APIs do not gain fake success handlers.
@@ -292,31 +286,49 @@ single exclusive `.txt` source makes the existing `rules.local.manage` operation
 available. Other IP shapes remain readable and POST returns 400 with the reason;
 there is no ip_set save/flush route. See [response/IP policy](native-response-policy.md#named-ip_set-management-2026-10-22).
 
-Both Vue shells share pending/ready/error discovery, completing discovery before
-optional requests. Only discovery404 selects legacy Go behavior. Network/non404,
-invalid schema or incomplete present operations show a retryable error and block
-optional writes/requests. Exact old-native schema1 without ui_operations uses the
-approved strict-boolean fallback and never becomes legacy. Retries discard failed
-promises. Catalog-changing successful mutations refresh capabilities; a later
+The Vue UI has pending/ready/error discovery, completing discovery before
+optional requests. Since the UI redo (2026-10-23) it has no Go or old-native fallback:
+any failed discovery (including 404), an invalid schema or a missing/incomplete
+`ui_operations` shows a retryable error and blocks optional writes/requests. Retries
+discard failed promises. Catalog-changing successful mutations refresh capabilities; a later
 failed refresh keeps the actual mutation ACK factual and existing drafts visible.
 
 Initial reads, all modes/tabs, refresh paths and handlers use the same operation
 admission. Unsupported operations remain visibly disabled with family reasons.
 The former `/plugins/switch*/show|post` controls and `switches.manage` were removed
-in configuration schema 3 (M2-1); the current Vue switch page fails until the UI
-redo renders [feature flags](native-feature-flags.md) (`flags.manage`). Aliases and Go-only system/config/update functions stay
-suppressed (capture is supported since F-2; remembered lists, server appearance and
-process metrics are supported where their own sections say so).
+in configuration schema 3 (M2-1); the UI redo part 1 removed the old switch pages, and part 2
+renders [feature flags](native-feature-flags.md) (`flags.manage`) in the rule sub-items.
+`/plugins/route_learner/status|entries` are gated by `lists.remembered`.
 `rules.adguard` is supported when an `adguard_rule` tagged `adguard` exists, and
 `rules.diversion` also when any `sd_set_light`/`si_set` exists; the diversion tab then
 probes the built-in provider tags (`/plugins/{tag}/config`, 404 = not configured) and
 uses the reference online-source workflow for the found ones, while `special_route_N`
 catalogs keep the native local-text workflow (see native-rule-providers.md).
-Local theme/color storage works. Native identity displays Rust/product version,
-without fabricated zero Go metrics. Audit/details, named-cache catalog/list/flush,
+Native identity displays the product version, without fabricated Go metrics. Audit/details, named-cache catalog/list/flush,
 eligible local rules and native managed group/upstream workflows remain available.
 The value-free `switches` capability extension (switch inventory) was removed with
 the switches; flags are listed by `GET /api/v1/flags`.
+
+## Built-in UI structure (UI redo part 1, 2026-10-23)
+
+The built-in UI (and the external package built from the same sources) is a sidebar layout with
+four modules (only 规则设置 expands sub-items in the sidebar); on narrow screens (≤ 760 px) the
+sidebar becomes horizontally scrolling tab rows.
+Routes use `vue-router` hash history, so a reload keeps the page and unknown addresses return to
+`#/overview`:
+
+| Module | Addresses |
+| --- | --- |
+| 概览 | `#/overview` — figures from the retained audit records (their coverage is taken from `/api/v2/audit/stats/windows`; the per-window table was dropped in the part-1 rework), cache hit (summed `mosdns_cache_hit_total` / `mosdns_cache_query_total` of the named caches), CPU (one-core % between two `process_cpu_seconds_total` samples), memory (RSS), upstream, routing, top domains/clients, slowest queries, learning summary (`/plugins/route_learner/status`) |
+| 日志 | `#/logs` — live query (client aliases stay here until part 2); `#/logs/diagnostic` — diagnostic capture as its own page, reached from a button on the live page, with a way back |
+| 规则设置 | `#/rules/{mode,upstream,routing,blocking,rewrite,learning,cache,clients,special-groups}` — part 1 mounts the existing rule pages; `mode` and `clients` are placeholders |
+| 系统管理 | `#/system` — one page of setting rows in five sections: version and update (with system info and configuration-package state), backup (export only), audit switch and capacity, theme and auto refresh, WebUI port / restart / reset statistics; the former `#/system/<section>` addresses redirect here |
+
+Theme: light / dark / follow the system (default), kept in the browser (`rtdns-theme`); every
+browser key uses the `rtdns-` prefix and older `mosdns*` keys are not read. Value colours
+(latency ≤ 50 ms green, ≤ 200 ms yellow, above red; cache hit ≥ 90 % green, ≥ 70 % yellow; CPU
+> 50 % yellow, > 90 % red; memory > 128 MiB yellow, > 256 MiB red) are display only and defined
+once in `webui-log/src/utils/overviewMetrics.js`.
 
 ## Opt-in build and evidence
 

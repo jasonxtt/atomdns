@@ -1067,48 +1067,6 @@ fn a_candidate_that_never_becomes_healthy_is_rolled_back_at_the_time_limit() {
     assert!(started.elapsed() < Duration::from_secs(60));
 }
 
-#[test]
-fn a_config_update_that_breaks_at_start_is_rolled_back_with_the_old_config() {
-    let mut host = Host::start("rollback-config", None);
-    let old_config = host.config();
-    let pid = host.child.id();
-    // Passes `check` (nothing binds in a check) but cannot start: its second listener's
-    // port is taken by this test.
-    let taken = UdpSocket::bind("127.0.0.1:0").unwrap();
-    let taken_port = taken.local_addr().unwrap().port();
-    let broken = format!(
-        "{}  - tag: dns2\n    type: udp_server\n    args: {{listen: '127.0.0.1:{taken_port}', entry: main}}\n",
-        config_text(host.api, host.dns, host.upstream, "broken")
-    );
-    host.server.set(
-        "/config.zip",
-        "application/zip",
-        config_package(&broken, |_| {}),
-    );
-    let body =
-        serde_json::json!({"url": host.server.url("/config.zip"), "dir": host.root}).to_string();
-    let reply = host.api("POST", "/api/v1/config/update_from_url", body.as_bytes());
-    assert_eq!(reply.status, 200, "{}", reply.text());
-    assert_eq!(reply.json()["status"], "success");
-    wait_until("the rollback", 90, || {
-        host.transactions()
-            .iter()
-            .any(|(_, tx)| tx["status"] == "rolled_back")
-    });
-    wait_until("the service is back", 60, || host.health().is_some());
-    assert_eq!(host.config(), old_config);
-    assert_eq!(
-        host.exe_bytes(),
-        *binary(),
-        "a config update never touches the program"
-    );
-    assert_eq!(host.child.id(), pid);
-    assert!(ask(host.dns, "config-rollback.example.com"));
-    assert_eq!(host.only_transaction()["kind"], "config");
-    drop(taken);
-    let _ = &mut host;
-}
-
 // ===== recovery after the guard is killed ================================================
 
 #[test]
@@ -1165,102 +1123,7 @@ fn killing_the_guard_mid_test_is_recovered_at_the_next_start() {
     }
 }
 
-// ===== configuration update and export ===================================================
-
-#[test]
-fn a_configuration_update_from_a_url_goes_through_the_guard_and_stays() {
-    let mut host = Host::start("config-url", None);
-    let pid = host.child.id();
-    let new_config = config_text(host.api, host.dns, host.upstream, "from the url");
-    host.server.set(
-        "/config.zip",
-        "application/zip",
-        config_package(&new_config, |_| {}),
-    );
-    let url = host.server.url("/config.zip");
-    let post = |host: &Host, body: serde_json::Value| {
-        host.api(
-            "POST",
-            "/api/v1/config/update_from_url",
-            body.to_string().as_bytes(),
-        )
-    };
-    // Bad requests first.
-    assert_eq!(
-        host.api("POST", "/api/v1/config/update_from_url", b"{bad")
-            .text(),
-        "Invalid request body\n"
-    );
-    assert_eq!(
-        post(&host, serde_json::json!({"url": url})).text(),
-        "url and dir are required\n"
-    );
-    assert_eq!(
-        post(&host, serde_json::json!({"dir": host.root})).text(),
-        "url and dir are required\n"
-    );
-    assert_eq!(
-        post(&host, serde_json::json!({"url": url, "dir": "/tmp"})).status,
-        400,
-        "only the host's own directory"
-    );
-    assert_eq!(
-        post(
-            &host,
-            serde_json::json!({"url": "ftp://x/y.zip", "dir": host.root})
-        )
-        .status,
-        400
-    );
-    // A package that does not verify changes nothing.
-    host.server.set(
-        "/bad.zip",
-        "application/zip",
-        config_package(&new_config, |m| {
-            m["sha256"]["config_custom.yaml"] = "1".repeat(64).into()
-        }),
-    );
-    let reply = post(
-        &host,
-        serde_json::json!({"url": host.server.url("/bad.zip"), "dir": host.root}),
-    );
-    assert_eq!(reply.status, 400);
-    assert!(reply.text().contains("配置包无效"));
-    host.server
-        .set("/junk.zip", "application/zip", b"not a zip".to_vec());
-    assert_eq!(
-        post(
-            &host,
-            serde_json::json!({"url": host.server.url("/junk.zip"), "dir": host.root})
-        )
-        .status,
-        400
-    );
-    assert!(host.transactions().is_empty());
-    assert_ne!(host.config(), new_config);
-    // The good one.
-    let reply = post(&host, serde_json::json!({"url": url, "dir": host.root}));
-    assert_eq!(reply.status, 200, "{}", reply.text());
-    assert!(
-        reply.json()["message"]
-            .as_str()
-            .unwrap()
-            .starts_with("Update successful.")
-    );
-    wait_until("confirmed", 90, || {
-        host.transactions()
-            .iter()
-            .any(|(_, tx)| tx["status"] == "verified")
-    });
-    wait_until("serving", 60, || host.health().is_some());
-    settle_after_guard(&host);
-    assert_eq!(host.config(), new_config);
-    assert_eq!(host.exe_bytes(), *binary());
-    assert_eq!(host.child.id(), pid);
-    assert!(ask(host.dns, "after-config.example.com"));
-    assert_eq!(host.health().unwrap()["applied_config_schema"], 3);
-    let _ = &mut host;
-}
+// ===== configuration export ========================================================
 
 #[test]
 fn the_export_is_a_zip_of_this_hosts_configuration_directory_only() {
@@ -1270,6 +1133,14 @@ fn the_export_is_a_zip_of_this_hosts_configuration_directory_only() {
     std::fs::write(host.root.join("sub_config/a.yaml"), "plugins: []\n").unwrap();
     std::fs::write(host.root.join("backup/x/old.yaml"), "hidden").unwrap();
     let body = serde_json::json!({"dir": host.root}).to_string();
+    // Applying a remote configuration was removed in the UI redo (2026-10-23).
+    let gone =
+        serde_json::json!({"url": "http://127.0.0.1:9/config.zip", "dir": host.root}).to_string();
+    assert_eq!(
+        host.api("POST", "/api/v1/config/update_from_url", gone.as_bytes())
+            .status,
+        404
+    );
     let reply = host.api("POST", "/api/v1/config/export", body.as_bytes());
     assert_eq!(reply.status, 200);
     assert!(

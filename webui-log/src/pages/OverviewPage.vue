@@ -1,10 +1,19 @@
 <script setup>
-import { capabilityState, supportsOperation, operationReason, switchTagForType } from '../api/runtimeCapabilities'
+import { capabilityState, operationReason, supportsOperation } from '../api/runtimeCapabilities'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { getJSON, getText } from '../api/http'
-import DnsOverviewCard from './dashboard/DnsOverviewCard.vue'
-import { clearTopNotice, setError, setSuccess } from '../utils/notice'
+import { setError, setSuccess } from '../utils/notice'
 import { formatDateTime } from '../utils/time'
+import {
+  cacheHitPercent,
+  cacheHitTone,
+  coverageText,
+  cpuPercent,
+  cpuTone,
+  latencyTone,
+  memoryTone,
+  parseProcessMetrics
+} from '../utils/overviewMetrics'
 import {
   orderUpstreamGroups,
   parseUpstreamStatsMetrics,
@@ -13,44 +22,27 @@ import {
   upstreamGroupDisplay
 } from '../utils/upstreamStats'
 
-const props = defineProps({
-  showSystemSummary: {
-    type: Boolean,
-    default: false
-  }
-})
-
-const HISTORY_KEY = 'mosdnsHistory'
-const HISTORY_LENGTH = 60
+// Ranks return at most 500 keys: the distinct-count cards show "500+" at the limit.
+const RANK_SCAN_LIMIT = 500
+const TOP_ROWS = 20
+// The CPU figure needs two samples; the first refresh takes a second one after this delay.
+const CPU_FOLLOW_UP_MS = 3000
 
 const loading = ref(false)
-const lastUpdatedText = ref('--')
 
 const stats = reactive({
   totalQueries: 0,
-  averageDurationMs: 0
+  averageDurationMs: 0,
+  coverage: ''
 })
-
-const systemSummary = reactive({
-  startTime: 0,
-  cpuTime: 0,
-  residentMemory: 0,
-  networkReceiveBytes: 0,
-  networkTransmitBytes: 0,
-  gcCount: 0,
-  gcDurationSeconds: 0,
-  lastGcTime: 0,
-  goVersion: 'N/A',
-  threads: 0,
-  openFds: 0,
-  goroutines: 0
+const process = reactive({
+  cpuPercent: null,
+  residentBytes: null
 })
-
-const history = reactive({
-  totalQueries: [],
-  avgDuration: [],
-  timestamps: []
-})
+const cacheHit = ref(null)
+const clientCount = ref(null)
+const domainCount = ref(null)
+const learner = ref(null)
 
 const aliases = ref({})
 const topDomains = ref([])
@@ -60,7 +52,6 @@ const domainSetRank = ref([])
 const specialGroups = ref([])
 const upstreamConfig = ref({})
 const upstreamMetricsText = ref('')
-const dnsRoutingMode = ref('')
 const slowDetailOpen = ref(false)
 const selectedSlowQuery = ref(null)
 const domainSetRankSource = ref('effective_tag')
@@ -74,9 +65,9 @@ const rankingErrors = reactive({
 const integrationErrors = reactive({
   aliases: '',
   metrics: '',
-  switch: '',
   specialGroups: '',
-  upstreamConfig: ''
+  upstreamConfig: '',
+  learner: ''
 })
 const rankingDetail = reactive({
   open: false,
@@ -101,27 +92,20 @@ const OVERVIEW_TABLE_HEAD = 42
 const OVERVIEW_TABLE_ROW = 42
 const OVERVIEW_VIEWPORT_BOTTOM_GAP = 28
 
-const DONUT_COLORS = ['#6d9dff', '#f778ba', '#2dd4bf', '#fb923c', '#a78bfa', '#fde047', '#ff8c8c', '#ef4444', '#f97316', '#f59e0b', '#84cc16', '#10b981', '#06b6d4', '#3b82f6', '#6366f1', '#8b5cf6', '#d946ef', '#f43f5e', '#64748b']
-const DONUT_RADIUS = 48
-const DONUT_CIRCUMFERENCE = 2 * Math.PI * DONUT_RADIUS
+let cpuSample = null
+let cpuFollowUpTimerId = 0
 
-const sparklineTotal = computed(() => generateSparklineSVG(history.totalQueries, false, 300, 60, 'spark-total'))
-const sparklineAvg = computed(() => generateSparklineSVG(history.avgDuration, true, 300, 60, 'spark-avg'))
-const mergedSparkline = computed(() => generateDualSparklineSVG(history.totalQueries, history.avgDuration, history.timestamps))
 const domainSetRows = computed(() => {
   const total = domainSetRank.value.reduce((sum, item) => sum + Number(item?.count || 0), 0)
-  return domainSetRank.value.map((item, index) => {
+  return domainSetRank.value.map((item) => {
     const count = Number(item?.count || 0)
-    const percent = total > 0 ? (count / total) * 100 : 0
     return {
       key: item?.key || '-',
       count,
-      percent,
-      color: DONUT_COLORS[index % DONUT_COLORS.length]
+      percent: total > 0 ? (count / total) * 100 : 0
     }
   })
 })
-const domainSetTotal = computed(() => domainSetRows.value.reduce((sum, item) => sum + item.count, 0))
 const rankingDetailSummaryCards = computed(() => {
   if (!rankingDetail.open) {
     return []
@@ -224,23 +208,6 @@ const rankingDetailSummaryCards = computed(() => {
 
   return cards
 })
-const domainSetSegments = computed(() => {
-  const total = domainSetTotal.value
-  let offset = 0
-  return domainSetRows.value
-    .filter((item) => item.count > 0)
-    .map((item) => {
-      const ratio = total > 0 ? item.count / total : 0
-      const segment = {
-        key: item.key,
-        color: item.color,
-        dasharray: `${(ratio * DONUT_CIRCUMFERENCE).toFixed(2)} ${(DONUT_CIRCUMFERENCE - ratio * DONUT_CIRCUMFERENCE).toFixed(2)}`,
-        dashoffset: (-offset * DONUT_CIRCUMFERENCE).toFixed(2)
-      }
-      offset += ratio
-      return segment
-    })
-})
 const overviewLayoutVars = computed(() => {
   const rows = visibleOverviewRows.value
   const listHeight = OVERVIEW_TABLE_HEAD + rows * OVERVIEW_TABLE_ROW
@@ -287,121 +254,40 @@ const slowDetailActionFields = computed(() => {
     }
   }
 })
-const systemSummaryCards = computed(() => {
-  if (!props.showSystemSummary) {
-    return []
-  }
-  if (capabilityState.value?.kind === 'native') {
-    const identity = [
-      {key:'runtime', title:'运行时', value:'Rust', tone:'ok'},
-      {key:'product-version', title:'产品版本', value:supportsOperation('system.version') ? (capabilityState.health?.version || '读取中') : operationReason('system.version'), tone:'ok'}
-    ]
-    if (supportsOperation('metrics.process')) {
-      // Process figures the Rust runtime has; Go-runtime ones are marked, never invented.
-      return [
-        ...identity,
-        {key: 'start-time', title: '启动时间', value: systemSummary.startTime ? new Date(systemSummary.startTime * 1000).toLocaleString('zh-CN', { hour12: false }) : '--', tone: 'ok'},
-        {key: 'cpu-time', title: 'CPU 时间', value: formatSeconds(systemSummary.cpuTime, 2), tone: 'neutral'},
-        {key: 'memory', title: '常驻内存 (RSS)', value: formatBytes(systemSummary.residentMemory), tone: 'neutral'},
-        {key: 'threads', title: '线程数', value: Number(systemSummary.threads || 0).toLocaleString(), tone: 'neutral'},
-        {key: 'open-fds', title: '打开文件描述符', value: Number(systemSummary.openFds || 0).toLocaleString(), tone: 'neutral'},
-        {key: 'go-not-applicable', title: 'GC / Go 版本 / goroutines', value: '不适用于 Rust 运行时', tone: 'neutral'}
-      ]
-    }
-    return [
-      ...identity,
-      ...['CPU 时间','常驻内存 (RSS)','GC 次数','Go 版本','go_goroutines','进程 / 系统指标'].map((title,index) => ({key:`unsupported-${index}`,title,value:operationReason('metrics.process'),tone:'neutral'}))
-    ]
-  }
+
+function distinctCountText(count) {
+  if (count === null) return '--'
+  return count >= RANK_SCAN_LIMIT ? `${RANK_SCAN_LIMIT}+` : count.toLocaleString('zh-CN')
+}
+
+const statCards = computed(() => {
+  const coverage = stats.coverage || '审计保留记录'
+  const memoryMiB = process.residentBytes === null ? null : process.residentBytes / 1024 / 1024
+  const processReason = supportsOperation('metrics.process') ? '' : operationReason('metrics.process')
   return [
-    {
-      key: 'start-time',
-      title: '启动时间',
-      value: systemSummary.startTime
-        ? new Date(systemSummary.startTime * 1000).toLocaleString('zh-CN', { hour12: false })
-        : '--',
-      tone: 'ok'
-    },
-    {
-      key: 'cpu-time',
-      title: 'CPU 时间',
-      value: formatSeconds(systemSummary.cpuTime, 2),
-      tone: 'neutral'
-    },
-    {
-      key: 'memory',
-      title: '常驻内存 (RSS)',
-      value: formatBytes(systemSummary.residentMemory),
-      tone: 'neutral'
-    },
-    {
-      key: 'network-receive',
-      title: '系统累计接收流量',
-      value: formatBytes(systemSummary.networkReceiveBytes),
-      tone: 'neutral'
-    },
-    {
-      key: 'network-transmit',
-      title: '系统累计发送流量',
-      value: formatBytes(systemSummary.networkTransmitBytes),
-      tone: 'neutral'
-    },
-    {
-      key: 'gc-count',
-      title: 'GC 次数',
-      value: Number(systemSummary.gcCount || 0).toLocaleString(),
-      tone: 'neutral'
-    },
-    {
-      key: 'gc-duration',
-      title: 'GC 累计耗时',
-      value: formatSeconds(systemSummary.gcDurationSeconds, 3),
-      tone: 'neutral'
-    },
-    {
-      key: 'last-gc',
-      title: '上次 GC 时间',
-      value: systemSummary.lastGcTime
-        ? new Date(systemSummary.lastGcTime * 1000).toLocaleString('zh-CN', { hour12: false })
-        : '--',
-      tone: 'neutral'
-    },
-    {
-      key: 'go-version',
-      title: 'Go 版本',
-      value: systemSummary.goVersion || '--',
-      tone: 'ok'
-    },
-    {
-      key: 'threads',
-      title: '线程数',
-      value: Number(systemSummary.threads || 0).toLocaleString(),
-      tone: 'neutral'
-    },
-    {
-      key: 'open-fds',
-      title: '打开文件描述符',
-      value: Number(systemSummary.openFds || 0).toLocaleString(),
-      tone: 'neutral'
-    },
-    {
-      key: 'goroutines',
-      title: 'go_goroutines',
-      value: Number(systemSummary.goroutines || 0).toLocaleString(),
-      tone: 'neutral'
-    }
+    { key: 'queries', title: '查询数量', value: rankingErrors.stats ? '--' : stats.totalQueries.toLocaleString('zh-CN'), note: coverage, tone: '' },
+    { key: 'latency', title: '平均响应', value: rankingErrors.stats ? '--' : `${stats.averageDurationMs.toFixed(1)} ms`, note: coverage, tone: rankingErrors.stats ? '' : latencyTone(stats.averageDurationMs) },
+    { key: 'cache', title: '缓存命中', value: cacheHit.value === null ? '--' : `${cacheHit.value.toFixed(1)}%`, note: '全部命名缓存的累计计数', tone: cacheHitTone(cacheHit.value) },
+    { key: 'clients', title: '客户端数量', value: distinctCountText(clientCount.value), note: coverage, tone: '' },
+    { key: 'domains', title: '域名统计', value: distinctCountText(domainCount.value), note: `不同域名 · ${coverage}`, tone: '' },
+    { key: 'cpu', title: 'CPU 占用', value: process.cpuPercent === null ? '--' : `${process.cpuPercent.toFixed(1)}%`, note: processReason || '单核百分比 · 两次刷新之间', tone: cpuTone(process.cpuPercent) },
+    { key: 'memory', title: '内存占用', value: memoryMiB === null ? '--' : `${memoryMiB.toFixed(1)} MiB`, note: processReason || '常驻内存 (RSS)', tone: memoryTone(process.residentBytes) }
   ]
 })
+
+const learnerCategories = computed(() => (Array.isArray(learner.value?.categories) ? learner.value.categories : []))
+const learnerTotal = computed(() => learnerCategories.value.reduce((sum, item) => sum + Number(item?.entries || 0), 0))
+
+function toneClass(tone) {
+  return tone ? `rt-text-${tone}` : ''
+}
+
 const upstreamStatsMap = computed(() => parseUpstreamStatsMetrics(upstreamMetricsText.value))
 const upstreamStatSections = computed(() => {
   const configuredGroups = Object.keys(upstreamConfig.value || {})
   const orderedGroups = orderUpstreamGroups(configuredGroups, specialGroups.value)
   const sections = []
-
   orderedGroups.forEach((group) => {
-    if (capabilityState.value?.kind !== 'native' && dnsRoutingMode.value === 'B' && group === 'nocnfake') {
-      return
-    }
     const rows = Array.isArray(upstreamConfig.value?.[group]) ? upstreamConfig.value[group] : []
     const enabledRows = rows
       .filter((item) => Boolean(item?.enabled))
@@ -424,11 +310,11 @@ const upstreamStatSections = computed(() => {
           address: upstreamAddressDisplay(item || {}),
           avgLatencyText: latencyCount > 0 ? avgLatencyNumber.toFixed(2) : '-',
           avgLatencyNumber,
+          latencyTone: latencyCount > 0 ? latencyTone(avgLatencyNumber) : '',
           queryText: queryNumber.toLocaleString(),
           queryNumber,
           winnerRateText: `${winnerRateNumber.toFixed(2)}%`,
           winnerRateNumber,
-          errorText: errorNumber.toLocaleString(),
           errorNumber,
           errorRateText: `${errorRateNumber.toFixed(2)}%`,
           errorRateNumber
@@ -471,9 +357,6 @@ function updateOverviewRows() {
   visibleOverviewRows.value = clamp(computedRows, OVERVIEW_MIN_ROWS, OVERVIEW_MAX_ROWS)
 }
 
-function clearMessages() {
-  clearTopNotice()
-}
 
 function normalizeIP(ip) {
   return String(ip || '').replace(/^::ffff:/, '').trim()
@@ -524,30 +407,6 @@ function formatCompactDuration(value) {
   return num.toFixed(2)
 }
 
-function formatBytes(bytes) {
-  const value = Number(bytes || 0)
-  if (!Number.isFinite(value) || value <= 0) {
-    return '--'
-  }
-  if (value >= 1024 ** 3) {
-    return `${(value / 1024 ** 3).toFixed(2)} GB`
-  }
-  if (value >= 1024 ** 2) {
-    return `${(value / 1024 ** 2).toFixed(2)} MB`
-  }
-  if (value >= 1024) {
-    return `${(value / 1024).toFixed(2)} KB`
-  }
-  return `${value.toFixed(0)} B`
-}
-
-function formatSeconds(value, fractionDigits = 2) {
-  const num = Number(value || 0)
-  if (!Number.isFinite(num) || num < 0) {
-    return '--'
-  }
-  return `${num.toFixed(fractionDigits)} 秒`
-}
 
 function formatTime(value) {
   return formatDateTime(value)
@@ -824,201 +683,31 @@ function closeRankingDetail() {
   rankingDetail.loading = false
 }
 
-function loadHistory() {
+// `at`: when the metrics text arrived, so slow requests of the same refresh do not stretch the interval.
+function applyProcessMetrics(metricsText, at) {
+  const figures = parseProcessMetrics(metricsText)
+  process.residentBytes = figures.residentBytes
+  if (figures.cpuSeconds !== null) {
+    const sample = { cpuSeconds: figures.cpuSeconds, at }
+    const percent = cpuPercent(cpuSample, sample)
+    if (percent !== null || cpuSample === null) process.cpuPercent = percent
+    cpuSample = sample
+  }
+}
+
+async function sampleCpuOnly() {
+  cpuFollowUpTimerId = 0
+  if (!supportsOperation('metrics.cache') || !supportsOperation('metrics.process')) return
   try {
-    const saved = JSON.parse(localStorage.getItem(HISTORY_KEY) || 'null')
-    history.totalQueries = Array.isArray(saved?.totalQueries) ? saved.totalQueries.map((item) => Number(item || 0)) : []
-    history.avgDuration = Array.isArray(saved?.avgDuration) ? saved.avgDuration.map((item) => Number(item || 0)) : []
-    history.timestamps = Array.isArray(saved?.timestamps) ? saved.timestamps.map((item) => Number(item || 0)) : []
+    applyProcessMetrics(await getText('/metrics'), Date.now())
   } catch {
-    history.totalQueries = []
-    history.avgDuration = []
-    history.timestamps = []
+    // the next refresh tries again
   }
-}
-
-function saveHistory() {
-  localStorage.setItem(HISTORY_KEY, JSON.stringify({
-    totalQueries: history.totalQueries,
-    avgDuration: history.avgDuration,
-    timestamps: history.timestamps
-  }))
-}
-
-function addHistoryPoint(totalQueriesValue, avgDurationValue) {
-  history.totalQueries.push(Number(totalQueriesValue || 0))
-  history.avgDuration.push(Number(avgDurationValue || 0))
-  history.timestamps.push(Date.now())
-
-  if (history.totalQueries.length > HISTORY_LENGTH) {
-    history.totalQueries.shift()
-  }
-  if (history.avgDuration.length > HISTORY_LENGTH) {
-    history.avgDuration.shift()
-  }
-  if (history.timestamps.length > HISTORY_LENGTH) {
-    history.timestamps.shift()
-  }
-  saveHistory()
-}
-
-function parseSystemMetrics(metricsText) {
-  const lines = String(metricsText || '').split('\n')
-  const next = {
-    startTime: 0,
-    cpuTime: 0,
-    residentMemory: 0,
-    networkReceiveBytes: 0,
-    networkTransmitBytes: 0,
-    gcCount: 0,
-    gcDurationSeconds: 0,
-    lastGcTime: 0,
-    goVersion: 'N/A',
-    threads: 0,
-    openFds: 0,
-    goroutines: 0
-  }
-  lines.forEach((line) => {
-    if (line.startsWith('process_start_time_seconds')) {
-      next.startTime = Number.parseFloat(line.split(' ')[1] || '0') || 0
-    } else if (line.startsWith('process_cpu_seconds_total')) {
-      next.cpuTime = Number.parseFloat(line.split(' ')[1] || '0') || 0
-    } else if (line.startsWith('process_resident_memory_bytes')) {
-      next.residentMemory = Number.parseFloat(line.split(' ')[1] || '0') || 0
-    } else if (line.startsWith('process_network_receive_bytes_total')) {
-      next.networkReceiveBytes = Number.parseFloat(line.split(' ')[1] || '0') || 0
-    } else if (line.startsWith('process_network_transmit_bytes_total')) {
-      next.networkTransmitBytes = Number.parseFloat(line.split(' ')[1] || '0') || 0
-    } else if (line.startsWith('go_gc_duration_seconds_count')) {
-      next.gcCount = Number.parseFloat(line.split(' ')[1] || '0') || 0
-    } else if (line.startsWith('go_gc_duration_seconds_sum')) {
-      next.gcDurationSeconds = Number.parseFloat(line.split(' ')[1] || '0') || 0
-    } else if (line.startsWith('go_memstats_last_gc_time_seconds')) {
-      next.lastGcTime = Number.parseFloat(line.split(' ')[1] || '0') || 0
-    } else if (line.startsWith('go_threads') || line.startsWith('mosdns_process_threads')) {
-      next.threads = Number.parseFloat(line.split(' ')[1] || '0') || 0
-    } else if (line.startsWith('process_open_fds')) {
-      next.openFds = Number.parseFloat(line.split(' ')[1] || '0') || 0
-    } else if (line.startsWith('go_goroutines')) {
-      next.goroutines = Number.parseFloat(line.split(' ')[1] || '0') || 0
-    } else if (line.startsWith('go_info{version="')) {
-      const match = line.match(/go_info\{version="([^"]+)"/)
-      if (match?.[1]) {
-        next.goVersion = match[1]
-      }
-    }
-  })
-  return next
-}
-
-function applySystemSummaryState({ metricsText = '' } = {}) {
-  if (!props.showSystemSummary) {
-    return
-  }
-  const metrics = parseSystemMetrics(metricsText)
-  systemSummary.startTime = metrics.startTime
-  systemSummary.cpuTime = metrics.cpuTime
-  systemSummary.residentMemory = metrics.residentMemory
-  systemSummary.networkReceiveBytes = metrics.networkReceiveBytes
-  systemSummary.networkTransmitBytes = metrics.networkTransmitBytes
-  systemSummary.gcCount = metrics.gcCount
-  systemSummary.gcDurationSeconds = metrics.gcDurationSeconds
-  systemSummary.lastGcTime = metrics.lastGcTime
-  systemSummary.goVersion = metrics.goVersion
-  systemSummary.threads = metrics.threads
-  systemSummary.openFds = metrics.openFds
-  systemSummary.goroutines = metrics.goroutines
-}
-
-function applyEWMA(values, alpha = 0.4) {
-  if (!Array.isArray(values) || values.length < 2) {
-    return values || []
-  }
-  const smoothed = [Number(values[0] || 0)]
-  for (let index = 1; index < values.length; index += 1) {
-    const curr = Number(values[index] || 0)
-    smoothed[index] = alpha * curr + (1 - alpha) * smoothed[index - 1]
-  }
-  return smoothed
-}
-
-function generateSparklineSVG(values, isFloat = false, width = 300, height = 60, gradientId = 'sparkline-gradient') {
-  if (!Array.isArray(values) || values.length < 2) {
-    return ''
-  }
-  const data = applyEWMA(values.map((item) => Number(item || 0)), isFloat ? 0.3 : 0.4)
-  const maxValue = Math.max(...data)
-  const minValue = Math.min(...data)
-  const range = maxValue - minValue === 0 ? 1 : maxValue - minValue
-
-  const points = data.map((value, index) => {
-    const x = (index / (data.length - 1)) * width
-    const y = height - ((value - minValue) / range) * height
-    return `${x.toFixed(2)},${y.toFixed(2)}`
-  })
-  const path = `M ${points.join(' L ')}`
-  const areaPath = `${path} L ${width},${height} L 0,${height} Z`
-  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none"><defs><linearGradient id="${gradientId}" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="var(--brand)" stop-opacity="0.45" /><stop offset="100%" stop-color="var(--brand)" stop-opacity="0" /></linearGradient></defs><path d="${areaPath}" fill="url(#${gradientId})" /><path d="${path}" fill="none" stroke="var(--brand)" stroke-width="2" /></svg>`
-}
-
-function generateDualSparklineSVG(totalValues, avgValues, timestamps) {
-  if (!Array.isArray(totalValues) || !Array.isArray(avgValues) || totalValues.length < 2 || avgValues.length < 2) {
-    return ''
-  }
-
-  const width = 1000
-  const height = 250
-  const padding = { top: 24, right: 54, bottom: 30, left: 54 }
-  const chartWidth = width - padding.left - padding.right
-  const chartHeight = height - padding.top - padding.bottom
-
-  const totalData = applyEWMA(totalValues.map((item) => Number(item || 0)), 0.4)
-  const avgData = applyEWMA(avgValues.map((item) => Number(item || 0)), 0.3)
-  const totalMax = Math.max(...totalData, 1)
-  const avgMax = Math.max(...avgData, 1)
-
-  const points = (data, max) => data.map((value, index) => {
-    const x = padding.left + (index / (data.length - 1)) * chartWidth
-    const y = padding.top + chartHeight - (value / max) * chartHeight
-    return `${x.toFixed(2)},${y.toFixed(2)}`
-  })
-
-  const totalPath = `M ${points(totalData, totalMax).join(' L ')}`
-  const avgPath = `M ${points(avgData, avgMax).join(' L ')}`
-  const totalArea = `${totalPath} L ${padding.left + chartWidth},${padding.top + chartHeight} L ${padding.left},${padding.top + chartHeight} Z`
-  const avgArea = `${avgPath} L ${padding.left + chartWidth},${padding.top + chartHeight} L ${padding.left},${padding.top + chartHeight} Z`
-
-  const startText = timestamps?.length ? new Date(Number(timestamps[0] || 0)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
-  const endText = timestamps?.length ? new Date(Number(timestamps[timestamps.length - 1] || 0)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
-
-  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
-      <defs>
-        <linearGradient id="dual-total-grad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--brand)" stop-opacity="0.2"/><stop offset="1" stop-color="var(--brand)" stop-opacity="0"/></linearGradient>
-        <linearGradient id="dual-avg-grad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f59e0b" stop-opacity="0.2"/><stop offset="1" stop-color="#f59e0b" stop-opacity="0"/></linearGradient>
-      </defs>
-      <g stroke="var(--line)" stroke-width="1" stroke-dasharray="4 4" opacity="0.5">
-        <line x1="${padding.left}" y1="${padding.top}" x2="${width - padding.right}" y2="${padding.top}"/>
-        <line x1="${padding.left}" y1="${padding.top + chartHeight / 2}" x2="${width - padding.right}" y2="${padding.top + chartHeight / 2}"/>
-        <line x1="${padding.left}" y1="${padding.top + chartHeight}" x2="${width - padding.right}" y2="${padding.top + chartHeight}"/>
-      </g>
-      <path d="${totalArea}" fill="url(#dual-total-grad)" />
-      <path d="${avgArea}" fill="url(#dual-avg-grad)" />
-      <path d="${totalPath}" fill="none" stroke="var(--brand)" stroke-width="2.2" stroke-linecap="round" />
-      <path d="${avgPath}" fill="none" stroke="#f59e0b" stroke-width="2.2" stroke-linecap="round" />
-      <g fill="var(--ink-1)" font-size="11">
-        <text x="${padding.left}" y="${height - 6}" text-anchor="start">${startText}</text>
-        <text x="${width - padding.right}" y="${height - 6}" text-anchor="end">${endText}</text>
-      </g>
-    </svg>`
 }
 
 async function reloadOverview(showMessage = false) {
   if (capabilityState.status !== 'ready') return
   loading.value = true
-  clearTopNotice()
-  if (showMessage) {
-    clearTopNotice()
-  }
   try {
     const auditPanel = (promise) => promise
       .then((data) => ({ data, error: '', status: 200 }))
@@ -1027,84 +716,79 @@ async function reloadOverview(showMessage = false) {
         error: error?.message || '请求失败',
         status: Number(error?.status || 0)
       }))
-    const optionalPanel = (operation, request) => supportsOperation(operation) ? auditPanel(request()) : Promise.resolve({data:null,error:'',status:0,unsupported:operationReason(operation)})
+    const optionalPanel = (operation, request) => supportsOperation(operation) ? auditPanel(request()) : Promise.resolve({ data: null, error: '', status: 0 })
     const rankPanels = async () => {
-      if (!supportsOperation('query.rank')) return Object.fromEntries(['domain','client','slowest','rules'].map(key => [key,{data:[],error:'',status:0}]))
-      // Native audit ranks use a two-slot, no-queue backend gate. Keep one
-      // Overview refresh within that budget even when the page has four rank
-      // cards, so a normal refresh cannot manufacture its own 503s.
-      const panels = {
-        domain: await auditPanel(getJSON('/api/v2/audit/rank/domain?limit=20')),
-        client: await auditPanel(getJSON('/api/v2/audit/rank/client?limit=20')),
-        slowest: await auditPanel(getJSON('/api/v2/audit/rank/slowest?limit=20'))
+      if (!supportsOperation('query.rank')) return Object.fromEntries(['domain', 'client', 'slowest', 'rules'].map(key => [key, { data: [], error: '', status: 0 }]))
+      // Audit ranks use a two-slot, no-queue backend gate: one refresh asks them one
+      // after another so it cannot manufacture its own 503s.
+      return {
+        domain: await auditPanel(getJSON(`/api/v2/audit/rank/domain?limit=${RANK_SCAN_LIMIT}`)),
+        client: await auditPanel(getJSON(`/api/v2/audit/rank/client?limit=${RANK_SCAN_LIMIT}`)),
+        slowest: await auditPanel(getJSON(`/api/v2/audit/rank/slowest?limit=${TOP_ROWS}`)),
+        rules: await auditPanel(getJSON(`/api/v2/audit/rank/effective?limit=${TOP_ROWS}`))
       }
-      const effective = await auditPanel(getJSON('/api/v2/audit/rank/effective?limit=20'))
-      if (!effective.error) {
-        panels.rules = { ...effective, source: 'effective_tag' }
-      } else if (effective.status === 404) {
-        const fallback = await auditPanel(getJSON('/api/v2/audit/rank/domain_set?limit=20'))
-        panels.rules = { ...fallback, source: 'domain_set' }
-      } else {
-        panels.rules = { ...effective, source: 'effective_tag' }
-      }
-      return panels
     }
 
     const [
       statsRes,
+      windowsRes,
       rankRes,
       specialGroupsRes,
       aliasesRes,
       upstreamConfigRes,
       metricsRes,
-      dnsRoutingModeRes
+      learnerRes
     ] = await Promise.all([
-      optionalPanel('audit.read', () => getJSON(`/api/${capabilityState.value?.kind === 'native' && capabilityState.value.endpoints.audit_v2 !== true ? 'v1' : 'v2'}/audit/stats`)),
+      optionalPanel('audit.read', () => getJSON('/api/v2/audit/stats')),
+      optionalPanel('audit.read', () => getJSON('/api/v2/audit/stats/windows')),
       rankPanels(),
       optionalPanel('groups.read', () => getJSON('/api/v1/special-groups')),
       optionalPanel('client.aliases', () => getJSON('/plugins/clientname')),
       optionalPanel('upstreams.read', () => getJSON('/api/v1/upstream/config')),
-      optionalPanel('metrics.cache', () => getText('/metrics')),
-      optionalPanel('switches.manage', () => {
-        const tag = switchTagForType(17)
-        return tag ? getText(`/plugins/${encodeURIComponent(tag)}/show`) : Promise.resolve('')
-      })
+      optionalPanel('metrics.cache', () => getText('/metrics').then((text) => ({ text, at: Date.now() }))),
+      optionalPanel('lists.remembered', () => getJSON('/plugins/route_learner/status'))
     ])
 
-    const topDomainsRes = rankRes.domain
-    const topClientsRes = rankRes.client
-    const slowestRes = rankRes.slowest
-    const domainSetRes = rankRes.rules
     rankingErrors.stats = statsRes.error
-    rankingErrors.domain = topDomainsRes.error
-    rankingErrors.client = topClientsRes.error
-    rankingErrors.slowest = slowestRes.error
-    rankingErrors.rules = domainSetRes.error
+    rankingErrors.domain = rankRes.domain.error
+    rankingErrors.client = rankRes.client.error
+    rankingErrors.slowest = rankRes.slowest.error
+    rankingErrors.rules = rankRes.rules.error
     integrationErrors.specialGroups = specialGroupsRes.error
     integrationErrors.aliases = aliasesRes.error
     integrationErrors.upstreamConfig = upstreamConfigRes.error
     integrationErrors.metrics = metricsRes.error
-    integrationErrors.switch = dnsRoutingModeRes.error
+    integrationErrors.learner = learnerRes.error
     if (!statsRes.error) {
       stats.totalQueries = Number(statsRes?.data?.total_queries || 0)
       stats.averageDurationMs = Number(statsRes?.data?.average_duration_ms || 0)
     }
-    addHistoryPoint(stats.totalQueries, stats.averageDurationMs)
+    // The windows answer carries the oldest retained record: the coverage of every figure.
+    const windows = windowsRes.error ? null : windowsRes.data
+    stats.coverage = windows ? coverageText(windows.items?.[0]?.coverage_start, windows.generated_at, stats.totalQueries) : ''
 
-    topDomains.value = Array.isArray(topDomainsRes.data) ? topDomainsRes.data : []
-    topClients.value = Array.isArray(topClientsRes.data) ? topClientsRes.data : []
-    slowestQueries.value = Array.isArray(slowestRes.data) ? slowestRes.data : []
-    domainSetRank.value = Array.isArray(domainSetRes?.data) ? domainSetRes.data : []
-    domainSetRankSource.value = domainSetRes?.source || 'effective_tag'
+    const domains = Array.isArray(rankRes.domain.data) ? rankRes.domain.data : []
+    const clients = Array.isArray(rankRes.client.data) ? rankRes.client.data : []
+    topDomains.value = domains.slice(0, TOP_ROWS)
+    topClients.value = clients.slice(0, TOP_ROWS)
+    domainCount.value = rankRes.domain.error || !supportsOperation('query.rank') ? null : domains.length
+    clientCount.value = rankRes.client.error || !supportsOperation('query.rank') ? null : clients.length
+    slowestQueries.value = Array.isArray(rankRes.slowest.data) ? rankRes.slowest.data : []
+    domainSetRank.value = Array.isArray(rankRes.rules.data) ? rankRes.rules.data : []
+    domainSetRankSource.value = 'effective_tag'
     specialGroups.value = Array.isArray(specialGroupsRes.data) ? specialGroupsRes.data : []
     aliases.value = normalizeAliasMap(aliasesRes.data)
     upstreamConfig.value = upstreamConfigRes.data && typeof upstreamConfigRes.data === 'object' ? upstreamConfigRes.data : {}
-    upstreamMetricsText.value = metricsRes.error ? '' : String(metricsRes.data || '')
-    dnsRoutingMode.value = dnsRoutingModeRes.error ? '' : String(dnsRoutingModeRes.data || '').trim()
-    if (!metricsRes.error) {
-      applySystemSummaryState({ metricsText: metricsRes.data })
+    upstreamMetricsText.value = metricsRes.error ? '' : String(metricsRes.data?.text || '')
+    learner.value = learnerRes.error ? null : learnerRes.data
+    if (!metricsRes.error && metricsRes.data !== null) {
+      cacheHit.value = cacheHitPercent(metricsRes.data.text)
+      if (supportsOperation('metrics.process')) {
+        const first = cpuSample === null
+        applyProcessMetrics(metricsRes.data.text, metricsRes.data.at)
+        if (first && !cpuFollowUpTimerId) cpuFollowUpTimerId = window.setTimeout(sampleCpuOnly, CPU_FOLLOW_UP_MS)
+      }
     }
-    lastUpdatedText.value = new Date().toLocaleString('zh-CN', { hour12: false })
 
     if (showMessage) {
       setSuccess('概览数据已刷新')
@@ -1124,7 +808,6 @@ function handleGlobalRefresh() {
 }
 
 onMounted(() => {
-  loadHistory()
   reloadOverview(false)
   nextTick(() => {
     updateOverviewRows()
@@ -1134,6 +817,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  if (cpuFollowUpTimerId) window.clearTimeout(cpuFollowUpTimerId)
   window.removeEventListener('mosdns-log-refresh', handleGlobalRefresh)
   window.removeEventListener('resize', updateOverviewRows)
 })
@@ -1141,72 +825,104 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="overview-page" :style="overviewLayoutVars">
-    <DnsOverviewCard />
+    <div class="rt-stat-grid" data-overview-stats>
+      <article v-for="card in statCards" :key="card.key" class="rt-stat" :data-stat="card.key">
+        <span class="rt-stat-label">{{ card.title }}</span>
+        <strong class="rt-stat-value" :class="toneClass(card.tone)">{{ card.value }}</strong>
+        <small class="rt-stat-note">{{ card.note }}</small>
+      </article>
+    </div>
 
     <div v-if="rankingErrors.stats" class="overview-unavailable" role="status">
       查询统计不可用：{{ rankingErrors.stats }}
     </div>
 
-    <section class="panel sub-panel upstream-stats-panel">
-      <header class="upstream-stats-head">
-        <div class="upstream-stats-title-wrap">
-          <h3>上游 DNS 统计</h3>
+    <div class="rt-overview-row">
+      <section class="panel sub-panel upstream-stats-panel">
+        <header class="upstream-stats-head">
+          <div class="upstream-stats-title-wrap">
+            <h3>上游 DNS 统计</h3>
+          </div>
+        </header>
+        <div v-if="integrationErrors.metrics || integrationErrors.upstreamConfig" class="overview-unavailable" role="status">
+          <span v-if="integrationErrors.metrics">指标不可用：{{ integrationErrors.metrics }}</span>
+          <span v-if="integrationErrors.upstreamConfig">上游配置不可用：{{ integrationErrors.upstreamConfig }}</span>
         </div>
-      </header>
-      <div v-if="integrationErrors.metrics || integrationErrors.switch || integrationErrors.upstreamConfig" class="overview-unavailable" role="status">
-        <span v-if="integrationErrors.metrics">指标不可用：{{ integrationErrors.metrics }}</span>
-        <span v-if="integrationErrors.switch">切换状态不可用：{{ integrationErrors.switch }}</span>
-        <span v-if="integrationErrors.upstreamConfig">上游配置不可用：{{ integrationErrors.upstreamConfig }}</span>
-      </div>
-      <div class="table-wrap upstream-stats-table-wrap">
-        <table class="upstream-stats-table">
-          <thead>
-            <tr>
-              <th>类型</th>
-              <th>名称</th>
-              <th>地址</th>
-              <th class="text-right">平均响应(ms)</th>
-              <th class="text-right">请求数</th>
-              <th class="text-right">采纳率</th>
-              <th class="text-right">出错数</th>
-              <th class="text-right">出错率</th>
-            </tr>
-          </thead>
-          <tbody v-if="loading">
-            <tr>
-              <td colspan="8" class="empty">加载中...</td>
-            </tr>
-          </tbody>
-          <tbody v-else-if="upstreamStatSections.length === 0">
-            <tr>
-              <td colspan="8" class="empty">暂无已启用上游统计</td>
-            </tr>
-          </tbody>
-          <tbody v-for="section in upstreamStatSections" v-else :key="section.key">
-            <tr class="upstream-stats-group-row" :class="`tone-${section.tone}`">
-              <td colspan="8">
-                <span class="upstream-stats-group-name">{{ section.title }}</span>
-                <span class="upstream-stats-group-count">({{ section.rows.length }})</span>
-              </td>
-            </tr>
-            <tr v-for="row in section.rows" :key="row.key">
-              <td :title="row.typeLabel">
-                <span class="upstream-stats-type-chip">{{ row.typeLabel }}</span>
-              </td>
-              <td class="upstream-stats-name-cell" :title="row.name">{{ row.name }}</td>
-              <td class="mono upstream-stats-address-cell" :title="row.address">{{ row.address }}</td>
-              <td class="text-right" :title="row.avgLatencyText === '-' ? '-' : `${row.avgLatencyText} ms`">
-                {{ row.avgLatencyText }}
-              </td>
-              <td class="text-right">{{ row.queryText }}</td>
-              <td class="text-right">{{ row.winnerRateText }}</td>
-              <td class="text-right">{{ row.errorText }}</td>
-              <td class="text-right">{{ row.errorRateText }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
+        <div class="table-wrap upstream-stats-table-wrap">
+          <table class="upstream-stats-table">
+            <thead>
+              <tr>
+                <th>类型</th>
+                <th>名称</th>
+                <th>地址</th>
+                <th class="text-right" title="平均响应时间（毫秒）">平均 ms</th>
+                <th class="text-right">请求数</th>
+                <th class="text-right">采纳率</th>
+                  <th class="text-right">出错率</th>
+              </tr>
+            </thead>
+            <tbody v-if="loading">
+              <tr>
+                <td colspan="7" class="empty">加载中...</td>
+              </tr>
+            </tbody>
+            <tbody v-else-if="upstreamStatSections.length === 0">
+              <tr>
+                <td colspan="7" class="empty">暂无已启用上游统计</td>
+              </tr>
+            </tbody>
+            <tbody v-for="section in upstreamStatSections" v-else :key="section.key">
+              <tr class="upstream-stats-group-row" :class="`tone-${section.tone}`">
+                <td colspan="7">
+                  <span class="upstream-stats-group-name">{{ section.title }}</span>
+                  <span class="upstream-stats-group-count">({{ section.rows.length }})</span>
+                </td>
+              </tr>
+              <tr v-for="row in section.rows" :key="row.key">
+                <td :title="row.typeLabel">
+                  <span class="upstream-stats-type-chip">{{ row.typeLabel }}</span>
+                </td>
+                <td class="upstream-stats-name-cell" :title="row.name">{{ row.name }}</td>
+                <td class="mono upstream-stats-address-cell" :title="row.address">{{ row.address }}</td>
+                <td class="text-right" :class="toneClass(row.latencyTone)" :title="row.avgLatencyText === '-' ? '-' : `${row.avgLatencyText} ms`">
+                  {{ row.avgLatencyText }}
+                </td>
+                <td class="text-right">{{ row.queryText }}</td>
+                <td class="text-right">{{ row.winnerRateText }}</td>
+                <td class="text-right">{{ row.errorRateText }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section class="panel sub-panel" data-overview-learner>
+        <h3>学习状态</h3>
+        <p v-if="!supportsOperation('lists.remembered')" class="muted">当前配置没有域名学习。</p>
+        <p v-else-if="integrationErrors.learner" class="muted">学习状态不可用：{{ integrationErrors.learner }}</p>
+        <template v-else-if="learner">
+          <p class="muted">共 {{ learnerTotal.toLocaleString('zh-CN') }} 条 · 启动以来新学 {{ Number(learner.counters?.learned || 0).toLocaleString('zh-CN') }} · 过期 {{ Number(learner.counters?.expired || 0).toLocaleString('zh-CN') }}</p>
+          <div class="table-wrap rt-compact-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>类别</th>
+                  <th class="text-right">条数</th>
+                  <th class="text-right">上限</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in learnerCategories" :key="item.tag">
+                  <td>{{ item.label || item.tag }}<span v-if="!item.enabled" class="muted rt-inline-note">（已关闭）</span></td>
+                  <td class="text-right">{{ Number(item.entries || 0).toLocaleString('zh-CN') }}</td>
+                  <td class="text-right">{{ Number(item.max_entries || 0).toLocaleString('zh-CN') }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
+        <p v-else class="muted">读取中…</p>
+      </section>
+    </div>
 
     <div ref="overviewGridRef" class="overview-grid">
       <section class="panel sub-panel overview-metric-module">
@@ -1374,26 +1090,6 @@ onBeforeUnmount(() => {
         </div>
       </section>
     </div>
-
-    <section v-if="showSystemSummary" class="panel sub-panel overview-system-summary-panel">
-      <header class="overview-system-summary-head">
-        <div>
-          <h3>系统信息</h3>
-        </div>
-      </header>
-      <div class="overview-system-summary-grid">
-        <article
-          v-for="item in systemSummaryCards"
-          :key="item.key"
-          class="overview-system-summary-card"
-          :class="`tone-${item.tone}`"
-        >
-          <span class="overview-system-summary-label">{{ item.title }}</span>
-          <strong>{{ item.value }}</strong>
-          <small v-if="item.desc">{{ item.desc }}</small>
-        </article>
-      </div>
-    </section>
 
     <Teleport to="body">
       <div v-if="slowDetailOpen && selectedSlowQuery" class="modal-mask modal-mask-top" @click.self="closeSlowDetail">
@@ -1611,23 +1307,29 @@ onBeforeUnmount(() => {
 
 .upstream-stats-table {
   width: 100%;
-  min-width: 980px;
+  min-width: 600px;
   table-layout: fixed;
 }
 
-.upstream-stats-table th:nth-child(1),
-.upstream-stats-table td:nth-child(1) {
-  width: 92px;
+.upstream-stats-table th,
+.upstream-stats-table td {
+  padding: 5px 8px;
+  font-size: 0.84rem;
+  white-space: nowrap;
 }
 
-.upstream-stats-table th:nth-child(2),
-.upstream-stats-table td:nth-child(2) {
-  width: 128px;
+/* Type and name are fixed; the address takes what is left and is cut with an ellipsis
+   (the full text is in its title); the four figures share one narrow width. */
+.upstream-stats-table th:nth-child(1) {
+  width: 56px;
 }
 
-.upstream-stats-table th:nth-child(3),
-.upstream-stats-table td:nth-child(3) {
-  width: 240px;
+.upstream-stats-table th:nth-child(2) {
+  width: 112px;
+}
+
+.upstream-stats-table th:nth-child(n + 4) {
+  width: 72px;
 }
 
 .upstream-stats-group-row td {
@@ -1679,8 +1381,8 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 64px;
-  padding: 4px 10px;
+  min-width: 40px;
+  padding: 1px 7px;
   border-radius: 999px;
   background: rgba(37, 99, 235, 0.1);
   color: #2563eb;
@@ -1696,10 +1398,6 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.overview-system-summary-panel {
-  padding-bottom: 12px;
-}
-
 .overview-unavailable {
   margin: 8px 12px 0;
   color: var(--muted);
@@ -1710,74 +1408,10 @@ onBeforeUnmount(() => {
   margin-left: 12px;
 }
 
-.overview-system-summary-head {
-  margin-bottom: 10px;
-}
-
-.overview-system-summary-head h3 {
-  margin: 0;
-}
-
-.overview-system-summary-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(156px, 1fr));
-  gap: 10px;
-}
-
-.overview-system-summary-card {
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  padding: 10px 11px;
-  background: rgba(var(--panel-glass-rgb), var(--panel-glass-opacity));
-  backdrop-filter: blur(var(--panel-glass-blur));
-  -webkit-backdrop-filter: blur(var(--panel-glass-blur));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
-.overview-system-summary-card strong {
-  font-size: 0.98rem;
-  line-height: 1.25;
-  word-break: break-word;
-}
-
-.overview-system-summary-card small {
-  color: var(--ink-1);
-  font-size: 0.76rem;
-  line-height: 1.3;
-}
-
-.overview-system-summary-label {
-  color: var(--ink-1);
-  font-size: 0.76rem;
-  font-weight: 700;
-}
-
-.overview-system-summary-card.tone-ok strong {
-  color: var(--ok);
-}
-
-.overview-system-summary-card.tone-warn strong {
-  color: var(--warn);
-}
-
 @media (max-width: 760px) {
   .upstream-stats-head {
     align-items: flex-start;
     flex-direction: column;
-  }
-
-  .overview-system-summary-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 540px) {
-  .overview-system-summary-grid {
-    grid-template-columns: 1fr;
   }
 }
 </style>

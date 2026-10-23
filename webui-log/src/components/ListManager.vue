@@ -74,7 +74,7 @@ const selectedHintText = computed(() => {
     case 'ddnslist':
       return `此列表中的域名会按 DDNS 域名处理，适合动态域名解析场景。${supportsRuleSyntax}`
     case 'client_ip':
-      return '打开此开关：系统-功能开关-指定 Client fakeip/指定 Client realip，同时mosdns作为dns下发给客户端，此名单/功能才生效；生效时，只有指定的客户端可以获取fakeip/指定客户端不可以获取fakeip。'
+      return '打开此开关：系统-功能开关-指定 Client fakeip/指定 Client realip，同时rtdns作为dns下发给客户端，此名单/功能才生效；生效时，只有指定的客户端可以获取fakeip/指定客户端不可以获取fakeip。'
     case 'direct_ip':
       return '不在任何域名清单中的域名解析后的IP属于此IP清单时，此域名向被归入直连域名。以苹果公司IP段为例：17.0.0.0/8'
     case 'rewrite':

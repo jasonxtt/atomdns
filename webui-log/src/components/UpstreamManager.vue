@@ -15,7 +15,7 @@ defineProps({
   }
 })
 
-const HIDE_DISABLED_KEY = 'mosdnsHideDisabledUpstreams'
+const HIDE_DISABLED_KEY = 'rtdns-hide-disabled-upstreams'
 const DNS_ROUTING_SWITCH_TAG = 'switch17'
 
 const loading = ref(false)

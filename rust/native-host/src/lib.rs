@@ -2,7 +2,6 @@
 #![allow(clippy::pedantic)]
 
 mod api;
-mod appearance;
 mod assembly;
 mod bind;
 pub mod build_identity;

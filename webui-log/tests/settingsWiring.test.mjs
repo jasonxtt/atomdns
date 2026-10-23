@@ -68,28 +68,18 @@ test('the effective-settings read is a plain, ungated request', () => {
   assert.equal(requestOperation('/api/v1/upstream/config', 'POST'), 'upstreams.manage')
 })
 
-const sources = [
-  new URL('../src/components/SystemControlManager.vue', import.meta.url)
-]
-
-test('the shell hides the replacement rules, apply overrides at once and offer restore only on the native runtime', async () => {
-  for (const path of sources) {
-    const source = await readFile(path, 'utf8')
-    // The replacement panel and its toggle exist only outside the native runtime.
-    assert.match(source, /expandedAdvanced\.replacementRules && !nativeRuntime/, path.pathname)
-    assert.match(source, /v-if="!nativeRuntime" class="system-advanced-toggle-row"/, path.pathname)
-    assert.match(source, /data-native-replacements-note/, path.pathname)
-    // Native saves send no replacements, never ask for a restart and can restore a field.
-    const save = source.slice(source.indexOf('async function saveOverrides()'))
-    const nativeBranch = save.slice(0, save.indexOf('const replacements = overrides.replacements'))
-    assert.match(nativeBranch, /if \(nativeRuntime\.value\)/, path.pathname)
-    assert.match(nativeBranch, /replacements: \[\]/, path.pathname)
-    assert.doesNotMatch(nativeBranch, /system\/restart/, path.pathname)
-    assert.match(source, /async function restoreOverride\(field\)/, path.pathname)
-    assert.match(source, /@restore-override="restoreOverride"/, path.pathname)
-    // The Go flow (restart prompt) is still there for the other runtime.
-    assert.match(save, /覆盖配置已保存，是否立即重启 MosDNS 使其生效/, path.pathname)
-  }
+test('the overrides apply at once with a restore per field, and replacement rules are only explained', async () => {
+  const source = await readFile(new URL('../src/pages/rules/RulesUpstreamPage.vue', import.meta.url), 'utf8')
+  // Saves send no replacements, never ask for a restart and can restore a field.
+  const save = source.slice(source.indexOf('async function saveOverrides()'), source.indexOf('onMounted('))
+  assert.match(save, /replacements: \[\]/)
+  assert.doesNotMatch(save, /system\/restart/)
+  assert.match(source, /async function restoreOverride\(field\)/)
+  assert.match(source, /@restore-override="restoreOverride"/)
+  assert.match(source, /<CapabilityBoundary operation="system\.global_overrides">/)
+  const rewrite = await readFile(new URL('../src/pages/rules/RulesRewritePage.vue', import.meta.url), 'utf8')
+  assert.match(rewrite, /data-native-replacements-note/)
+  assert.doesNotMatch(rewrite, /replacements\.push|addReplacement/, 'no editor for replacement rules')
 })
 
 test('the upstream page offers the proxy switch for every group and never a literal address on a settings-backed runtime', async () => {

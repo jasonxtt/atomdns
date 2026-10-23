@@ -1,9 +1,9 @@
-//! `/api/v1/update/*` and `/api/v1/config/{export,update_from_url}`.
+//! `/api/v1/update/*` and `/api/v1/config/export`.
 //!
 //! Routes, status codes and response keys follow the reference (`coremain/api_update.go`,
 //! `config_manager.go`); the differences are the safety rules of `native-update.md`:
-//! only the host's own configuration directory is exported or replaced, a configuration
-//! update must be a valid package, and everything goes through the guarded transaction.
+//! only the host's own configuration directory is exported, a configuration update must be
+//! a valid package, and everything goes through the guarded transaction.
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -109,13 +109,13 @@ pub(crate) fn update_unsupported(root_known: bool) -> Option<&'static str> {
     config_management_unsupported(root_known)
 }
 
-/// Why configuration export / update from a URL cannot run here, if they cannot.
+/// Why configuration export cannot run here, if it cannot.
 pub(crate) fn config_management_unsupported(root_known: bool) -> Option<&'static str> {
     if !root_known {
         return Some("此主机没有配置目录，无法管理配置");
     }
     if crate::restart::target().is_none() {
-        return Some("此进程没有记录可执行文件路径，无法在线更新或应用配置");
+        return Some("此进程没有记录可执行文件路径，无法在线更新或管理配置");
     }
     None
 }
@@ -132,13 +132,11 @@ pub(crate) async fn handle(
         ("/api/v1/update/check", "POST") => status(ctx, true).await,
         ("/api/v1/update/apply", "POST") => apply(ctx, body).await,
         ("/api/v1/config/export", "POST") => export(ctx, body).await,
-        ("/api/v1/config/update_from_url", "POST") => update_from_url(ctx, body).await,
         (
             "/api/v1/update/status"
             | "/api/v1/update/check"
             | "/api/v1/update/apply"
-            | "/api/v1/config/export"
-            | "/api/v1/config/update_from_url",
+            | "/api/v1/config/export",
             _,
         ) => not_allowed(),
         _ => return None,
@@ -491,8 +489,6 @@ async fn apply(ctx: &Context<'_>, body: &[u8]) -> Reply {
 #[derive(Deserialize, Default)]
 struct ConfigRequest {
     #[serde(default)]
-    url: String,
-    #[serde(default)]
     dir: String,
 }
 
@@ -618,75 +614,6 @@ fn export_zip(root: &Path) -> Result<Vec<u8>, (u16, String)> {
         }
     }
     zip.finish().map_err(|reason| (500, reason))
-}
-
-async fn update_from_url(ctx: &Context<'_>, body: &[u8]) -> Reply {
-    let request = match decode_config_request(body) {
-        Ok(request) => request,
-        Err(reply) => return reply,
-    };
-    if request.url.is_empty() || request.dir.is_empty() {
-        return text_error(400, "url and dir are required");
-    }
-    let root = match check_dir(ctx, &request.dir) {
-        Ok(root) => root,
-        Err(reply) => return reply,
-    };
-    if !(request.url.starts_with("http://") || request.url.starts_with("https://")) {
-        return text_error(400, "url must be an http(s) address");
-    }
-    if let Some(reason) = config_management_unsupported(true) {
-        return text_error(501, reason);
-    }
-    let Some(_busy) = manager().begin_apply() else {
-        return text_error(409, "已有更新正在进行");
-    };
-    if transaction::pending(&root).is_some() {
-        return text_error(409, "上一次更新尚未完成");
-    }
-    let socks5 = crate::settings_api::proxy_address(ctx.config);
-    let bytes = match super::download(
-        &socks5,
-        &request.url,
-        MAX_CONFIG_PACKAGE_BYTES,
-        ctx.shutdown,
-    )
-    .await
-    {
-        Ok(bytes) => bytes,
-        Err(reason) => return text_error(500, format!("下载配置包失败: {reason}")),
-    };
-    let parsed = tokio::task::spawn_blocking(move || {
-        package::parse(&bytes, REQUIRED_CONFIG_SCHEMA, REQUIRED_CONFIG_PACKAGE_ID)
-            .map(|package| (package, bytes))
-    })
-    .await
-    .unwrap_or_else(|error| Err(error.to_string()));
-    let (package, bytes) = match parsed {
-        Ok(found) => found,
-        Err(reason) => return text_error(400, format!("配置包无效: {reason}")),
-    };
-    let files = package.manifest.managed_files.len() + package.manifest.delete_files.len();
-    if let Err((code, reason)) = stage_and_schedule(
-        ctx,
-        &root,
-        "config",
-        crate::build_identity::VERSION.to_owned(),
-        String::new(),
-        None,
-        Some((package, bytes)),
-    )
-    .await
-    {
-        return text_error(code, reason);
-    }
-    json(
-        200,
-        &serde_json::json!({
-            "message": format!("Update successful. {files} files will be updated. Restarting..."),
-            "status": "success",
-        }),
-    )
 }
 
 #[cfg(test)]

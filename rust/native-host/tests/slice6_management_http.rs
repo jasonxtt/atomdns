@@ -1264,7 +1264,7 @@ fn capability_matrix_is_complete_and_matches_host_eligibility() {
             let ops = payload["ui_operations"]
                 .as_object()
                 .expect("complete operations");
-            assert_eq!(ops.len(), 31);
+            assert_eq!(ops.len(), 30);
             for id in [
                 "system.health",
                 "system.version",
@@ -1314,13 +1314,8 @@ fn capability_matrix_is_complete_and_matches_host_eligibility() {
                     "{id}"
                 );
             }
-            // System and appearance operations are real now (F-1), and so is log capture (F-2).
-            for id in [
-                "appearance.server",
-                "system.webui_port",
-                "metrics.process",
-                "capture.logs",
-            ] {
+            // System operations are real now (F-1), and so is log capture (F-2).
+            for id in ["system.webui_port", "metrics.process", "capture.logs"] {
                 assert_eq!(ops[id]["supported"], true, "{id}");
                 assert!(ops[id]["reason"].is_null());
             }

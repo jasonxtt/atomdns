@@ -78,6 +78,16 @@
 - **手动降级到 v0.2.2**：先从 `webinfo/settings.json` 删掉 `flags` 键（v0.2.2 不认识它，会拒绝启动），并换回 schema 2 的配置包。
   旧的 `rule/switchN.txt` 仍在，但取值停留在迁移那一刻，降级前若在新程序里改过开关，需要手动把对应文件改成 `A`/`B`。
 
+## v0.3.0 升级须知（草稿，UI 重做，随第二段完成后发布）
+
+- 内置 WebUI 改为侧栏布局：概览、日志、规则设置（9 个子项）、系统管理（5 个子项），地址形如 `#/overview`、`#/rules/upstream`；刷新保持当前页。
+- 外观只保留浅色 / 深色 / 跟随系统（存在浏览器里）。背景图、毛玻璃、透明度、文字与按钮颜色已删除，后端 `/api/v1/appearance/*` 接口与能力 `appearance.server` 一并删除。
+  部署机上已有的 `webinfo/appearance_settings.json`、`webinfo/appearance_text_settings.json`、`webinfo/appearance_button_settings.json`、`webinfo/panel_background.bin`、
+  `webinfo/panel_background_history/` 新程序不读也不删，可手动删除。外置 UI 要背景图请放进自己的静态包。
+- "应用远程配置"已删除（前端入口与 `POST /api/v1/config/update_from_url`，旧地址返回 404）。配置包只随程序在线更新一起下发；"备份配置"保留，下载文件名 `rtdns_backup.zip`。
+- 浏览器里的旧设置（主题、自动刷新、配置目录等 `mosdns*` 键）不迁移，首次打开新界面按默认值（跟随系统、自动刷新关闭），需要时重新设置一次。
+- 概览的实时趋势图已去掉；统计口径仍是审计保留记录，页面上写明覆盖范围。
+
 ## v0.2.2 升级说明（配置 schema 2，2026-10-23，路由学习重做）
 
 - 新程序要求 `rust-config-schema-2` 的配置包；旧 schema 1 的配置（`domain_output` 带 `target_mapper`）在新程序里加载失败。

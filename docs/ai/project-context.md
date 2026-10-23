@@ -56,8 +56,9 @@ group, and final upstream path. Intermediate matcher tags must not be shown as
 if they were all effective.
 
 The `/` UI contains real operator workflows, including overview diagnostics,
-appearance persistence, and system settings. Changes to their save flows or CSS
-can change runtime behavior.
+rule settings and system management (sidebar layout and hash routes since the
+2026-10-23 UI redo; see `docs/rust/contracts/native-webui-hosting.md`). Changes to
+their save flows or CSS can change runtime behavior.
 
 ## Source of truth
 

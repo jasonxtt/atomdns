@@ -75,14 +75,6 @@ function metricRule(metricName) {
       return { field: 'latencySum', groupLabel: 'metrics_tag', tagLabel: 'tag' }
     case 'mosdns_aliapi_response_latency_millisecond_count':
       return { field: 'latencyCount', groupLabel: 'metrics_tag', tagLabel: 'tag' }
-    case 'mosdns_forward_query_total':
-      return { field: 'queryTotal', groupLabel: 'tag', tagLabel: 'upstream' }
-    case 'mosdns_forward_err_total':
-      return { field: 'errorTotal', groupLabel: 'tag', tagLabel: 'upstream' }
-    case 'mosdns_forward_response_latency_millisecond_sum':
-      return { field: 'latencySum', groupLabel: 'tag', tagLabel: 'upstream' }
-    case 'mosdns_forward_response_latency_millisecond_count':
-      return { field: 'latencyCount', groupLabel: 'tag', tagLabel: 'upstream' }
     default:
       return null
   }

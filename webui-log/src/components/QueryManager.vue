@@ -1,6 +1,6 @@
 <script setup>
 import CapabilityBoundary from './CapabilityBoundary.vue'
-import { capabilityState, supportsOperation, operationReason } from '../api/runtimeCapabilities'
+import { supportsOperation, operationReason } from '../api/runtimeCapabilities'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { getJSON, postJSON, putJSON } from '../api/http'
 import { clearTopNotice, setError, setSuccess } from '../utils/notice'
@@ -12,6 +12,8 @@ const props = defineProps({
     default: 'live'
   }
 })
+
+defineEmits(['open-diagnostic', 'close'])
 
 const loading = ref(false)
 
@@ -611,7 +613,7 @@ async function exportAliases() {
     const url = window.URL.createObjectURL(blob)
     const anchor = document.createElement('a')
     anchor.href = url
-    anchor.download = `mosdns-aliases-${new Date().toISOString().slice(0, 10)}.json`
+    anchor.download = `rtdns-aliases-${new Date().toISOString().slice(0, 10)}.json`
     document.body.appendChild(anchor)
     anchor.click()
     document.body.removeChild(anchor)
@@ -643,7 +645,7 @@ async function loadLogs(page = 1, append = false) {
       params.set('q', query)
       params.set('exact', String(exact))
     }
-    const data = await getJSON(`/api/${capabilityState.value?.kind === 'native' && capabilityState.value.endpoints.audit_v2 !== true ? 'v1' : 'v2'}/audit/logs?${params.toString()}`)
+    const data = await getJSON(`/api/v2/audit/logs?${params.toString()}`)
     const nextLogs = Array.isArray(data?.logs) ? data.logs : []
     pagination.value = data?.pagination || pagination.value
     logs.value = append ? [...logs.value, ...nextLogs] : nextLogs
@@ -729,6 +731,9 @@ function handleGlobalRefresh() {
 }
 
 onMounted(async () => {
+  // Registered first: a filter handed over from the overview arrives right after mounting.
+  window.addEventListener('mosdns-log-refresh', handleGlobalRefresh)
+  window.addEventListener('mosdns-open-log-filter-ready', handleOpenLogFilter)
   await Promise.all([
     loadAliases(),
     loadSpecialGroups()
@@ -736,8 +741,6 @@ onMounted(async () => {
   if (isLiveMode.value) {
     refreshLogs()
   }
-  window.addEventListener('mosdns-log-refresh', handleGlobalRefresh)
-  window.addEventListener('mosdns-open-log-filter-ready', handleOpenLogFilter)
 })
 
 onBeforeUnmount(() => {
@@ -755,6 +758,7 @@ onBeforeUnmount(() => {
           <p class="muted">支持分页与关键字过滤。输入带双引号表示精确匹配；支持按客户端别名搜索。</p>
         </div>
         <div class="actions">
+          <button class="btn tiny secondary" type="button" data-open-diagnostic @click="$emit('open-diagnostic')">诊断抓取</button>
           <CapabilityBoundary operation="client.aliases"><button class="btn secondary" @click="openAliasManager">客户端别名</button></CapabilityBoundary>
         </div>
       </header>
@@ -829,6 +833,10 @@ onBeforeUnmount(() => {
       <header class="panel-header">
         <div>
           <h3>诊断抓取</h3>
+          <p class="muted">开启一段时间的调试抓取，再获取日志查看每条查询经过的匹配器与插件。</p>
+        </div>
+        <div class="actions">
+          <button class="btn tiny secondary" type="button" data-back-to-live @click="$emit('close')">返回实时查询</button>
         </div>
       </header>
 
@@ -1094,7 +1102,7 @@ onBeforeUnmount(() => {
         <div class="form-grid alias-manual-grid">
           <label>手动新增</label>
           <div class="alias-manual-row">
-            <input v-model="manualAliasIp" placeholder="客户端 IP，例如 192.168.1.10" />
+            <input v-model="manualAliasIp" placeholder="客户端 IP，例如 192.0.2.10" />
             <input v-model="manualAliasName" placeholder="别名，例如 iPhone-15" />
             <button class="btn secondary" type="button" @click="addManualAlias">加入列表</button>
           </div>

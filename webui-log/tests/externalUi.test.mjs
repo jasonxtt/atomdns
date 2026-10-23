@@ -42,8 +42,8 @@ test('the external build uses relative resource URLs and a name-independent outp
 })
 
 test('the built-in UI links to every mounted mosdns UI package and explains refused ones', () => {
-  const panel = read('../src/components/system/SystemInfoPanel.vue')
-  assert.match(panel, /capabilityState\.health\?\.external_ui/)
+  const panel = read('../src/pages/system/SystemUpdateSection.vue')
+  assert.match(panel, /health\.value\?\.external_ui/)
   assert.match(panel, /entry\.kind === 'mosdns_ui' && entry\.mounted/)
   assert.match(panel, /entry\.kind === 'mosdns_ui' && !entry\.mounted/)
   assert.match(panel, /v-for="entry in mountedPackages"/)
@@ -53,8 +53,8 @@ test('the built-in UI links to every mounted mosdns UI package and explains refu
 })
 
 test('a port change made in an external UI stays under that UI\'s own path', () => {
-  const control = read('../src/components/SystemControlManager.vue')
-  assert.match(control, /url\.pathname = new URL\("\.\/", window\.location\.href\)\.pathname;/)
+  const control = read('../src/pages/system/SystemServiceSection.vue')
+  assert.match(control, /url\.pathname = new URL\('\.\/', window\.location\.href\)\.pathname/)
   assert.doesNotMatch(control, /\/main\//)
 })
 
