@@ -1,6 +1,6 @@
 <script setup>
 import CapabilityBoundary from './CapabilityBoundary.vue'
-import { capabilityState, supportsOperation, operationReason, switchTagForType } from '../api/runtimeCapabilities'
+import { supportsOperation, operationReason } from '../api/runtimeCapabilities'
 import { capabilityFetch } from '../api/runtimeCapabilities'
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { getJSON, getText, postJSON } from '../api/http'
@@ -208,8 +208,8 @@ const showAllPanels = computed(() => {
 })
 
 const showCachePanel = computed(() => showAllPanels.value || props.mode === 'cache-management')
-const showListStatsPanel = computed(() => showAllPanels.value || props.mode === 'domain-stats')
-const showRequeryPanel = computed(() => showAllPanels.value || props.mode === 'requery-cache')
+const showListStatsPanel = computed(() => showAllPanels.value || props.mode === 'domain-stats' || props.mode === 'learning')
+const showRequeryPanel = computed(() => showAllPanels.value || props.mode === 'requery-cache' || props.mode === 'learning')
 
 function formatDateForInputLocal(value) {
   if (!value || isZeroTime(value)) {
@@ -252,20 +252,6 @@ function buildCacheRows(metricsText) {
   })
 }
 
-async function loadCoreMode() {
-  if (!supportsOperation('switches.manage')) return
-  const tag = switchTagForType(3)
-  if (!tag) {
-    coreMode.value = ''
-    return
-  }
-  try {
-    coreMode.value = String(await getText(`/plugins/${encodeURIComponent(tag)}/show`) || '').trim().toUpperCase()
-  } catch {
-    coreMode.value = ''
-  }
-}
-
 async function requestResponse(url, options = {}) {
   const response = await capabilityFetch(url, options)
   if (!response.ok) {
@@ -299,12 +285,11 @@ async function refreshCacheStats(showMessage = false) {
   cacheRefreshing.value = true
   cacheLoadError.value = ''
   try {
-    const inventory = await loadCacheInventory(getJSON, {native:capabilityState.value?.kind === 'native'})
+    const inventory = await loadCacheInventory(getJSON)
     nativeCacheInventory.value = inventory
     if (inventory === null) {
       const groupsRes = await getJSON('/api/v1/special-groups').catch(() => [])
       specialGroups.value = Array.isArray(groupsRes) ? groupsRes : []
-      await loadCoreMode()
     }
     const metricsText = supportsOperation('metrics.cache') ? await getText('/metrics') : ''
     buildCacheRows(metricsText)

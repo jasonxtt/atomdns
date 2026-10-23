@@ -126,7 +126,7 @@ requery 不再清空学习名单（缓存照旧清空）；配置 schema 升到 
    用户决定不做桥接版（旧仓库从未发布 `rust-v*`，Go 更新器有一条路径读 `/releases/latest`）；tag 为 `vX.Y.Z`，发布包 `rtdns-linux-amd64.tar.gz`/`rtdns-update-manifest.json`，
    在线更新只来自 `jasonxtt/rtdns`，cargo bin 改为 `rtdns`，`native-host` 版本 `0.2.0`；README 已重写，发版与手动替换见 [release.md](../release.md)，
    演练记录见 [10-22-rtdns-rename](../validation-records/10-22-rtdns-rename/README.md)。生产 `rust-v0.1.4` 由用户手动替换为 `v0.2.0`。
-   仍待决定：WebUI 里的 “MosDNS” 界面文案（待 UI 重做时一并处理）；`scripts/cutover/`、`tools/cutover/` 仍按旧名/`rust-v*` 编写，已不适用于新程序。
+   WebUI 里的 “MosDNS” 界面文案已在 UI 重做第一段（2026-10-23）改为 rtdns，localStorage 键改用 `rtdns-` 前缀（旧键不迁移）；`scripts/cutover/`、`tools/cutover/` 仍按旧名/`rust-v*` 编写，已不适用于新程序。
 
 **M2-1 差分发现（2026-10-23 记录，后续小项）**
 9. **新学到域名的审计标签滞后**（P2，v0.2.2 已有）：域名刚被 `route_learner` 学到后，审计的 `matched_rule_source` 立即是学习类别，

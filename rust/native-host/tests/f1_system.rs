@@ -1,8 +1,8 @@
-//! F-1 system and appearance, against the real `rtdns` binary: the in-place
+//! F-1 system operations, against the real `rtdns` binary: the in-place
 //! restart (same process id, saved state loaded again, failure paths), the saved
-//! WebUI port taking effect at the next start, the process metrics and the
-//! appearance upload over a real socket. No public network: the upstream is a
-//! local UDP stub.
+//! WebUI port taking effect at the next start and the process metrics. The
+//! appearance routes were removed in the UI redo (2026-10-23). No public network:
+//! the upstream is a local UDP stub.
 #![cfg(unix)]
 #![allow(clippy::pedantic)]
 
@@ -352,22 +352,24 @@ fn restart_keeps_the_process_id_and_serves_again_from_saved_state() {
     let started = process_start_ticks(pid);
     // Warm the cache, and state a setting that must survive.
     assert!(ask(host.dns, "kept.example.com").is_some());
-    let appearance = host.api(
-        "POST",
-        "/api/v1/appearance/button-color",
-        br##"{"light":{"mode":"custom","color":"#112233"}}"##,
-    );
-    assert_eq!(appearance.0, 200);
+    let capacity = host.api("POST", "/api/v1/audit/capacity", br#"{"capacity": 1234}"#);
+    assert_eq!(capacity.0, 200, "{}", String::from_utf8_lossy(&capacity.1));
     // Capabilities and metrics are real.
     let capabilities = json(&host.api("GET", "/api/v1/capabilities", b""));
-    for id in [
-        "system.restart",
-        "appearance.server",
-        "system.webui_port",
-        "metrics.process",
-    ] {
+    for id in ["system.restart", "system.webui_port", "metrics.process"] {
         assert_eq!(capabilities["ui_operations"][id]["supported"], true, "{id}");
     }
+    assert!(
+        capabilities["ui_operations"]
+            .get("appearance.server")
+            .is_none(),
+        "the appearance operation is gone"
+    );
+    assert_eq!(
+        host.api("GET", "/api/v1/appearance/button-color", b"").0,
+        404,
+        "the appearance routes are gone"
+    );
     let metrics = String::from_utf8(host.api("GET", "/metrics", b"").1).unwrap();
     for name in [
         "process_cpu_seconds_total",
@@ -417,8 +419,8 @@ fn restart_keeps_the_process_id_and_serves_again_from_saved_state() {
         "the final save happened"
     );
     assert_eq!(
-        json(&host.api("GET", "/api/v1/appearance/button-color", b""))["light"]["color"],
-        "#112233",
+        json(&host.api("GET", "/api/v1/audit/capacity", b""))["capacity"],
+        1234,
         "settings are kept"
     );
     // A termination signal after a restart still stops the process normally.
@@ -536,56 +538,6 @@ fn saved_webui_port_scenario() -> Result<(), String> {
     Ok(())
 }
 
-fn multipart(content: &[u8]) -> (String, Vec<u8>) {
-    let boundary = "----f1boundary";
-    let mut body = format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"b.png\"\r\nContent-Type: image/png\r\n\r\n").into_bytes();
-    body.extend_from_slice(content);
-    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-    (format!("multipart/form-data; boundary={boundary}"), body)
-}
-
-#[test]
-fn an_upload_larger_than_the_default_body_limit_is_accepted_and_an_oversized_one_is_refused() {
-    let mut host = Host::start("upload");
-    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
-    png.resize(3 * 1024 * 1024, 5);
-    let (content_type, body) = multipart(&png);
-    let reply = http(
-        host.api,
-        "POST",
-        "/api/v1/appearance/panel-background/upload",
-        Some(&content_type),
-        &body,
-    )
-    .unwrap();
-    assert_eq!(reply.0, 200, "{}", String::from_utf8_lossy(&reply.1));
-    assert_eq!(json(&reply)["size"], png.len());
-    let image = host.api("GET", "/api/v1/appearance/panel-background/image", b"");
-    assert_eq!((image.0, image.1.len()), (200, png.len()));
-    // Beyond 20 MiB the request is rejected without being read.
-    let (content_type, body) = multipart(&vec![0_u8; 21 * 1024 * 1024]);
-    let result = http(
-        host.api,
-        "POST",
-        "/api/v1/appearance/panel-background/upload",
-        Some(&content_type),
-        &body,
-    );
-    assert!(
-        result
-            .as_ref()
-            .is_none_or(|reply| reply.0 == 400 || reply.0 == 413),
-        "{result:?}"
-    );
-    // The service is unaffected.
-    assert_eq!(
-        host.api("GET", "/api/v1/appearance/panel-background/history", b"")
-            .0,
-        200
-    );
-    assert!(host.terminate().success());
-}
-
 #[test]
 fn a_restart_goes_ahead_even_when_the_final_save_fails() {
     let mut host = Host::start_with("save-fails", false);
@@ -603,53 +555,4 @@ fn a_restart_goes_ahead_even_when_the_final_save_fails() {
     assert!(ask(host.dns, "unsaved.example.com").is_some_and(|answer| answer.len() > 12));
     // Without a restart request the same failure is still the exit-2 stop of the reference behaviour.
     assert_eq!(host.terminate().code(), Some(2));
-}
-
-#[test]
-fn only_one_image_upload_is_read_at_a_time() {
-    let mut host = Host::start("one-upload");
-    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
-    png.resize(2 * 1024 * 1024, 9);
-    let (content_type, body) = multipart(&png);
-    // A first upload announces its body and then stalls half way.
-    let mut slow = TcpStream::connect(("127.0.0.1", host.api)).unwrap();
-    slow.write_all(
-        format!(
-            "POST /api/v1/appearance/panel-background/upload HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\r\n",
-            body.len()
-        )
-        .as_bytes(),
-    )
-    .unwrap();
-    slow.write_all(&body[..body.len() / 2]).unwrap();
-    // The slot is claimed once the head is read; give the host a moment, then a second upload is refused at once.
-    std::thread::sleep(Duration::from_millis(300));
-    wait_until(
-        "the second upload is refused while the first is in flight",
-        || {
-            http(
-                host.api,
-                "POST",
-                "/api/v1/appearance/panel-background/upload",
-                Some(&content_type),
-                &body,
-            )
-            .is_some_and(|reply| reply.0 == 503)
-        },
-    );
-    // Other routes are unaffected meanwhile.
-    assert_eq!(host.api("GET", "/api/v1/appearance/text-color", b"").0, 200);
-    // The stalled client goes away: the slot is free again and the upload works.
-    drop(slow);
-    wait_until("the slot is released", || {
-        http(
-            host.api,
-            "POST",
-            "/api/v1/appearance/panel-background/upload",
-            Some(&content_type),
-            &body,
-        )
-        .is_some_and(|reply| reply.0 == 200)
-    });
-    assert!(host.terminate().success());
 }

@@ -248,10 +248,6 @@ async fn persist_and_publish_audit_capacity(
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 /// The largest request body accepted before the connection is rejected.
 const MAX_BODY_BYTES: usize = 1024 * 1024;
-/// The error text of a second concurrent image upload.
-const UPLOAD_BUSY: &str = "upload in progress";
-/// An image upload must arrive within this long once its head has been read.
-const UPLOAD_BODY_DEADLINE: Duration = Duration::from_secs(120);
 
 /// The host-owned management listener.
 pub struct ApiServer {
@@ -448,12 +444,8 @@ struct Request {
     method: String,
     target: String,
     if_none_match: Option<String>,
-    content_type: Option<String>,
     body: Vec<u8>,
 }
-
-/// Held while an image upload is being read and stored.
-type UploadPermit = Option<tokio::sync::SemaphorePermit<'static>>;
 
 struct Response {
     status: u16,
@@ -575,7 +567,7 @@ async fn process_connection(
     external_ui: Arc<crate::external_ui::Registry>,
     shutdown: TransportCancellation,
 ) -> io::Result<()> {
-    let (request, _upload_permit) = tokio::select! {
+    let request = tokio::select! {
         biased;
         () = shutdown.cancelled() => return Ok(()),
         request = read_request(&mut stream) => match request {
@@ -586,8 +578,6 @@ async fn process_connection(
                 let message = error.to_string();
                 let response = if message == "request body too large" {
                     Response::error(413, "bad request")
-                } else if message == UPLOAD_BUSY {
-                    Response::error(503, "another upload is in progress")
                 } else {
                     Response::error(400, "bad request")
                 };
@@ -868,7 +858,7 @@ where
 
 /// Reads one complete request head and its declared body. Returns `None` when
 /// the peer closed first, and an error when the request is unusable.
-async fn read_request(stream: &mut TcpStream) -> io::Result<Option<(Request, UploadPermit)>> {
+async fn read_request(stream: &mut TcpStream) -> io::Result<Option<Request>> {
     let mut buffer = Vec::new();
     let mut chunk = [0_u8; 1024];
     let header_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -891,7 +881,7 @@ async fn read_request(stream: &mut TcpStream) -> io::Result<Option<(Request, Upl
         buffer.extend_from_slice(&chunk[..read]);
     };
 
-    let (method, target, content_length, if_none_match, content_type) = {
+    let (method, target, content_length, if_none_match) = {
         let head = std::str::from_utf8(&buffer[..head_end])
             .map_err(|_| io::Error::other("request head is not UTF-8"))?;
         let mut lines = head.split("\r\n");
@@ -908,7 +898,6 @@ async fn read_request(stream: &mut TcpStream) -> io::Result<Option<(Request, Upl
 
         let mut content_length = 0_usize;
         let mut if_none_match = None;
-        let mut content_type = None;
         for line in lines {
             if let Some((key, value)) = line.split_once(':') {
                 if key.trim().eq_ignore_ascii_case("if-none-match") {
@@ -920,12 +909,6 @@ async fn read_request(stream: &mut TcpStream) -> io::Result<Option<(Request, Upl
                         .parse()
                         .map_err(|_| io::Error::other("invalid content length"))?;
                 }
-                if key.trim().eq_ignore_ascii_case("content-type") {
-                    if content_type.is_some() {
-                        return Err(io::Error::other("duplicate content type"));
-                    }
-                    content_type = Some(value.trim().to_owned());
-                }
             }
         }
         (
@@ -933,7 +916,6 @@ async fn read_request(stream: &mut TcpStream) -> io::Result<Option<(Request, Upl
             target.to_owned(),
             content_length,
             if_none_match,
-            content_type,
         )
     };
     let body_limit = if matches!(
@@ -944,42 +926,21 @@ async fn read_request(stream: &mut TcpStream) -> io::Result<Option<(Request, Upl
         }
     ) {
         crate::cache_dump::MAX_COMPRESSED
-    } else if target.split('?').next() == Some("/api/v1/appearance/panel-background/upload") {
-        crate::appearance::MAX_UPLOAD_BODY
     } else {
         MAX_BODY_BYTES
     };
     if content_length > body_limit {
         return Err(io::Error::other("request body too large"));
     }
-    // One image upload at a time, claimed before its body is read: a body can be 20 MiB and
-    // the management listener accepts any number of connections.
-    let is_upload = target.split('?').next() == Some("/api/v1/appearance/panel-background/upload");
-    let upload_permit = if is_upload {
-        Some(
-            crate::appearance::UPLOAD_SLOT
-                .try_acquire()
-                .map_err(|_| io::Error::other(UPLOAD_BUSY))?,
-        )
-    } else {
-        None
-    };
-    let body_deadline = is_upload.then(|| tokio::time::Instant::now() + UPLOAD_BODY_DEADLINE);
-
     let body_start = head_end + 4;
     while buffer.len() < body_start + content_length {
-        let read = match body_deadline {
-            Some(deadline) => tokio::time::timeout_at(deadline, stream.read(&mut chunk))
-                .await
-                .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "upload body deadline"))??,
-            None => stream.read(&mut chunk).await?,
-        };
+        let read = stream.read(&mut chunk).await?;
         if read == 0 {
             break;
         }
         buffer.extend_from_slice(&chunk[..read]);
     }
-    // The buffer itself becomes the body (no second copy of a large upload); an incomplete
+    // The buffer itself becomes the body (no second copy of a large body); an incomplete
     // body (the client went away) is an empty one.
     let body = if buffer.len() >= body_start + content_length {
         let mut body = buffer;
@@ -989,16 +950,12 @@ async fn read_request(stream: &mut TcpStream) -> io::Result<Option<(Request, Upl
     } else {
         Vec::new()
     };
-    Ok(Some((
-        Request {
-            method,
-            target,
-            if_none_match,
-            content_type,
-            body,
-        },
-        upload_permit,
-    )))
+    Ok(Some(Request {
+        method,
+        target,
+        if_none_match,
+        body,
+    }))
 }
 
 fn head_end(buffer: &[u8]) -> Option<usize> {
@@ -1387,7 +1344,6 @@ pub(crate) fn local_plugin_request<'a>(
             method: method.to_owned(),
             target: target.to_owned(),
             if_none_match: None,
-            content_type: None,
             body: body.to_vec(),
         };
         if !control.admission_open() {
@@ -2656,26 +2612,6 @@ async fn dispatch(
             headers: reply.headers,
         };
     }
-    if let Some(reply) = match webinfo_root {
-        Some(root) => {
-            crate::appearance::handle(
-                root,
-                &request.method,
-                path,
-                request.content_type.as_deref(),
-                &request.body,
-            )
-            .await
-        }
-        None => None,
-    } {
-        return Response {
-            status: reply.status,
-            content_type: reply.content_type,
-            body: reply.body,
-            headers: reply.headers,
-        };
-    }
     match route(&request.target) {
         Route::Capabilities => {
             if request.method != "GET" {
@@ -3228,7 +3164,6 @@ fn ui_operations(config: &CompiledConfig) -> serde_json::Value {
     );
     let restart = crate::restart::target().is_some();
     for (id, supported, reason) in [
-        ("appearance.server", true, ""),
         ("system.webui_port", true, ""),
         (
             "system.restart",

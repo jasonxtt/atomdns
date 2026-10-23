@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  OPERATION_IDS,
   createRuntimeCapabilityClient,
   validateRuntimeCapabilities
 } from '../src/api/runtimeCapabilities.js'
@@ -26,7 +27,8 @@ const nativeCapabilities = {
     upstream: { tags_get: true, config_get: true, config_post: true },
     diversion_sources: { list_get: true, put: true, delete: true },
     manual_rules: { show_get: true, save_get: true, post: true }
-  }
+  },
+  ui_operations: Object.fromEntries(OPERATION_IDS.map((id) => [id, { supported: true, reason: null }]))
 }
 
 test('runtime capability discovery caches native response for the page session', async () => {
@@ -41,20 +43,7 @@ test('runtime capability discovery caches native response for the page session',
   assert.equal(calls, 1)
 })
 
-test('only capability endpoint 404 selects the legacy Go workflow', async () => {
-  const client = createRuntimeCapabilityClient(async () => {
-    throw Object.assign(new Error('not found'), { status: 404 })
-  })
-  assert.deepEqual(await client(), { kind: 'legacy' })
-})
-
-test('legacy capability fallback retains successful diversion catalogs when an optional catalog is 404', async () => {
-  const getCapabilities = createRuntimeCapabilityClient(async () => {
-    throw Object.assign(new Error('not found'), { status: 404 })
-  })
-  const capabilities = await getCapabilities()
-  assert.equal(capabilities.kind, 'legacy')
-
+test('the diversion catalog loader keeps successful catalogs when an optional catalog is 404', async () => {
   const entries = [
     ['special_50', 'diversion_50'],
     ['geoipcn', 'geoip_cn']

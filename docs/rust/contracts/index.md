@@ -27,8 +27,8 @@ These files are short, source-backed rules for MosDNS-T backend and Rust migrati
 | [Native `requery`](native-requery.md) | Scheduled / triggered re-query job, reference state file, shared in-process URL actions, scheduler and API |
 | [Native `domain_output`](native-domain-output.md) | Name statistics (the access ranking), reference file formats, rule publication, `/show` `/save` `/flush` API; mapper injection moved to `route_learner` |
 | [Native `route_learner`](native-route-learner.md) | Learned routing facts (remembered direct/proxy, no-V4/no-V6, special names): per-entry expiry, mapper merge, state file, hot-apply hand-over, `show`/`save`/`flush`/`entries`/`status`, config schema 2 |
-| [Native online update](native-update.md) | `vX.Y.Z` releases of `jasonxtt/rtdns`, sha256-verified program and `config_rust` package updates, guarded transaction with automatic rollback that does not depend on the service manager, configuration export/update from URL |
-| [Native WebUI hosting](native-webui-hosting.md) | Same-origin embedded/external UI, truthful health/version, capability admission and opt-in pure native build |
+| [Native online update](native-update.md) | `vX.Y.Z` releases of `jasonxtt/rtdns`, sha256-verified program and `config_rust` package updates, guarded transaction with automatic rollback that does not depend on the service manager, configuration export (update from URL removed 2026-10-23) |
+| [Native WebUI hosting](native-webui-hosting.md) | Same-origin embedded/external UI, built-in UI structure (sidebar, hash routes, themes; appearance API removed 2026-10-23), truthful health/version, capability admission and opt-in pure native build |
 
 ## Before development
 

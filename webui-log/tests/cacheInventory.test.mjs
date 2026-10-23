@@ -2,15 +2,14 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { loadCacheInventory, parseCacheMetrics, summarizeCacheFlush } from '../src/utils/cacheInventory.js'
 
-test('catalog uses actual ordered tags including empty catalog and permits only explicit fallback', async () => {
+test('catalog uses actual ordered tags including empty catalog', async () => {
   const caches = await loadCacheInventory(async () => ({ schema_version: 1, caches: [{ tag: 'zeta' }, { tag: 'alpha' }] }))
   assert.deepEqual(caches.map((cache) => cache.tag), ['zeta', 'alpha'])
   assert.deepEqual(await loadCacheInventory(async () => ({ schema_version: 1, caches: [] })), [])
-  assert.equal(await loadCacheInventory(async () => { throw Object.assign(new Error('not found'), { status: 404 }) }), null)
-  assert.equal(await loadCacheInventory(async () => ({ supported: false })), null)
 })
-test('failures and unknown/malformed schema never become the legacy fake catalog', async () => {
-  for (const status of [400, 401, 403, 500, 501]) {
+test('failures, an unsupported catalog and unknown/malformed schema are errors, never a fixed catalog', async () => {
+  await assert.rejects(loadCacheInventory(async () => ({ supported: false })), /不一致/)
+  for (const status of [400, 401, 403, 404, 500, 501]) {
     await assert.rejects(loadCacheInventory(async () => { throw Object.assign(new Error('failed'), { status }) }))
   }
   await assert.rejects(loadCacheInventory(async () => { throw new Error('timeout') }))
