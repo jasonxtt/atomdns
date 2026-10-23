@@ -20,6 +20,8 @@ sys.path.insert(0, str(HERE.parent / "e2e-1"))
 from dnswire import decode, question  # noqa: E402
 
 TAGS = ("my_sv4list", "my_realiplist", "my_fakeiplist", "my_nov6list", "my_nov4list")
+# Audit names of the question types the replays send (SOA/PTR/HTTPS: the M2-1 differential).
+QTYPES = {1: "A", 6: "SOA", 12: "PTR", 28: "AAAA", 65: "HTTPS"}
 CACHES = ("cache_all", "cache_all_noleak", "cache_cn", "cache_google", "cache_google_node", "cache_node", "cache_cnmihomo")
 
 
@@ -96,7 +98,7 @@ class Agent:
                         client = ipaddress.ip_address(entry["client_ip"])
                         client = getattr(client, "ipv4_mapped", None) or client
                         if (entry["query_name"].rstrip(".").lower() == row["name"]
-                                and entry["query_type"] == {1: "A", 28: "AAAA"}[row["type"]]
+                                and entry["query_type"] == QTYPES[row["type"]]
                                 and str(client) == row["source"]):
                             audit = entry
                             break

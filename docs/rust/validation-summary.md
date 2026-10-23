@@ -7,6 +7,8 @@ not imply complete feature coverage or performance acceptance.
 
 ## Native switch state task (2026-10-06; cumulative C2C review PASS)
 
+Superseded on 2026-10-23 by named feature flags (configuration schema 3): [10-23-feature-flags](validation-records/10-23-feature-flags/README.md). The text below is historical.
+
 The current S4–S6 implementation adds configured `switch1`–`switch17` tags to
 the native HTTP API, a value-free capability inventory with config generation,
 durable exact-value control, and generic native controls in both Vue shells.

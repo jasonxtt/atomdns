@@ -1,17 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::collections::BTreeSet;
 
 use mosdns_dns_core::{QueryHeader, QuestionInfo, ResponseError as DnsResponseError, TtlInfo};
 
 const MAX_SYNTHESIZED_RCODE: u16 = 0x0fff;
-
-/// Immutable per-admission value facts shared by cheap clones.
-///
-/// The sequence layer only stores and shares this map. It never interprets
-/// keys or values: the host defines the key space when it admits a request
-/// and every matcher that needs one of those values reads it through
-/// [`ExecutionState::admission_value`].
-pub type AdmissionFacts = Arc<BTreeMap<u32, Arc<str>>>;
 
 /// Owned query data and the typed state carried by a sequence invocation.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -21,10 +12,6 @@ pub struct ExecutionState {
     pub fast_flags: u64,
     pub response: ResponseState,
     pub routing: RoutingState,
-    /// The immutable values captured when the host admitted this request.
-    /// Clones and snapshots share the same allocation; the map is never
-    /// mutated after admission.
-    pub admission_facts: AdmissionFacts,
     response_generation: u64,
     response_origin: Option<ResponseOrigin>,
 }
@@ -42,7 +29,6 @@ impl ExecutionState {
             fast_flags: 0,
             response: ResponseState::None,
             routing: RoutingState::default(),
-            admission_facts: AdmissionFacts::default(),
             response_generation: 0,
             response_origin: None,
         }
@@ -56,20 +42,7 @@ impl ExecutionState {
             fast_flags: self.fast_flags,
             response: self.response.clone(),
             routing: self.routing.clone(),
-            admission_facts: self.admission_facts.clone(),
         }
-    }
-
-    /// Replaces the immutable admission facts. Only the host calls this, once,
-    /// at request admission; sequence execution never rewrites the values.
-    pub fn set_admission_facts(&mut self, facts: AdmissionFacts) {
-        self.admission_facts = facts;
-    }
-
-    /// The immutable admitted value for one host-defined fact key.
-    #[must_use]
-    pub fn admission_value(&self, key: u32) -> Option<&str> {
-        self.admission_facts.get(&key).map(Arc::as_ref)
     }
 
     pub fn set_response(&mut self, response: ResponseState) {
@@ -164,14 +137,6 @@ impl ExecutionState {
             ResponseState::None | ResponseState::Synthesized(_) => Ok(None),
             ResponseState::Raw(wire) => inspector.inspect(&wire.0).map(Some),
         }
-    }
-}
-
-impl StateSnapshot {
-    /// The immutable admitted value for one host-defined fact key.
-    #[must_use]
-    pub fn admission_value(&self, key: u32) -> Option<&str> {
-        self.admission_facts.get(&key).map(Arc::as_ref)
     }
 }
 
@@ -338,8 +303,6 @@ pub struct StateSnapshot {
     pub fast_flags: u64,
     pub response: ResponseState,
     pub routing: RoutingState,
-    /// Shared with the observed state; snapshots never rebuild the map.
-    pub admission_facts: AdmissionFacts,
 }
 
 /// Typed matcher-produced state changes. Matchers cannot mutate state

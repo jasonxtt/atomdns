@@ -123,7 +123,7 @@ pub(crate) fn actual_path(path: &Path) -> PathBuf {
             return crate::special_groups::lexical_path(&canonical);
         }
     }
-    crate::switch::normalized_artifact(path)
+    crate::config::normalized_artifact(path)
 }
 
 #[cfg(test)]

@@ -69,6 +69,15 @@
 5. **建 Release**，一次上传三个资产：程序包、清单、`config_rust_up.zip`（文件名必须与 `config.url` 末段一致）。
    Release 建好后，用 `curl -fsSL <config.url> | sha256sum` 再核对一次与元数据一致。更新器只在 `applied_config_schema < required_config_schema` 时下载配置包。
 
+## 配置 schema 3（功能开关，M2-1，2026-10-23；随 v0.3.0 发布）
+
+- 新程序要求 `rust-config-schema-3` 的配置包：`switch1`–`switch17` 换成 `sub_config/flags.yaml` 里的 13 个具名开关（`feature_flag`），包删除 `sub_config/switch.yaml`。
+  旧配置里的 `switchN` 插件或匹配写法在新程序里加载失败；手动替换程序时必须同时更新配置包。
+- 开关值改存 `webinfo/settings.json` 的 `flags` 段。首次正常启动时从 `rule/switchN.txt` 迁移一次（在线更新试运行期间不写，回滚安全），旧文件保留但不再读取。
+- 旧接口 `/plugins/switchN/show|post` 已删除；现 WebUI 的开关页在 UI 重做前不可用，可用 `GET/POST/DELETE /api/v1/flags[/{名字}]`（见 [native-feature-flags](contracts/native-feature-flags.md)）。
+- **手动降级到 v0.2.2**：先从 `webinfo/settings.json` 删掉 `flags` 键（v0.2.2 不认识它，会拒绝启动），并换回 schema 2 的配置包。
+  旧的 `rule/switchN.txt` 仍在，但取值停留在迁移那一刻，降级前若在新程序里改过开关，需要手动把对应文件改成 `A`/`B`。
+
 ## v0.2.2 升级说明（配置 schema 2，2026-10-23，路由学习重做）
 
 - 新程序要求 `rust-config-schema-2` 的配置包；旧 schema 1 的配置（`domain_output` 带 `target_mapper`）在新程序里加载失败。

@@ -18,15 +18,19 @@ plugins:
       dump_file: "cache/cache.dump"
       dump_interval: 60
 
-  - tag: switch_one
-    type: switch1
+  - tag: lazy_cache
+    type: feature_flag
     args:
-      initial_value: "state/switch1.txt"
+      label: 过期缓存
+      description: 只用于测试 check 不写文件
+      section: cache
+      kind: bool
+      default: true
 
   - tag: entry
     type: sequence
     args:
-      - matches: switch1 'A'
+      - matches: flag lazy_cache
         exec: $cache_main
       - exec: $fwd
 

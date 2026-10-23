@@ -449,8 +449,6 @@ struct Request {
     target: String,
     if_none_match: Option<String>,
     content_type: Option<String>,
-    config_generation: Option<String>,
-    config_generation_duplicate: bool,
     body: Vec<u8>,
 }
 
@@ -893,15 +891,7 @@ async fn read_request(stream: &mut TcpStream) -> io::Result<Option<(Request, Upl
         buffer.extend_from_slice(&chunk[..read]);
     };
 
-    let (
-        method,
-        target,
-        content_length,
-        if_none_match,
-        content_type,
-        config_generation,
-        config_generation_duplicate,
-    ) = {
+    let (method, target, content_length, if_none_match, content_type) = {
         let head = std::str::from_utf8(&buffer[..head_end])
             .map_err(|_| io::Error::other("request head is not UTF-8"))?;
         let mut lines = head.split("\r\n");
@@ -919,8 +909,6 @@ async fn read_request(stream: &mut TcpStream) -> io::Result<Option<(Request, Upl
         let mut content_length = 0_usize;
         let mut if_none_match = None;
         let mut content_type = None;
-        let mut config_generation = None;
-        let mut config_generation_duplicate = false;
         for line in lines {
             if let Some((key, value)) = line.split_once(':') {
                 if key.trim().eq_ignore_ascii_case("if-none-match") {
@@ -938,16 +926,6 @@ async fn read_request(stream: &mut TcpStream) -> io::Result<Option<(Request, Upl
                     }
                     content_type = Some(value.trim().to_owned());
                 }
-                if key
-                    .trim()
-                    .eq_ignore_ascii_case("x-mosdns-config-generation")
-                {
-                    if config_generation.is_some() {
-                        config_generation_duplicate = true;
-                    } else {
-                        config_generation = Some(value.trim().to_owned());
-                    }
-                }
             }
         }
         (
@@ -956,8 +934,6 @@ async fn read_request(stream: &mut TcpStream) -> io::Result<Option<(Request, Upl
             content_length,
             if_none_match,
             content_type,
-            config_generation,
-            config_generation_duplicate,
         )
     };
     let body_limit = if matches!(
@@ -1019,8 +995,6 @@ async fn read_request(stream: &mut TcpStream) -> io::Result<Option<(Request, Upl
             target,
             if_none_match,
             content_type,
-            config_generation,
-            config_generation_duplicate,
             body,
         },
         upload_permit,
@@ -1029,30 +1003,6 @@ async fn read_request(stream: &mut TcpStream) -> io::Result<Option<(Request, Upl
 
 fn head_end(buffer: &[u8]) -> Option<usize> {
     buffer.windows(4).position(|window| window == b"\r\n\r\n")
-}
-
-fn parse_config_generation(value: &str) -> io::Result<u64> {
-    if value.is_empty()
-        || !value.bytes().all(|byte| byte.is_ascii_digit())
-        || (value.len() > 1 && value.starts_with('0'))
-    {
-        return Err(io::Error::other("invalid config generation"));
-    }
-    value
-        .parse::<u64>()
-        .map_err(|_| io::Error::other("invalid config generation"))
-}
-
-fn switch_generation_response(request: &Request, current: u64) -> Option<Response> {
-    if request.config_generation_duplicate {
-        return Some(Response::error(400, "duplicate config generation"));
-    }
-    let value = request.config_generation.as_deref()?;
-    match parse_config_generation(value) {
-        Ok(expected) if expected == current => None,
-        Ok(_) => Some(Response::error(409, "configuration generation is stale")),
-        Err(_) => Some(Response::error(400, "invalid config generation")),
-    }
 }
 
 async fn write_response<W: AsyncWrite + Unpin>(
@@ -1424,7 +1374,7 @@ type LocalReply<'a> =
 /// Serves a plugin-route request the way the management listener does, without
 /// a connection: `domain_output` and `requery` call their own host through it.
 /// The reply is `(status, body)`. `None` for a route this entrance does not
-/// own (a switch, say); the caller then sends the request over HTTP.
+/// own; the caller then sends the request over HTTP.
 pub(crate) fn local_plugin_request<'a>(
     control: &'a crate::runtime_snapshot::RuntimeControl,
     method: &'a str,
@@ -1438,19 +1388,12 @@ pub(crate) fn local_plugin_request<'a>(
             target: target.to_owned(),
             if_none_match: None,
             content_type: None,
-            config_generation: None,
-            config_generation_duplicate: false,
             body: body.to_vec(),
         };
         if !control.admission_open() {
             return Some((503, b"host is applying configuration\n".to_vec()));
         }
         let view = control.view();
-        if let Route::Plugin { tag, .. } = route(&request.target) {
-            if view.switches.is_known(tag.as_ref()) {
-                return None;
-            }
-        }
         let _lease = if request_mutates_managed_state(&request) {
             match control.begin_management_mutation() {
                 Ok(lease) => Some(lease),
@@ -2644,19 +2587,6 @@ async fn dispatch(
     shutdown: &TransportCancellation,
     request: &Request,
 ) -> Response {
-    if let Some(switches) = runtime_snapshot.map(|snapshot| &snapshot.switches) {
-        if let Route::Plugin { tag, action } = route(&request.target) {
-            if switches.is_known(tag.as_ref()) {
-                let current_generation = control
-                    .as_ref()
-                    .map_or(config.generation, |control| control.generation());
-                if let Some(response) = switch_generation_response(request, current_generation) {
-                    return response;
-                }
-                return dispatch_switch(switches, tag.as_ref(), action, request).await;
-            }
-        }
-    }
     if let Some(response) = plugin_response(config, cache, request).await {
         return response;
     }
@@ -2751,7 +2681,7 @@ async fn dispatch(
             if request.method != "GET" {
                 return Response::method_not_allowed();
             }
-            Response::json(&capabilities(config, runtime_snapshot))
+            Response::json(&capabilities(config))
         }
         Route::CacheInventory => {
             if request.method != "GET" {
@@ -3138,117 +3068,6 @@ async fn dispatch(
     }
 }
 
-enum SwitchValueError {
-    Invalid,
-    UnsupportedMedia,
-}
-
-fn switch_value(request: &Request) -> Result<String, SwitchValueError> {
-    let content_type = request
-        .content_type
-        .as_deref()
-        .unwrap_or("application/json");
-    let mut parts = content_type.split(';');
-    let media_type = parts.next().unwrap_or_default().trim().to_ascii_lowercase();
-    let form = match media_type.as_str() {
-        "application/json" => false,
-        "application/x-www-form-urlencoded" => true,
-        _ => return Err(SwitchValueError::UnsupportedMedia),
-    };
-    for parameter in parts {
-        let (key, value) = parameter.split_once('=').ok_or(SwitchValueError::Invalid)?;
-        if key.trim().eq_ignore_ascii_case("charset") {
-            let value = value.trim().trim_matches('"');
-            if !value.eq_ignore_ascii_case("utf-8") {
-                return Err(SwitchValueError::UnsupportedMedia);
-            }
-        }
-    }
-
-    if form {
-        let body = std::str::from_utf8(&request.body).map_err(|_| SwitchValueError::Invalid)?;
-        let mut value = None;
-        for pair in body.split('&') {
-            if pair.is_empty() {
-                return Err(SwitchValueError::Invalid);
-            }
-            let (raw_key, raw_value) = pair.split_once('=').unwrap_or((pair, ""));
-            let key = decode_query_component(raw_key).map_err(|_| SwitchValueError::Invalid)?;
-            if key != "value" || value.is_some() {
-                return Err(SwitchValueError::Invalid);
-            }
-            value = Some(decode_query_component(raw_value).map_err(|_| SwitchValueError::Invalid)?);
-        }
-        return value.ok_or(SwitchValueError::Invalid);
-    }
-
-    let value: serde_json::Value =
-        serde_json::from_slice(&request.body).map_err(|_| SwitchValueError::Invalid)?;
-    let object = value.as_object().ok_or(SwitchValueError::Invalid)?;
-    if object.len() != 1 {
-        return Err(SwitchValueError::Invalid);
-    }
-    let value = object
-        .get("value")
-        .or_else(|| object.get("Value"))
-        .and_then(serde_json::Value::as_str)
-        .ok_or(SwitchValueError::Invalid)?;
-    Ok(value.to_owned())
-}
-
-fn switch_mutation_response(error: crate::switch_state::SwitchMutationError) -> Response {
-    use crate::switch_state::SwitchMutationError;
-    match error {
-        SwitchMutationError::UnknownTag(_) => Response::error(404, "404 page not found"),
-        SwitchMutationError::ReadOnly { reason, .. } => Response::error(403, &reason),
-        SwitchMutationError::ValueTooLarge { .. } => Response::error(413, "switch value too large"),
-        SwitchMutationError::Busy { .. } | SwitchMutationError::Overloaded => {
-            Response::error(409, "switch mutation is busy")
-        }
-        SwitchMutationError::Closed
-        | SwitchMutationError::Paused
-        | SwitchMutationError::RecoveryRequired => {
-            Response::error(503, "switch mutation unavailable")
-        }
-        SwitchMutationError::Conflict { reason, .. } => Response::error(409, &reason),
-        SwitchMutationError::Io { reason, .. } => Response::error(500, &reason),
-    }
-}
-
-async fn dispatch_switch(
-    registry: &crate::switch_state::SwitchRegistry,
-    tag: &str,
-    action: &str,
-    request: &Request,
-) -> Response {
-    match (request.method.as_str(), action) {
-        ("GET", "show") => Response::text(registry.show(tag).unwrap_or_default()),
-        ("POST", "post") => {
-            let value = match switch_value(request) {
-                Ok(value) => value,
-                Err(SwitchValueError::Invalid) => {
-                    return Response::error(400, "invalid switch value");
-                }
-                Err(SwitchValueError::UnsupportedMedia) => {
-                    return Response::error(415, "unsupported switch content type");
-                }
-            };
-            match registry.post(tag, value) {
-                Ok(ticket) => match ticket.complete().await {
-                    Ok(()) => Response::text(format!(
-                        "updated to: {}\n",
-                        registry.show(tag).unwrap_or_default()
-                    )),
-                    Err(error) => switch_mutation_response(error),
-                },
-                Err(error) => switch_mutation_response(error),
-            }
-        }
-        (_, "show" | "post") => Response::method_not_allowed(),
-        _ => Response::error(404, "404 page not found"),
-    }
-}
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)] // validated for shape only: the managed profile that consumed it was removed
@@ -3270,10 +3089,7 @@ struct GroupMutation {
     custom_port_only: bool,
 }
 
-fn ui_operations(
-    config: &CompiledConfig,
-    switches: Option<&crate::switch_state::SwitchRegistry>,
-) -> serde_json::Value {
+fn ui_operations(config: &CompiledConfig) -> serde_json::Value {
     use crate::rule_sources::Kind;
     // Upstream edits go to the typed settings of the `aliapi` groups.
     let settings_upstreams = config.reload.is_some() && !config.effective_upstreams.is_empty();
@@ -3348,12 +3164,12 @@ fn ui_operations(
     ] {
         operations.insert(id.to_owned(), serde_json::json!({"supported": supported, "reason": if supported { None } else { Some(reason) }}));
     }
-    let switch_supported = switches.is_some_and(|registry| !registry.capabilities().is_empty());
+    let flags = crate::settings_api::flags_available(config);
     operations.insert(
-        "switches.manage".to_owned(),
+        "flags.manage".to_owned(),
         serde_json::json!({
-            "supported": switch_supported,
-            "reason": if switch_supported { None::<&str> } else { Some("当前配置没有已接入的 switch owner") }
+            "supported": flags,
+            "reason": if flags { None::<&str> } else { Some("当前配置没有从文件加载的 feature_flag") }
         }),
     );
     let aliases = config
@@ -3455,10 +3271,7 @@ fn ui_operations(
     serde_json::Value::Object(operations)
 }
 
-fn capabilities(
-    config: &CompiledConfig,
-    runtime_snapshot: Option<&crate::runtime_snapshot::RuntimeSnapshot>,
-) -> serde_json::Value {
+fn capabilities(config: &CompiledConfig) -> serde_json::Value {
     let enabled = config.standard_groups.is_some();
     // Upstream edits are available on a file-backed configuration that has `aliapi` groups.
     let upstream_edit = enabled || settings_upstreams(config);
@@ -3472,26 +3285,6 @@ fn capabilities(
     } else {
         Vec::new()
     };
-    let switches = runtime_snapshot
-        .map(|snapshot| {
-            snapshot
-                .switches
-                .capabilities()
-                .into_iter()
-                .map(|item| {
-                    serde_json::json!({
-                        "type": format!("switch{}", item.type_number),
-                        "tag": item.tag,
-                        "readable": item.readable,
-                        "writable": item.writable,
-                        "reason": item.reason,
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let generation =
-        runtime_snapshot.map_or(config.generation, |snapshot| snapshot.config.generation);
     // The settings-backed upstream page carries the proxy switch (`use_proxy`)
     // when every `aliapi` group names a plugin-level `proxy`; the managed
     // upstream overrides do not.
@@ -3514,12 +3307,7 @@ fn capabilities(
     serde_json::json!({
         "schema_version": 1,
         "runtime": "rust",
-        "ui_operations": ui_operations(config, runtime_snapshot.map(|snapshot| &snapshot.switches)),
-        "switches": {
-            "schema_version": 1,
-            "config_generation": generation.to_string(),
-            "instances": switches,
-        },
+        "ui_operations": ui_operations(config),
         "special_groups": {
             "enabled": enabled,
             "profile": if config.standard_groups.is_some() { Some("schema4_standard") } else if enabled { Some("local_text_dns_v1") } else { None::<&str> }

@@ -14,8 +14,6 @@ pub(crate) struct RuntimeSnapshot {
     pub config: Rc<CompiledConfig>,
     pub forwards: Rc<ForwardCatalog>,
     pub cache: Rc<CacheCatalog>,
-    /// The switch owners admitted with this committed view.
-    pub switches: crate::switch_state::SwitchRegistry,
     pub options: HostOptions,
     active: Cell<usize>,
     drained: Notify,
@@ -105,7 +103,7 @@ struct Control {
 
 pub(crate) struct ManagementLease(RuntimeControl);
 
-/// A weak control handle for switch owners. The registry must never keep the
+/// A weak control handle for host-owned plugin work. It must never keep the
 /// committed view alive: a strong cycle would leak the managed-state writer.
 #[derive(Clone)]
 pub(crate) struct RuntimeControlWeak(std::rc::Weak<Control>);
@@ -118,21 +116,6 @@ impl RuntimeControlWeak {
     /// The control, unless the host has been dropped.
     pub(crate) fn upgrade(&self) -> Option<RuntimeControl> {
         self.0.upgrade().map(RuntimeControl)
-    }
-
-    /// Acquires the management lease, or `None` while admission is paused,
-    /// closed, or recovering.
-    pub(crate) fn begin_management_mutation(&self) -> Option<ManagementLease> {
-        let control = self.0.upgrade().map(RuntimeControl)?;
-        control.begin_management_mutation().ok()
-    }
-
-    /// Fences admission and stops the host after a fatal ambiguity.
-    pub(crate) fn fatal_recovery(&self) {
-        if let Some(control) = self.0.upgrade().map(RuntimeControl) {
-            control.enter_recovery_required();
-            control.stop_host();
-        }
     }
 }
 
@@ -378,15 +361,6 @@ impl RuntimeControl {
         options: HostOptions,
         observer: Arc<QueryObserver>,
     ) -> Result<Self, AssemblyError> {
-        let switches =
-            crate::switch_state::SwitchRegistry::build(&config.switches).map_err(|error| {
-                AssemblyError::Runtime(format!(
-                    "switch `{}` state file `{}` failed admission: {}",
-                    error.tag,
-                    error.path.display(),
-                    error.reason
-                ))
-            })?;
         let control = Self(Rc::new(Control {
             updates: Rc::new(ListenerMailbox {
                 open: Cell::new(false),
@@ -399,7 +373,6 @@ impl RuntimeControl {
                 config,
                 forwards,
                 cache,
-                switches,
                 options,
                 active: Cell::new(0),
                 drained: Notify::new(),
@@ -424,12 +397,6 @@ impl RuntimeControl {
             observer,
             shutdown: RefCell::new(None),
         }));
-        control
-            .0
-            .current
-            .borrow()
-            .switches
-            .attach_control(RuntimeControlWeak::from_control(&control));
         Ok(control)
     }
 
@@ -660,26 +627,12 @@ impl RuntimeControl {
             cache: Rc::downgrade(&cache),
             observer: self.0.observer.clone(),
         }));
-        // Unchanged switch owners carry over as live objects so their values
-        // stay whatever the latest publication left; new or moved owners read
-        // their bounded file here and abort the candidate on failure.
-        let switches =
-            crate::switch_state::SwitchRegistry::rebind(Some(&current.switches), &config.switches)
-                .map_err(|error| {
-                    AssemblyError::Runtime(format!(
-                        "switch `{}` state file `{}` failed candidate admission: {}",
-                        error.tag,
-                        error.path.display(),
-                        error.reason
-                    ))
-                })?;
         // Allocate the generation-qualified registry before publication.
         let added_metric_labels = self.0.observer.register_generation(&config);
         let snapshot = Rc::new(RuntimeSnapshot {
             config,
             forwards,
             cache,
-            switches,
             options,
             active: Cell::new(0),
             drained: Notify::new(),
@@ -829,12 +782,6 @@ impl RuntimeControl {
             .take()
             .expect("prepared graph is consumed once");
         let generation = next.config.generation;
-        // Carried switch owners hold the latest surviving values; the
-        // aggregate is rebuilt synchronously here, after every accepted
-        // mutation of the previous view has drained.
-        next.switches.refresh_aggregate();
-        next.switches
-            .attach_control(RuntimeControlWeak::from_control(&self.clone()));
         self.0.observer.enable_snapshot_audit(&next.config);
         if let Some(periodic) = &prepared.periodic {
             periodic.activate();
@@ -883,23 +830,6 @@ impl RuntimeControl {
 
     pub fn install(&self, prepared: PreparedSnapshot) -> Result<u64, AssemblyError> {
         self.validate_install(&prepared)?;
-        // Pending switch owners are admitted before publication; the
-        // production path does this after the management drain in
-        // `apply_candidate`.
-        if let Err(error) = prepared
-            .snapshot
-            .as_ref()
-            .expect("prepared graph")
-            .switches
-            .complete_pending_admissions()
-        {
-            return Err(AssemblyError::Runtime(format!(
-                "switch `{}` state file `{}` failed candidate admission: {}",
-                error.tag,
-                error.path.display(),
-                error.reason
-            )));
-        }
         let (generation, listener_published) = self.install_committed(prepared);
         if !listener_published {
             self.enter_recovery_required();
@@ -1098,34 +1028,6 @@ impl RuntimeControl {
             drop(prepared);
             self.resume_admission();
             return Err(ApplyFailure::Shutdown);
-        }
-        let previous = self.0.current.borrow().clone();
-        prepared
-            .snapshot
-            .as_ref()
-            .expect("prepared graph")
-            .switches
-            .rebase_carried_values(&previous.switches);
-        // The old generation must be freed by retirement, not by the end of this function.
-        drop(previous);
-        // Pending switch owners are admitted only now, after every accepted
-        // mutation of the previous view drained, so a late old-owner write
-        // cannot be overwritten by a stale preparation-time read.
-        if let Err(error) = prepared
-            .snapshot
-            .as_ref()
-            .expect("prepared graph")
-            .switches
-            .complete_pending_admissions()
-        {
-            drop(prepared);
-            self.resume_admission();
-            return Err(ApplyFailure::Invalid(format!(
-                "switch `{}` state file `{}` failed candidate admission: {}",
-                error.tag,
-                error.path.display(),
-                error.reason
-            )));
         }
 
         let old_cache = self.0.current.borrow().cache.clone();
@@ -1345,7 +1247,6 @@ impl RuntimeControl {
     pub(crate) async fn close(&self) -> Result<(), AssemblyError> {
         self.0.closed.set(true);
         self.0.admitting.set(false);
-        self.0.current.borrow().switches.close();
         self.0.updates.open.set(false);
         self.0.updates.pending.borrow_mut().take();
         self.0.updates.ready.notify_waiters();
@@ -1364,9 +1265,6 @@ impl RuntimeControl {
         current.config.local.close().await;
         current.config.rule_sources.close().await;
         current.forwards.close_all().await;
-        // Accepted switch mutations complete their durable write and
-        // publication even during shutdown.
-        current.switches.drain().await;
         failure.map_or(Ok(()), Err)
     }
 }

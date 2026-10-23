@@ -596,7 +596,7 @@ fn render(groups: &[Group], resolutions: &BTreeMap<u32, Resolution>) -> String {
         }
         let _ = write!(
             b,
-            "  - tag: sequence_special_{n}\n    type: sequence\n    args:\n      - matches: switch4 'A'\n        exec: $cache_special_{n}\n      - exec: flow_setter group=special_{n} sequence=sequence_special_{n} upstream=special_upstream_{n}\n      - exec: $special_upstream_{n}\n      - exec: cname_remover\n\n"
+            "  - tag: sequence_special_{n}\n    type: sequence\n    args:\n      - matches: flag lazy_cache\n        exec: $cache_special_{n}\n      - exec: flow_setter group=special_{n} sequence=sequence_special_{n} upstream=special_upstream_{n}\n      - exec: $special_upstream_{n}\n      - exec: cname_remover\n\n"
         );
         if !resolutions[&n].entries.is_empty() && g.listen_port != 0 {
             for protocol in ["udp", "tcp"] {

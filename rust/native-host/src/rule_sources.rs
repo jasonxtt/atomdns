@@ -429,7 +429,7 @@ impl RuleSources {
         self.inner.providers.iter().any(|provider| {
             provider.source_files().iter().any(|source| {
                 crate::managed_ip::actual_path(source) == file
-                    || crate::switch::paths_collide(source, file)
+                    || crate::config::paths_collide(source, file)
             })
         })
     }

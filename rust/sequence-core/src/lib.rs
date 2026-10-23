@@ -17,10 +17,9 @@ pub use program::{
     ValidatedFixture, ValidatedProgram, ValidatedRule, ValidatedSequence,
 };
 pub use state::{
-    AdmissionFacts, ClientContext, ClientTransport, DnsResponseInspector, ExecutionState,
-    OwnedResponseWire, QueryState, ResponseError, ResponseInspection, ResponseInspector,
-    ResponseOrigin, ResponseState, RoutingField, RoutingState, StateMutation, StateSnapshot,
-    SynthesizedResponse,
+    ClientContext, ClientTransport, DnsResponseInspector, ExecutionState, OwnedResponseWire,
+    QueryState, ResponseError, ResponseInspection, ResponseInspector, ResponseOrigin,
+    ResponseState, RoutingField, RoutingState, StateMutation, StateSnapshot, SynthesizedResponse,
 };
 
 #[cfg(test)]
@@ -80,7 +79,6 @@ mod slice1_state_tests {
                 fast_flags: 1 << 48,
                 response: ResponseState::None,
                 routing: state.routing.clone(),
-                admission_facts: state.admission_facts.clone(),
             }
         );
     }

@@ -98,9 +98,6 @@ pub(crate) struct ExecutionRequest<'a> {
     pub raw: &'a [u8],
     pub header: QueryHeader,
     pub question: QuestionInfo,
-    /// The immutable switch values captured when the host admitted this
-    /// datagram or frame, with the `A` fast bits already seeded.
-    pub switch_seed: crate::switch_state::SwitchAdmissionSeed,
 }
 
 pub(crate) struct RefreshEnvironment {
@@ -1358,7 +1355,6 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
         raw,
         header,
         question,
-        switch_seed,
     } = request;
     let capture_audit_details = checkpoint.capture_audit_details();
     let multi_forward = config.program.externals.len() > config.caches.len() + 1;
@@ -1410,11 +1406,6 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
     };
     let mut state = ExecutionState::new(header, question.clone());
     state.query.client = client;
-    // The admission seed is the one immutable switch snapshot for this
-    // request; branches, fallback, preference, redirect, and lazy successors
-    // keep it through state clones.
-    state.set_admission_facts(switch_seed.facts);
-    state.fast_flags |= switch_seed.a_bits;
     // Every external leg shares this one request-owned absolute budget.
     let request_deadline = options
         .admission_deadline
@@ -5514,7 +5505,6 @@ plugins:
                         raw: &raw,
                         header,
                         question,
-                        switch_seed: Default::default(),
                     },
                     &exchange,
                     TransportCancellation::new(),
@@ -5621,7 +5611,6 @@ plugins:
                     raw: &raw,
                     header,
                     question,
-                    switch_seed: Default::default(),
                 },
                 &exchange,
                 TransportCancellation::new(),
@@ -5789,7 +5778,6 @@ plugins:
                 raw: &request,
                 header,
                 question,
-                switch_seed: Default::default(),
             },
             &exchange,
             TransportCancellation::new(),
@@ -5872,7 +5860,6 @@ plugins:
                 raw: &request,
                 header,
                 question,
-                switch_seed: Default::default(),
             },
             &CancelOnlyExchange,
             root.clone(),
@@ -5947,7 +5934,6 @@ plugins:
                 raw: request,
                 header,
                 question,
-                switch_seed: Default::default(),
             },
             executor,
             TransportCancellation::new(),
@@ -5987,7 +5973,6 @@ plugins:
                 raw: &request,
                 header,
                 question,
-                switch_seed: Default::default(),
             },
             &executor,
             cancellation,
@@ -6185,7 +6170,6 @@ plugins:
                         raw: &raw,
                         header,
                         question,
-                        switch_seed: Default::default(),
                     },
                     &PendingExchange {
                         entered: task_entered,
@@ -6285,7 +6269,6 @@ plugins:
                         raw: &raw,
                         header,
                         question,
-                        switch_seed: Default::default(),
                     },
                     &PendingExchange {
                         entered: task_entered,
@@ -6365,7 +6348,6 @@ plugins:
                         raw: &raw,
                         header,
                         question,
-                        switch_seed: Default::default(),
                     },
                     &FirstLegThenPendingExchange {
                         first_leg: b,
@@ -6666,7 +6648,8 @@ plugins:
             },
             api: None,
             domain_sets: Vec::new(),
-            switches: Vec::new(),
+            flags: Vec::new(),
+            flag_legacy_notes: Vec::new(),
             program,
         }
     }
@@ -6781,7 +6764,8 @@ plugins:
                 },
                 api: None,
                 domain_sets: Vec::new(),
-                switches: Vec::new(),
+                flags: Vec::new(),
+                flag_legacy_notes: Vec::new(),
                 program,
             },
             a_id,
@@ -6810,7 +6794,6 @@ plugins:
                 raw: &request,
                 header,
                 question,
-                switch_seed: Default::default(),
             },
             &executor,
             mosdns_upstream_core::TransportCancellation::new(),
@@ -6888,7 +6871,6 @@ plugins:
                 raw: &request,
                 header,
                 question,
-                switch_seed: Default::default(),
             },
             &executor,
             mosdns_upstream_core::TransportCancellation::new(),
@@ -6920,7 +6902,6 @@ plugins:
                 raw: &request,
                 header,
                 question,
-                switch_seed: Default::default(),
             },
             &executor,
             TransportCancellation::new(),
@@ -7008,7 +6989,6 @@ plugins:
                         raw: &cancelled_request,
                         header: cancelled_header,
                         question: cancelled_question,
-                        switch_seed: Default::default(),
                     },
                     &executor,
                     cancelled_cancellation,
@@ -7022,7 +7002,6 @@ plugins:
                         raw: &live_request,
                         header: live_header,
                         question: live_question,
-                        switch_seed: Default::default(),
                     },
                     &executor,
                     live_cancellation,
@@ -7071,7 +7050,6 @@ plugins:
                 raw: &first,
                 header: first_header,
                 question: first_question,
-                switch_seed: Default::default(),
             },
             &mock,
             cancellation.clone(),
@@ -7090,7 +7068,6 @@ plugins:
                 raw: &second,
                 header: second_header,
                 question: second_question,
-                switch_seed: Default::default(),
             },
             &mock,
             cancellation,
@@ -7128,7 +7105,6 @@ plugins:
                 raw: &request,
                 header,
                 question,
-                switch_seed: Default::default(),
             },
             &wrong_owner,
             mosdns_upstream_core::TransportCancellation::new(),
@@ -7161,7 +7137,6 @@ plugins:
                 raw: &first,
                 header,
                 question,
-                switch_seed: Default::default(),
             },
             &mock,
             cancellation.clone(),
@@ -7177,7 +7152,6 @@ plugins:
                 raw: &second,
                 header,
                 question,
-                switch_seed: Default::default(),
             },
             &mock,
             cancellation,
@@ -7204,7 +7178,6 @@ plugins:
                 raw: &first,
                 header,
                 question,
-                switch_seed: Default::default(),
             },
             &local_mock,
             cancellation.clone(),
@@ -7220,7 +7193,6 @@ plugins:
                 raw: &second,
                 header,
                 question,
-                switch_seed: Default::default(),
             },
             &local_mock,
             cancellation,
@@ -7337,7 +7309,8 @@ plugins:
             },
             api: None,
             domain_sets: Vec::new(),
-            switches: Vec::new(),
+            flags: Vec::new(),
+            flag_legacy_notes: Vec::new(),
             program,
         };
         (config, forward_id, CacheId(0))
@@ -7465,7 +7438,8 @@ plugins:
                 },
                 api: None,
                 domain_sets: Vec::new(),
-                switches: Vec::new(),
+                flags: Vec::new(),
+                flag_legacy_notes: Vec::new(),
                 program,
             },
             child_id,
@@ -7639,7 +7613,8 @@ plugins:
             },
             api: None,
             domain_sets: Vec::new(),
-            switches: Vec::new(),
+            flags: Vec::new(),
+            flag_legacy_notes: Vec::new(),
             program,
         };
         (config, forward_b_id, forward_c_id, forward_b_id)
@@ -7677,7 +7652,6 @@ plugins:
                 raw: &request,
                 header,
                 question,
-                switch_seed: Default::default(),
             },
             &executor,
             TransportCancellation::new(),
@@ -8361,7 +8335,6 @@ plugins:
                 raw: &request,
                 header,
                 question,
-                switch_seed: Default::default(),
             },
             &executor,
             cancellation,
@@ -8565,7 +8538,6 @@ plugins:
                 raw: &first_query,
                 header,
                 question,
-                switch_seed: Default::default(),
             },
             &mock,
             cancellation.clone(),
@@ -8584,7 +8556,6 @@ plugins:
                 raw: &second_query,
                 header,
                 question,
-                switch_seed: Default::default(),
             },
             &mock,
             cancellation,
@@ -9010,7 +8981,6 @@ plugins:
                     raw: &request,
                     header,
                     question,
-                    switch_seed: Default::default(),
                 },
                 &executor,
                 cancellation.clone(),

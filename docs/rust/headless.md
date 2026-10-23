@@ -69,12 +69,26 @@ EFFECTIVE ecs_address client_ecs addr=198.51.100.5 source=settings
 该全局入口会报告歧义，应按对象编辑 JSON 后重启。
 接口详情与限制见 [设置契约](contracts/native-settings.md)。
 
+## 功能开关
+
+运行模式、屏蔽、缓存、客户端分流等开关是 YAML 里的 `feature_flag`（`config_rust` 在 `sub_config/flags.yaml`），
+值写在 `settings.json` 的 `flags` 段：开关写 `true`/`false`，多选一写选项值，只写与 YAML `default` 不同的项。
+
+```json
+{"version":1,"flags":{"core_mode":"safe","block_aaaa":true}}
+```
+
+`flags` 段即使为空（`"flags": {}`）也要保留：它表示旧的 `rule/switchN.txt` 已经迁移过；删掉它，下次启动会重新按旧文件迁移。
+不重启修改用 `POST /api/v1/flags/{名字}`（`{"value": ...}`）或 `DELETE /api/v1/flags/{名字}`（恢复默认），
+`GET /api/v1/flags` 列出全部开关的说明、选项、默认值与当前值；`check` 输出 `EFFECTIVE feature_flag ...` 行。
+细节见 [开关契约](contracts/native-feature-flags.md)。
+
 ## 文件归属
 
 | 内容 | 权威位置与修改方式 |
 | --- | --- |
 | 默认插件、序列、监听与引用关系 | YAML；配置包管理的文件会随更新替换 |
-| 需跨配置包更新保留的代理、ECS、普通 aliapi 上游列表及生成开关 | `webinfo/settings.json`；手写后 check、重启，或用已有设置 API |
+| 需跨配置包更新保留的代理、ECS、普通 aliapi 上游列表、生成开关及功能开关 | `webinfo/settings.json`；手写后 check、重启，或用已有设置 API |
 | 用户规则、IP 名单、学习结果 | YAML 指定的 `rule/`、`gen/` 等文件；不写进 settings，配置包不管理这些用户数据 |
 | 专属分流组 | `webinfo/special_upstream_groups.json` 是权威 JSON；通过专属组 API 管理，相关 YAML 由程序生成 |
 

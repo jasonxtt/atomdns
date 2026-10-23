@@ -94,10 +94,6 @@ fn include_file_plugin_paths_resolve_against_the_config_directory_by_default() {
         cache.dump_file.as_deref().map(normalize),
         Some(root.join("cache/main.dump"))
     );
-    assert_eq!(
-        normalize(&config.switches[0].state_file),
-        root.join("rule/switch1.txt")
-    );
 }
 
 /// Resolves a possibly relative path against the working directory and
@@ -123,14 +119,13 @@ fn split_layout(dir: &TempDir) -> (PathBuf, PathBuf) {
     dir.write(
         "cfg/config.yaml",
         &format!(
-            "log: {{ level: error }}\ninclude:\n  - inc.yaml\nplugins:\n  - tag: fwd\n    type: forward\n    args: {{ upstreams: [{{ addr: \"udp://127.0.0.1:15453\" }}] }}\n  - tag: entry\n    type: sequence\n    args: [{{ exec: reject 3 }}]\n  - tag: c\n    type: cache\n    args: {{ size: 16, dump_file: cache/c.dump }}\n  - tag: absolute_switch\n    type: switch2\n    args: {{ initial_value: \"{}\" }}\n{}",
-            dir.path().join("elsewhere/switch2.txt").display(),
+            "log: {{ level: error }}\ninclude:\n  - inc.yaml\nplugins:\n  - tag: fwd\n    type: forward\n    args: {{ upstreams: [{{ addr: \"udp://127.0.0.1:15453\" }}] }}\n  - tag: entry\n    type: sequence\n    args: [{{ exec: reject 3 }}]\n  - tag: c\n    type: cache\n    args: {{ size: 16, dump_file: cache/c.dump }}\n{}",
             listener("udp", "udp_server", "127.0.0.1:15390", "")
         ),
     );
     dir.write(
         "cfg/inc.yaml",
-        "plugins:\n  - tag: blocked\n    type: domain_set\n    args: { files: [rule/blocked.txt] }\n  - tag: sw\n    type: switch1\n    args: { initial_value: state/sw1.txt }\n",
+        "plugins:\n  - tag: blocked\n    type: domain_set\n    args: { files: [rule/blocked.txt] }\n",
     );
     dir.write("data/rule/blocked.txt", "full:data.example\n");
     // Decoys where the old per-declaring-file rule and the cwd would look.
@@ -153,17 +148,6 @@ fn dash_d_overrides_the_config_directory_for_plugin_paths_only() {
         compiled.caches[0].dump_file.as_deref().map(normalize),
         Some(normalize(&data.join("cache/c.dump")))
     );
-    let states: BTreeMap<_, _> = compiled
-        .switches
-        .iter()
-        .map(|switch| (switch.tag.as_str(), normalize(&switch.state_file)))
-        .collect();
-    assert_eq!(states["sw"], normalize(&data.join("state/sw1.txt")));
-    // An absolute path is unchanged.
-    assert_eq!(
-        states["absolute_switch"],
-        normalize(&dir.path().join("elsewhere/switch2.txt"))
-    );
 }
 
 #[test]
@@ -174,11 +158,6 @@ fn without_dash_d_the_config_directory_is_the_root() {
     let blocked = compiled.domain_set("blocked").unwrap();
     assert!(blocked.matches("cfg.example"));
     assert!(!blocked.matches("data.example"));
-    let sw = compiled.switches.iter().find(|s| s.tag == "sw").unwrap();
-    assert_eq!(
-        normalize(&sw.state_file),
-        normalize(&dir.path().join("cfg/state/sw1.txt"))
-    );
 }
 
 #[test]

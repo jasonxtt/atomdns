@@ -232,9 +232,6 @@ async fn process_connection(task: ConnectionTask) {
         let config = admission.snapshot.config.clone();
         let forwards = admission.snapshot.forwards.clone();
         let cache = admission.snapshot.cache.clone();
-        // The switch seed is captured synchronously at the frame boundary,
-        // not when the request future runs.
-        let switch_seed = admission.snapshot.switches.admission_seed();
         let options = admission.options.clone();
         let enable_audit = admission.enable_audit;
         let Ok((header, question)) = parse_query(&frame) else {
@@ -269,7 +266,6 @@ async fn process_connection(task: ConnectionTask) {
                 raw: &frame,
                 header,
                 question,
-                switch_seed,
             },
             &forwards,
             connection_shutdown.clone(),

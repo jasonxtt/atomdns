@@ -2,7 +2,8 @@
 //! combines it with the YAML definitions.
 //!
 //! WebUI-adjustable values live in named configuration objects (`socks5_proxy`,
-//! `ecs_address`, the upstream lists of `aliapi`, the `domain_output` switch).
+//! `ecs_address`, the upstream lists of `aliapi`, the `domain_output` switch,
+//! the `feature_flag` values).
 //! [`apply`] validates the settings against the collected definitions,
 //! resolves `$tag` references to the literal forms the plugin compilers already
 //! accept and overlays the settings values, then reports every settable item
@@ -250,6 +251,23 @@ pub(crate) struct Settings {
     pub(crate) upstreams: BTreeMap<String, Vec<UpstreamEntry>>,
     #[serde(default, skip_serializing_if = "DomainGeneration::is_empty")]
     pub(crate) domain_generation: DomainGeneration,
+    /// The `feature_flag` values that differ from the YAML defaults. Unlike the
+    /// other sections it is kept when empty: its presence records that the
+    /// schema-2 switch files were migrated (see `config::flags`).
+    #[serde(
+        default,
+        deserialize_with = "present_flags",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) flags: Option<BTreeMap<String, super::flags::FlagValue>>,
+}
+
+/// A present `flags` key must be an object (`null` is not "absent": absent
+/// means "not migrated yet").
+fn present_flags<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<BTreeMap<String, super::flags::FlagValue>>, D::Error> {
+    BTreeMap::deserialize(deserializer).map(Some)
 }
 
 impl Settings {
@@ -317,7 +335,7 @@ pub struct EffectiveItem {
     pub kind: &'static str,
     pub field: &'static str,
     pub value: String,
-    /// `yaml` or `settings`.
+    /// `yaml` or `settings` (a `feature_flag` may also say `legacy`).
     pub source: &'static str,
 }
 
@@ -342,6 +360,10 @@ pub(crate) struct Applied {
     pub(crate) items: Vec<EffectiveItem>,
     pub(crate) upstreams: BTreeMap<String, Vec<UpstreamEntry>>,
     pub(crate) defaults: YamlDefaults,
+    /// Every `feature_flag` in declaration order, with its effective value.
+    pub(crate) flags: Vec<super::flags::Flag>,
+    /// Legacy switch files that could not be migrated (startup log).
+    pub(crate) legacy_notes: super::flags::LegacyNotes,
 }
 
 const YAML: &str = "yaml";
@@ -421,6 +443,7 @@ struct Objects {
 pub(super) fn apply(
     definitions: &mut [RawPlugin],
     settings: &Settings,
+    legacy_root: Option<&Path>,
 ) -> Result<Applied, ConfigError> {
     let kind_of = |tag: &str| {
         definitions
@@ -604,10 +627,27 @@ pub(super) fn apply(
             _ => {}
         }
     }
+    let mut flags = definitions
+        .iter()
+        .filter(|plugin| plugin.kind == "feature_flag")
+        .map(super::flags::declaration)
+        .collect::<Result<Vec<_>, _>>()?;
+    let legacy_notes = super::flags::resolve(&mut flags, settings.flags.as_ref(), legacy_root)?;
+    for flag in &flags {
+        report.push(EffectiveItem {
+            object: flag.key.clone(),
+            kind: "feature_flag",
+            field: "value",
+            value: flag.value.to_string(),
+            source: flag.source,
+        });
+    }
     Ok(Applied {
         items: report,
         upstreams,
         defaults,
+        flags,
+        legacy_notes,
     })
 }
 

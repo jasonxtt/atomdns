@@ -148,11 +148,6 @@ impl UdpServer {
                             let config = admission.snapshot.config.clone();
                             let forwards = admission.snapshot.forwards.clone();
                             let cache = admission.snapshot.cache.clone();
-                            // The switch seed is captured synchronously at
-                            // the datagram boundary: a POST landing between
-                            // receive and task execution cannot change what
-                            // this already-admitted datagram observes.
-                            let switch_seed = admission.snapshot.switches.admission_seed();
                             let observer = Arc::clone(&self.observer);
                             let mut options = admission.options.clone();
                             options.admission_deadline = Some(Instant::now() + options.request_deadline);
@@ -164,7 +159,6 @@ impl UdpServer {
                                     config,
                                     forwards,
                                     cache,
-                                    switch_seed,
                                     observer,
                                     options,
                                     raw,
@@ -212,7 +206,6 @@ struct RequestTask {
     config: Rc<CompiledConfig>,
     forwards: Rc<ForwardCatalog>,
     cache: Rc<CacheCatalog>,
-    switch_seed: crate::switch_state::SwitchAdmissionSeed,
     observer: Arc<QueryObserver>,
     options: HostOptions,
     raw: Vec<u8>,
@@ -228,7 +221,6 @@ async fn process_request(task: RequestTask) {
         config,
         forwards,
         cache,
-        switch_seed,
         observer,
         options,
         raw,
@@ -274,7 +266,6 @@ async fn process_request(task: RequestTask) {
             raw: &raw,
             header,
             question,
-            switch_seed,
         },
         &forwards,
         request_shutdown.clone(),

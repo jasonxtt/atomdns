@@ -19,11 +19,6 @@ plugins:
       size: 1024
       dump_file: cache/main.dump
 
-  - tag: switch1
-    type: switch1
-    args:
-      initial_value: rule/switch1.txt
-
   - tag: main_seq
     type: sequence
     args:
