@@ -48,13 +48,34 @@
    ```
 
    这是对外发布动作，需要先得到负责人确认。
-5. 如果本次发布需要新的配置包（结构性改动，`required_config_schema` 与 `config_package_id` 同时提高），
-   先发布配置包并把 URL 与 sha256 写进 `scripts/rust-release-metadata.json` 的 `config`，再重新生成清单；仅程序改动的发布不需要。
-   配置包标识（`channel "rust"`、`rust-config-schema-N`、`config_rust_up.zip`）不随改名变化。
+5. 仅程序改动的发布到第 4 步为止。若本次发布需要新的配置包（结构性改动，`required_config_schema` 与 `config_package_id` 同时提高），
+   配置包 `config_rust_up.zip` 作为**同一个 Release 的资产**，按下面的顺序发版（配置包标识 `channel "rust"`、`rust-config-schema-N`、`config_rust_up.zip` 不随改名变化）。
 
-   **配置 schema 2（2026-10-23，路由学习重做）**：新程序要求 `rust-config-schema-2` 的配置包；旧 schema 1 的配置（`domain_output` 带 `target_mapper`）在新程序里加载失败。
-   经在线更新升级时程序与配置包一起换；手动替换程序时必须同时更新配置包。旧的 `gen/*list.txt`、`gen/*rule.txt` 不再被读取，可手动删除；
-   学习状态从空开始，写在 `gen/route_learner.json`（见 [native-route-learner](contracts/native-route-learner.md)）。
+## 带配置包的发版顺序
+
+1. **出包**：在 file 仓库的 `mosdns/config/` 运行 `build_config_rust_up.sh`（`SCHEMA`/`PACKAGE_ID` 必须等于 `update/mod.rs` 的 `REQUIRED_CONFIG_SCHEMA`/`REQUIRED_CONFIG_PACKAGE_ID`），
+   得到 `config_rust_up.zip`；包只作为 Release 资产，不进 file 仓库。把它放在仓库外，**发布用的就是这一份文件**（重新出包会因 zip 时间戳不同而得到不同的 sha256）。
+   核对包内 `manifest.json` 的 `config_schema`、`package_id`，以及托管文件列表（含新增文件、不含 `sub_config/special_groups.yaml`）。
+2. **填元数据**：`sha256sum config_rust_up.zip`，把 `scripts/rust-release-metadata.json` 的 `config.url`
+   （`https://github.com/jasonxtt/rtdns/releases/download/vX.Y.Z/config_rust_up.zip`）与 `config.sha256` 填上，`required_config_schema`/`config_package_id` 同步提高。
+3. **提交**：版本号（`rust/native-host/Cargo.toml`、`rust/Cargo.lock`）与元数据一起提交。
+4. **构建程序与清单**：Release 还没建，`config.url` 此时下不到包，所以用本地文件校验：
+
+   ```bash
+   RUST_CONFIG_PACKAGE=/path/to/config_rust_up.zip scripts/build-rust-release.sh vX.Y.Z release/rust
+   ```
+
+   脚本核对该文件的 sha256 与包内 manifest 是否等于元数据，通过后清单带 `config{url,sha256}`。
+5. **建 Release**，一次上传三个资产：程序包、清单、`config_rust_up.zip`（文件名必须与 `config.url` 末段一致）。
+   Release 建好后，用 `curl -fsSL <config.url> | sha256sum` 再核对一次与元数据一致。更新器只在 `applied_config_schema < required_config_schema` 时下载配置包。
+
+## v0.2.2 升级说明（配置 schema 2，2026-10-23，路由学习重做）
+
+- 新程序要求 `rust-config-schema-2` 的配置包；旧 schema 1 的配置（`domain_output` 带 `target_mapper`）在新程序里加载失败。
+  经在线更新升级时程序与配置包一起由 update-guard 替换（失败则程序、配置文件、包状态一起回滚）；手动替换程序时必须同时更新配置包。
+- 学习名单从零开始：旧的 `gen/*list.txt`、`gen/*rule.txt` 不再被读取，可手动删除；新的学习状态写在 `gen/route_learner.json`（见 [native-route-learner](contracts/native-route-learner.md)）。
+- requery 不再清空学习名单。
+- 用户数据不动：`webinfo/`（含 `settings.json`、专属分流组 JSON）、`rule/`、`sub_config/special_groups.yaml`（程序生成）都不在包的托管范围内。
 
 已部署的 `v0.2.0` 及之后的 rtdns 会在系统设置里看到新版本，点“立即更新”走带自动回滚的事务（见契约文档）。
 
