@@ -37,9 +37,10 @@ MARKERS = {
 #   truncated       answer cut to `truncate` bytes (default 20)
 #   wrong_question  answer whose question name differs from the query
 #   servfail        well-formed SERVFAIL answer with the right ID and question
+#   empty           well-formed NOERROR answer with the right ID and question and no records
 #   slow            answer after `delay_ms`
 FAULT_MODES = ("blackhole", "refuse", "reset", "handshake_reset", "bad_id",
-               "truncated", "wrong_question", "servfail", "slow")
+               "truncated", "wrong_question", "servfail", "empty", "slow")
 SOCKS_MODES = ("down", "blackhole", "reset")
 SOCKS_PORTS = (17891, 17892)
 DOWNLOAD_PORT = 18080
@@ -94,9 +95,9 @@ def corrupt(wire, mode, spec):
         mutable = bytearray(wire)
         mutable[13] = mutable[13] ^ 0x01 if mutable[13] not in (0x2e,) else mutable[13]
         return bytes(mutable)
-    if mode == "servfail":
+    if mode in ("servfail", "empty"):
         header = bytearray(wire[:12])
-        header[3] = (header[3] & 0xF0) | 2
+        header[3] = (header[3] & 0xF0) | (2 if mode == "servfail" else 0)
         header[6:12] = b"\0" * 6
         end = 12
         while wire[end]:
@@ -176,7 +177,7 @@ async def serve(root):
              "question": decoded["questions"], "ecs": decoded["ecs"],
              **({"fault": spec["mode"]} if spec else {})})
         result = answer(wire, *MARKERS[group])
-        if spec and spec["mode"] in ("bad_id", "truncated", "wrong_question", "servfail"):
+        if spec and spec["mode"] in ("bad_id", "truncated", "wrong_question", "servfail", "empty"):
             count(f"{group}:{protocol}:fault:{spec['mode']}")
             return corrupt(result, spec["mode"], spec)
         return result

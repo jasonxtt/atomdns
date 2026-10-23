@@ -1,7 +1,7 @@
 //! The `domain_output` plugin: counts the query names that pass through a
-//! sequence, persists them (`file_stat`, `file_rule`, `gen_rule`), publishes
-//! the generated rule list to a `domain_set_light` and injects each new name
-//! into a `domain_mapper` right away (`target_mapper`).
+//! sequence, persists them (`file_stat`, `file_rule`, `gen_rule`) and
+//! publishes the generated rule list to a `domain_set_light`. (Learned routes
+//! moved to `route_learner`; see `route_learner.rs`.)
 //!
 //! Recording is a hash-map update on the DNS thread; every write works on a
 //! snapshot and runs on the blocking pool through a same-directory temporary
@@ -18,7 +18,7 @@ use std::time::Duration;
 use mosdns_dns_core::QuestionInfo;
 use mosdns_upstream_core::TransportCancellation;
 
-use crate::config::providers::{HotLayer, presentation_name};
+use crate::config::providers::presentation_name;
 use crate::local_url::{self, LocalApi, Target};
 use crate::rule_sources::Reply;
 
@@ -59,11 +59,6 @@ impl Settings {
             .cloned()
             .collect()
     }
-}
-
-/// `target_mapper` and what to inject into it.
-pub(crate) struct MapperTarget {
-    pub(crate) layer: Rc<HotLayer>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -131,7 +126,6 @@ struct Env {
 pub struct DomainOutput {
     pub tag: String,
     settings: Arc<Settings>,
-    target: Option<MapperTarget>,
     /// Always on until the settings layer (M1-f) drives it.
     enabled: Cell<bool>,
     state: RefCell<State>,
@@ -155,12 +149,11 @@ pub struct DomainOutputConfig {
 }
 
 impl DomainOutput {
-    pub(crate) fn new(tag: &str, settings: Settings, target: Option<MapperTarget>) -> Self {
+    pub(crate) fn new(tag: &str, settings: Settings) -> Self {
         let enabled = settings.enabled;
         Self {
             tag: tag.to_owned(),
             settings: Arc::new(settings),
-            target,
             enabled: Cell::new(enabled),
             state: RefCell::new(State {
                 stats: HashMap::new(),
@@ -197,7 +190,6 @@ impl DomainOutput {
             return;
         }
         let mut key = name.to_ascii_lowercase();
-        let plain = key.len();
         if self.settings.enable_flags {
             let (ad, cd) = query_flags(raw);
             for (set, flag) in [(ad, "|AD"), (cd, "|CD")] {
@@ -224,9 +216,6 @@ impl DomainOutput {
                     );
                 }
                 return;
-            }
-            if let Some(target) = &self.target {
-                target.layer.add(&key[..plain]);
             }
             state.stats.insert(
                 key.into_boxed_str(),
@@ -362,9 +351,6 @@ impl DomainOutput {
                 Mode::Flush => {
                     state.stats = HashMap::new();
                     state.warned_cap = false;
-                    if let Some(target) = &self.target {
-                        target.layer.clear();
-                    }
                 }
                 Mode::Save | Mode::Shutdown => {}
             }
@@ -414,12 +400,6 @@ impl DomainOutput {
                     )
                 },
             );
-            // What was learned before keeps its routing even when the rule
-            // file is older than the statistics (a managed apply, a crash).
-            // A disabled list publishes nothing, so it injects nothing either.
-            if let Some(target) = self.target.as_ref().filter(|_| self.enabled.get()) {
-                target.layer.add(key.split('|').next().unwrap_or_default());
-            }
             state.stats.insert(
                 key.into(),
                 Entry {
@@ -845,7 +825,7 @@ mod tests {
 
     #[test]
     fn names_are_lowercased_flagged_counted_and_the_root_is_skipped() {
-        let output = DomainOutput::new("t", quiet(MAX_KEYS), None);
+        let output = DomainOutput::new("t", quiet(MAX_KEYS));
         for packet in [
             wire("Mixed.Example", 0x20),
             wire("mixed.example", 0x20),
@@ -874,7 +854,7 @@ mod tests {
 
     #[test]
     fn the_key_cap_stops_new_names_but_not_counting() {
-        let output = DomainOutput::new("t", quiet(2), None);
+        let output = DomainOutput::new("t", quiet(2));
         for name in ["a.example", "b.example", "c.example", "a.example"] {
             let packet = wire(name, 0);
             output.record(&packet, &question(name));
@@ -883,22 +863,5 @@ mod tests {
             rows(&output),
             [("a.example".to_owned(), 2), ("b.example".to_owned(), 1)]
         );
-    }
-
-    #[test]
-    fn a_new_name_is_injected_into_the_mapper_overlay_once() {
-        let overlay = crate::config::providers::HotOverlay::default();
-        let target = MapperTarget {
-            layer: overlay.layer(4, "special"),
-        };
-        let output = DomainOutput::new("t", quiet(MAX_KEYS), Some(target));
-        let packet = wire("New.Example", 0);
-        output.record(&packet, &question("new.example"));
-        output.record(&packet, &question("new.example"));
-        assert_eq!(
-            overlay.lookup("NEW.example."),
-            Some((1 << 4, "special".to_owned()))
-        );
-        assert!(overlay.lookup("other.example.").is_none());
     }
 }

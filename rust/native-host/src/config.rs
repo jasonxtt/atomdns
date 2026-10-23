@@ -393,6 +393,8 @@ pub struct LocalPlugins {
     pub webinfos: Vec<Rc<WebInfo>>,
     pub domain_outputs: Vec<DomainOutputConfig>,
     pub requeries: Vec<RequeryConfig>,
+    pub learners: Vec<crate::route_learner::RouteLearnerConfig>,
+    pub learns: Vec<crate::route_learner::RouteLearnConfig>,
 }
 
 impl LocalPlugins {
@@ -405,6 +407,20 @@ impl LocalPlugins {
         for requery in &self.requeries {
             requery.runtime.start(api);
         }
+        for learner in &self.learners {
+            learner.runtime.start();
+        }
+    }
+
+    /// Hands the live learned state of `previous` (the generation this one
+    /// replaces) over in memory, learner by learner. Called before
+    /// [`Self::fence`] on `previous` and [`Self::start`] on this one.
+    pub(crate) fn adopt(&self, previous: &LocalPlugins) {
+        for learner in &self.learners {
+            if let Some(old) = previous.learners.iter().find(|old| old.tag == learner.tag) {
+                learner.runtime.adopt(&old.runtime);
+            }
+        }
     }
 
     /// A newer view takes over: every `domain_output` saves and stops writing.
@@ -415,6 +431,9 @@ impl LocalPlugins {
         for requery in &self.requeries {
             requery.runtime.fence();
         }
+        for learner in &self.learners {
+            learner.runtime.fence();
+        }
     }
 
     /// Stops every `domain_output` writer and saves once more.
@@ -424,6 +443,9 @@ impl LocalPlugins {
         }
         for output in &self.domain_outputs {
             output.runtime.close().await;
+        }
+        for learner in &self.learners {
+            learner.runtime.close().await;
         }
     }
 }
@@ -1843,6 +1865,8 @@ enum PluginKind {
     Rewrite,
     WebInfo,
     DomainOutput,
+    RouteLearner,
+    RouteLearn,
     Requery,
     Socks5Proxy,
     EcsAddress,
@@ -1966,6 +1990,8 @@ fn compile_definitions(
             "rewrite" => PluginKind::Rewrite,
             "webinfo" => PluginKind::WebInfo,
             "domain_output" => PluginKind::DomainOutput,
+            "route_learner" => PluginKind::RouteLearner,
+            "route_learn" => PluginKind::RouteLearn,
             "requery" => PluginKind::Requery,
             "socks5_proxy" => PluginKind::Socks5Proxy,
             "ecs_address" => PluginKind::EcsAddress,
@@ -2082,6 +2108,8 @@ fn compile_definitions(
     let mut rewrites: Vec<(String, Rc<Rewrite>)> = Vec::new();
     let mut webinfos: Vec<Rc<WebInfo>> = Vec::new();
     let mut pending_outputs: Vec<PendingOutput> = Vec::new();
+    let mut pending_learners: Vec<PendingLearner> = Vec::new();
+    let mut pending_rules: Vec<usize> = Vec::new();
     let mut requeries: Vec<RequeryConfig> = Vec::new();
     let mut fallback_definitions = Vec::new();
     let mut upstream_identities: BTreeMap<String, String> = BTreeMap::new();
@@ -2277,6 +2305,13 @@ fn compile_definitions(
                 known_artifacts.extend(pending.settings.files());
                 pending_outputs.push(pending);
             }
+            PluginKind::RouteLearner => {
+                let pending = compile_route_learner(plugin)?;
+                known_artifacts.push(pending.settings.file.clone());
+                pending_learners.push(pending);
+            }
+            // Compiled with the sequences: its conditions need the catalog.
+            PluginKind::RouteLearn => pending_rules.push(index),
             PluginKind::WebInfo => {
                 let (webinfo, file) = compile_webinfo(plugin)?;
                 known_artifacts.push(file);
@@ -2408,26 +2443,51 @@ fn compile_definitions(
     drop(provider_rules);
     let mut domain_outputs: Vec<(String, Rc<DomainOutput>)> = Vec::new();
     for pending in pending_outputs {
-        let target = match pending.target {
-            None => None,
-            Some((mapper, mark, tag)) => {
-                let layer = domain_mappers
-                    .iter()
-                    .find(|candidate| candidate.tag == mapper)
-                    .map(|candidate| candidate.hot.layer(mark, &tag))
-                    .ok_or_else(|| {
-                        ConfigError::new(
-                            format!("{}.args.target_mapper", pending.path),
-                            format!("`{mapper}` is not a domain_mapper"),
-                        )
-                    })?;
-                Some(crate::domain_output::MapperTarget { layer })
-            }
-        };
         domain_outputs.push((
             pending.tag.clone(),
-            Rc::new(DomainOutput::new(&pending.tag, pending.settings, target)),
+            Rc::new(DomainOutput::new(&pending.tag, pending.settings)),
         ));
+    }
+    let mut learners: Vec<(String, Rc<crate::route_learner::RouteLearner>)> = Vec::new();
+    for pending in pending_learners {
+        for spec in &pending.settings.categories {
+            let taken = kinds.iter().any(|(tag, _, _)| *tag == spec.tag)
+                || learners
+                    .iter()
+                    .any(|(_, learner)| learner.category_index(&spec.tag).is_some());
+            if taken {
+                return Err(ConfigError::new(
+                    format!("{}.args.categories", pending.path),
+                    format!(
+                        "category tag `{}` is already a plugin or category tag",
+                        spec.tag
+                    ),
+                ));
+            }
+        }
+        let learner = Rc::new(crate::route_learner::RouteLearner::new(
+            &pending.tag,
+            pending.settings,
+        ));
+        let mapper = domain_mappers
+            .iter()
+            .find(|candidate| candidate.tag == learner.settings().target_mapper)
+            .ok_or_else(|| {
+                ConfigError::new(
+                    format!("{}.args.target_mapper", pending.path),
+                    format!(
+                        "`{}` is not a domain_mapper",
+                        learner.settings().target_mapper
+                    ),
+                )
+            })?;
+        if !mapper.learner.set(Rc::clone(&learner)) {
+            return Err(ConfigError::new(
+                format!("{}.args.target_mapper", pending.path),
+                format!("`{}` already has a route_learner", mapper.tag),
+            ));
+        }
+        learners.push((pending.tag, learner));
     }
 
     let forward_compiler = RefCell::new(ForwardCompiler {
@@ -2453,6 +2513,14 @@ fn compile_definitions(
         sleeps: &named_sleeps,
         quick_caches: &quick_caches,
     };
+    let mut route_learns: Vec<(String, Rc<crate::route_learner::RouteLearn>)> = Vec::new();
+    for index in pending_rules {
+        let plugin = &definitions[index];
+        route_learns.push((
+            plugin.tag.clone(),
+            Rc::new(compile_route_learn(plugin, &learners, &catalog)?),
+        ));
+    }
     let mut sequences = Vec::new();
     let mut fixtures = Vec::new();
     for (tag, config) in &fast_marks {
@@ -2599,6 +2667,11 @@ fn compile_definitions(
         )
         .chain(
             domain_outputs
+                .iter()
+                .map(|(tag, _)| ExternalSpec::new(tag.clone())),
+        )
+        .chain(
+            route_learns
                 .iter()
                 .map(|(tag, _)| ExternalSpec::new(tag.clone())),
         )
@@ -2770,6 +2843,28 @@ fn compile_definitions(
         })
         .collect::<Result<Vec<_>, ConfigError>>()?;
 
+    let learns = route_learns
+        .into_iter()
+        .map(|(tag, runtime)| {
+            Ok(crate::route_learner::RouteLearnConfig {
+                executable: external_id(&program, &tag, "$.plugins")?,
+                tag,
+                runtime,
+            })
+        })
+        .collect::<Result<Vec<_>, ConfigError>>()?;
+    let learned_tags: Vec<String> = learners
+        .iter()
+        .flat_map(|(_, learner)| learner.category_tags().map(str::to_owned))
+        .collect();
+    for requery in &requeries {
+        requery.runtime.protect_flush(learned_tags.clone());
+    }
+    let learners = learners
+        .into_iter()
+        .map(|(tag, runtime)| crate::route_learner::RouteLearnerConfig { tag, runtime })
+        .collect::<Vec<_>>();
+
     let entry_sequence = program.sequence_id(&listener.entry).ok_or_else(|| {
         ConfigError::new(
             format!("{listener_source_path}.args.entry"),
@@ -2860,6 +2955,8 @@ fn compile_definitions(
             webinfos,
             domain_outputs,
             requeries,
+            learners,
+            learns,
         },
         sequence: SequenceConfig {
             tag: listener.entry.clone(),
@@ -3321,17 +3418,23 @@ fn compile_rewrite(plugin: &RawPlugin) -> Result<(Rewrite, Vec<PathBuf>), Config
     Ok((rewrite, files))
 }
 
-/// A validated `domain_output` waiting for its `target_mapper` to compile.
+/// A validated `domain_output`.
 struct PendingOutput {
     tag: String,
-    path: String,
     settings: crate::domain_output::Settings,
-    /// `target_mapper`, `target_mark`, `target_tag`.
-    target: Option<(String, u8, String)>,
 }
 
-/// `domain_output`: counters, generated files, rule publication and mapper
-/// injection. Every argument is optional, as in the reference.
+/// A validated `route_learner` waiting for its `target_mapper` to compile.
+struct PendingLearner {
+    tag: String,
+    path: String,
+    settings: crate::route_learner::Settings,
+}
+
+/// `domain_output`: counters, generated files and rule publication (the
+/// access ranking). Every argument is optional, as in the reference. Mapper
+/// injection (`target_mapper`, `target_mark`, `target_tag`) was replaced by
+/// `route_learner` in config schema 2.
 fn compile_domain_output(plugin: &RawPlugin) -> Result<PendingOutput, ConfigError> {
     let path = format!("{}.args", plugin.source_path);
     let empty = RawMap {
@@ -3341,6 +3444,17 @@ fn compile_domain_output(plugin: &RawPlugin) -> Result<PendingOutput, ConfigErro
         RawValue::Null => &empty,
         other => expect_map(other, &path, "domain_output args must be a mapping")?,
     };
+    for removed in ["target_mapper", "target_mark", "target_tag"] {
+        if args.get(removed).is_some() {
+            return Err(ConfigError::new(
+                format!("{path}.{removed}"),
+                format!(
+                    "`{removed}` was removed in config schema 2: learned routes are configured \
+                     with a route_learner plugin (see sub_config/route_learner.yaml)"
+                ),
+            ));
+        }
+    }
     args.reject_unknown(
         &[
             "file_stat",
@@ -3353,9 +3467,6 @@ fn compile_domain_output(plugin: &RawPlugin) -> Result<PendingOutput, ConfigErro
             "domain_set_url",
             "enable_flags",
             "enabled",
-            "target_mapper",
-            "target_mark",
-            "target_tag",
         ],
         &path,
     )?;
@@ -3383,22 +3494,8 @@ fn compile_domain_output(plugin: &RawPlugin) -> Result<PendingOutput, ConfigErro
         None | Some(RawValue::Null) => false,
         Some(value) => expect_bool(value, &format!("{path}.enable_flags"))?,
     };
-    let mapper = text("target_mapper")?;
-    let mark = integer("target_mark")?;
-    let mark = u8::try_from(mark)
-        .ok()
-        .filter(|mark| *mark < 64)
-        .ok_or_else(|| {
-            ConfigError::new(
-                format!("{path}.target_mark"),
-                "target_mark must be between 0 and 63",
-            )
-        })?;
-    let target_tag = text("target_tag")?;
-    let target = (!mapper.is_empty()).then_some((mapper, mark, target_tag));
     Ok(PendingOutput {
         tag: plugin.tag.clone(),
-        path: plugin.source_path.clone(),
         settings: crate::domain_output::Settings {
             file_stat: file("file_stat")?,
             file_rule: file("file_rule")?,
@@ -3415,8 +3512,231 @@ fn compile_domain_output(plugin: &RawPlugin) -> Result<PendingOutput, ConfigErro
             },
             max_keys: crate::domain_output::MAX_KEYS,
         },
-        target,
     })
+}
+
+/// `route_learner`: the categories, their lifetimes and the state file.
+fn compile_route_learner(plugin: &RawPlugin) -> Result<PendingLearner, ConfigError> {
+    let path = format!("{}.args", plugin.source_path);
+    let args = expect_map(&plugin.args, &path, "route_learner args must be a mapping")?;
+    args.reject_unknown(
+        &[
+            "target_mapper",
+            "file",
+            "write_interval",
+            "max_entries",
+            "categories",
+        ],
+        &path,
+    )?;
+    let target_mapper = expect_string(
+        args.required("target_mapper", &path)?,
+        &format!("{path}.target_mapper"),
+    )?;
+    let file = match args.get("file") {
+        None | Some(RawValue::Null) => "gen/route_learner.json".to_owned(),
+        Some(value) => expect_string(value, &format!("{path}.file"))?,
+    };
+    if file.is_empty() {
+        return Err(ConfigError::new(
+            format!("{path}.file"),
+            "file must not be empty",
+        ));
+    }
+    let bounded = |value: &RawValue, at: &str, low: i64, high: i64| -> Result<i64, ConfigError> {
+        let number = expect_integer(value, at)?;
+        if (low..=high).contains(&number) {
+            Ok(number)
+        } else {
+            Err(ConfigError::new(
+                at,
+                format!("must be between {low} and {high}, got {number}"),
+            ))
+        }
+    };
+    let cap = i64::try_from(crate::route_learner::MAX_ENTRIES_CAP).unwrap_or(i64::MAX);
+    let write_interval = match args.get("write_interval") {
+        None | Some(RawValue::Null) => 21_600,
+        Some(value) => bounded(value, &format!("{path}.write_interval"), 60, 31_536_000)?,
+    };
+    let default_max = match args.get("max_entries") {
+        None | Some(RawValue::Null) => 20_000,
+        Some(value) => bounded(value, &format!("{path}.max_entries"), 1, cap)?,
+    };
+    let list = expect_sequence(
+        args.required("categories", &path)?,
+        &format!("{path}.categories"),
+    )?;
+    if list.is_empty() {
+        return Err(ConfigError::new(
+            format!("{path}.categories"),
+            "at least one category is required",
+        ));
+    }
+    let mut categories: Vec<crate::route_learner::CategorySpec> = Vec::new();
+    for (index, item) in list.iter().enumerate() {
+        let at = format!("{path}.categories[{index}]");
+        let map = expect_map(item, &at, "category must be a mapping")?;
+        map.reject_unknown(
+            &[
+                "tag",
+                "mark",
+                "label",
+                "source",
+                "ttl",
+                "max_entries",
+                "enabled",
+            ],
+            &at,
+        )?;
+        let tag = expect_string(map.required("tag", &at)?, &format!("{at}.tag"))?;
+        if tag.is_empty() || tag.contains('/') {
+            return Err(ConfigError::new(
+                format!("{at}.tag"),
+                "tag must be a plain name",
+            ));
+        }
+        if categories.iter().any(|have| have.tag == tag) {
+            return Err(ConfigError::new(
+                format!("{at}.tag"),
+                format!("duplicate category tag `{tag}`"),
+            ));
+        }
+        let mark = bounded(map.required("mark", &at)?, &format!("{at}.mark"), 1, 63)?;
+        let label = expect_string(map.required("label", &at)?, &format!("{at}.label"))?;
+        if label.trim().is_empty() || label.contains('|') {
+            return Err(ConfigError::new(
+                format!("{at}.label"),
+                "label must be non-empty and must not contain `|`",
+            ));
+        }
+        let source = match map.get("source") {
+            None | Some(RawValue::Null) => tag.clone(),
+            Some(value) => expect_string(value, &format!("{at}.source"))?,
+        };
+        if source.contains('|') {
+            return Err(ConfigError::new(
+                format!("{at}.source"),
+                "source must not contain `|`",
+            ));
+        }
+        let ttl = bounded(
+            map.required("ttl", &at)?,
+            &format!("{at}.ttl"),
+            60,
+            315_360_000,
+        )?;
+        let max_entries = match map.get("max_entries") {
+            None | Some(RawValue::Null) => default_max,
+            Some(value) => bounded(value, &format!("{at}.max_entries"), 1, cap)?,
+        };
+        let enabled = match map.get("enabled") {
+            None | Some(RawValue::Null) => true,
+            Some(value) => expect_bool(value, &format!("{at}.enabled"))?,
+        };
+        categories.push(crate::route_learner::CategorySpec {
+            tag,
+            mark: u8::try_from(mark).unwrap_or(1),
+            label,
+            source,
+            ttl: ttl.unsigned_abs(),
+            max_entries: usize::try_from(max_entries).unwrap_or(1),
+            enabled,
+        });
+    }
+    Ok(PendingLearner {
+        tag: plugin.tag.clone(),
+        path: plugin.source_path.clone(),
+        settings: crate::route_learner::Settings {
+            target_mapper,
+            file: resolve_rule_path(&file, &plugin.root_dir),
+            write_interval: Duration::from_secs(write_interval.unsigned_abs()),
+            categories,
+        },
+    })
+}
+
+/// `route_learn`: when every `when` matcher holds, confirm the query name in
+/// the listed categories of a `route_learner`.
+fn compile_route_learn(
+    plugin: &RawPlugin,
+    learners: &[(String, Rc<crate::route_learner::RouteLearner>)],
+    catalog: &PluginCatalog<'_>,
+) -> Result<crate::route_learner::RouteLearn, ConfigError> {
+    let path = format!("{}.args", plugin.source_path);
+    let args = expect_map(&plugin.args, &path, "route_learn args must be a mapping")?;
+    args.reject_unknown(&["learner", "learn", "when"], &path)?;
+    let learner_tag = expect_string(args.required("learner", &path)?, &format!("{path}.learner"))?;
+    let learner = learners
+        .iter()
+        .find(|(tag, _)| *tag == learner_tag)
+        .map(|(_, learner)| Rc::clone(learner))
+        .ok_or_else(|| {
+            ConfigError::new(
+                format!("{path}.learner"),
+                format!("`{learner_tag}` is not a route_learner"),
+            )
+        })?;
+    let learn = args.required("learn", &path)?;
+    let learn_path = format!("{path}.learn");
+    let names: Vec<String> = match learn {
+        RawValue::String(name) => vec![name.clone()],
+        RawValue::Sequence(values) => values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| expect_string(value, &format!("{learn_path}[{index}]")))
+            .collect::<Result<_, _>>()?,
+        _ => {
+            return Err(ConfigError::new(
+                learn_path,
+                "learn must be a category tag or a list of them",
+            ));
+        }
+    };
+    if names.is_empty() {
+        return Err(ConfigError::new(
+            learn_path,
+            "at least one category is required",
+        ));
+    }
+    let mut categories = Vec::new();
+    for name in &names {
+        let index = learner.category_index(name).ok_or_else(|| {
+            ConfigError::new(
+                &learn_path,
+                format!("`{name}` is not a category of `{learner_tag}`"),
+            )
+        })?;
+        if !categories.contains(&index) {
+            categories.push(index);
+        }
+    }
+    let mut when = Vec::new();
+    if let Some(value) = args.get("when") {
+        if !matches!(value, RawValue::Null) {
+            let when_path = format!("{path}.when");
+            for (index, expression) in match_expressions(value, &when_path)?
+                .into_iter()
+                .enumerate()
+            {
+                let spec = compile_matcher(
+                    &expression,
+                    &format!("{when_path}[{index}]"),
+                    catalog,
+                    &plugin.root_dir,
+                )?;
+                if let Some(matcher) = spec.matcher {
+                    when.push((matcher, spec.reverse));
+                }
+            }
+        }
+    }
+    Ok(crate::route_learner::RouteLearn::new(
+        &plugin.tag,
+        learner,
+        categories,
+        when,
+    ))
 }
 
 /// `requery`: the JSON state file. A present file must parse; nothing is
@@ -3570,7 +3890,8 @@ fn resolve_policy_target_name(
             | PluginKind::Ecs
             | PluginKind::Sleep
             | PluginKind::Rewrite
-            | PluginKind::DomainOutput,
+            | PluginKind::DomainOutput
+            | PluginKind::RouteLearn,
         ) => Ok(PolicyTargetName::External(tag.to_owned())),
         Some(
             PluginKind::FastMark
@@ -3589,6 +3910,7 @@ fn resolve_policy_target_name(
             | PluginKind::AdguardRule
             | PluginKind::WebInfo
             | PluginKind::Requery
+            | PluginKind::RouteLearner
             | PluginKind::Socks5Proxy
             | PluginKind::EcsAddress,
         ) => Err(ConfigError::new(
@@ -4626,7 +4948,8 @@ fn compile_exec_item(
                     | PluginKind::Redirect
                     | PluginKind::Sleep
                     | PluginKind::Rewrite
-                    | PluginKind::DomainOutput,
+                    | PluginKind::DomainOutput
+                    | PluginKind::RouteLearn,
                 ) => Ok(ExecutableSpec::External {
                     target: ExternalRef::new(tag),
                 }),
@@ -4649,6 +4972,7 @@ fn compile_exec_item(
                     | PluginKind::AdguardRule
                     | PluginKind::WebInfo
                     | PluginKind::Requery
+                    | PluginKind::RouteLearner
                     | PluginKind::Socks5Proxy
                     | PluginKind::EcsAddress,
                 ) => Err(ConfigError::new(

@@ -1,16 +1,16 @@
 # Native `domain_output` (M1-c1)
 
-Scope: the plugin that counts the query names of a sequence, persists them in the reference file formats, publishes the generated
-rule list to a `domain_set_light` and injects each new name into a `domain_mapper` at once. Evidence:
-`docs/rust/validation-records/10-08-m1-c1/`. Reference: `plugin/executable/domain_output/domain_output.go` and
-`plugin/data_provider/domain_mapper/domain_mapper.go` (`QuickAdd`).
+Scope: the plugin that counts the query names of a sequence, persists them in the reference file formats and publishes the generated
+rule list to a `domain_set_light`. Evidence: `docs/rust/validation-records/10-08-m1-c1/`. Reference: `plugin/executable/domain_output/domain_output.go`.
+**Since config schema 2 (2026-10-23) it is only the access ranking (`top_domains`).** Learned routes (remembered direct / proxy, no-V4 / no-V6, special names) and the
+injection of recorded names into a `domain_mapper` (`target_mapper`, `target_mark`, `target_tag`) moved to [`route_learner`](native-route-learner.md); a `domain_output`
+that still has one of those three arguments is a configuration error naming `route_learner`.
 
 ## Arguments
 
 All optional: `file_stat`, `file_rule`, `gen_rule` (paths relative to the configuration root; empty = file not written), `pattern`,
-`appended_string`, `max_entries`, `dump_interval` (seconds, `<= 0` means 60), `domain_set_url`, `enable_flags`, `target_mapper`,
-`target_mark` (0..=63; 0 sets no flag), `target_tag`. Unknown arguments, a `target_mapper` that is not a `domain_mapper` of the
-configuration and a mark above 63 are configuration errors. The quick form `exec: domain_output a,b,...` is not supported.
+`appended_string`, `max_entries`, `dump_interval` (seconds, `<= 0` means 60), `domain_set_url`, `enable_flags`, `enabled`. Unknown arguments, and the removed
+`target_mapper`, `target_mark` and `target_tag`, are configuration errors. The quick form `exec: domain_output a,b,...` is not supported.
 
 ## Recording
 
@@ -58,18 +58,6 @@ After each write except the final one the distinct names are posted as `{"values
 
 One publication is in flight per plugin; a newer list replaces one still waiting. A failure is logged. The in-process call is never abandoned half way; the HTTP one is bounded by 5 s.
 
-## `target_mapper`
-
-The first record of a key adds the lower-case name to this plugin's **layer** of the mapper's overlay (the layer carries the plugin's fixed
-`target_mark` and `target_tag`); the next query for that exact name evaluates as a mapper match: the marks and tags of every layer that holds
-the name are added to whatever the rules say (hot values first, as `QuickAdd`), and the mapper's default mark/context mark/tag are not
-applied. No matcher is rebuilt for this. The overlay is read at each evaluation and is independent of the matcher generation: a rebuild
-neither loses entries nor affects queries in flight. (The reference clears its hot map at each rebuild, so a name recorded since the last
-rebuild silently falls back to its default routing; that is not kept.) `/flush` empties the plugin's layer together with its statistics,
-and names loaded from the statistics file at start are added to the layer too (so what was learned keeps its routing after a restart or a
-managed apply even when the rule file is older; in production the mapper rule for the published list has the same mark and tag). A layer holds
-at most the key cap.
-
 ## API (`/plugins/<tag>/`, GET only; other methods 405, unknown action 404)
 
 - `show?q=&limit=&offset=`: `text/plain; charset=utf-8`; `q` is a lower-cased substring of the key, `limit` defaults to 100 when invalid or
@@ -79,7 +67,7 @@ at most the key cap.
   While the plugin is retired by a managed apply these answer 503.
 - `restartall`: 501 (the host has no self-restart; nothing in the UI uses it).
 
-The capability `lists.remembered` is supported when a `my_*` or `top_domains` plugin exists.
+The capability `lists.remembered` is supported when a `route_learner` or a `my_*` / `top_domains` `domain_output` exists.
 
 ## Lifecycle
 

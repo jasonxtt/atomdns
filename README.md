@@ -11,7 +11,7 @@
   Go 版仍在 `jasonxtt/mosdns` 维护；它的安装脚本、Docker 镜像和 OpenWrt 软件源**不在本仓库**，本仓库也不提供这些发行形式。
 - 本仓库从 2026-10-21 起独立，保留 `jasonxtt/mosdns` 的 `rust` 分支的完整历史。
 - 以下名字沿用 MosDNS，不随项目改名：crate 名（`mosdns-*`）、`MOSDNS_*` 环境变量、`mosdns_*` 指标名、WebUI/API 里的既有字段、
-  配置包标识（`channel "rust"`、`rust-config-schema-1`、`config_rust_up.zip`）。
+  配置包标识（`channel "rust"`、`rust-config-schema-N`、`config_rust_up.zip`）。
 
 ## 主要能力
 

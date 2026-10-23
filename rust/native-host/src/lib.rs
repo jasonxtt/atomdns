@@ -31,6 +31,7 @@ mod process_metrics;
 mod requery;
 mod restart;
 mod rewrite;
+mod route_learner;
 mod rule_download;
 mod rule_sources;
 mod runtime_snapshot;

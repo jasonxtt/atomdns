@@ -846,7 +846,10 @@ impl RuntimeControl {
         // admits anything; both share each file's write lock.
         previous.config.rule_sources.fence();
         live.config.rule_sources.start();
-        // The retired view saves its statistics before the new view loads them.
+        // The learned routes move to the new view in memory (nothing is saved
+        // or loaded); the retired view saves its statistics before the new
+        // view loads them.
+        live.config.local.adopt(&previous.config.local);
         previous.config.local.fence();
         live.config.local.start(&crate::local_url::LocalApi {
             control: RuntimeControlWeak::from_control(&self.clone()),

@@ -428,6 +428,12 @@ pub(super) fn apply(
             .find(|plugin| plugin.tag == tag)
             .map(|plugin| plugin.kind.clone())
     };
+    // The WebUI's domain-generation switches address learner categories too.
+    let category_tags: Vec<String> = definitions
+        .iter()
+        .filter(|plugin| plugin.kind == "route_learner")
+        .flat_map(learner_category_tags)
+        .collect();
     for (section, tags, wanted) in [
         (
             "proxies",
@@ -445,6 +451,7 @@ pub(super) fn apply(
         for tag in tags {
             match kind_of(tag) {
                 Some(kind) if kind == wanted => {}
+                None if wanted == "domain_output" && category_tags.contains(tag) => {}
                 Some(kind) => {
                     return Err(settings_error(
                         &format!("{section}.{tag}"),
@@ -593,6 +600,7 @@ pub(super) fn apply(
                 resolve_ecs_strings(&mut plugin.args, &path, &objects)?;
             }
             "domain_output" => domain_output(plugin, settings, &mut report, &mut defaults)?,
+            "route_learner" => route_learner(plugin, settings, &mut report, &mut defaults)?,
             _ => {}
         }
     }
@@ -948,6 +956,84 @@ fn resolve_ecs_strings(
         }
         _ => Ok(()),
     }
+}
+
+/// The category tags of a `route_learner` definition (what is readable of an
+/// unvalidated definition; the compiler reports malformed ones).
+fn learner_category_tags(plugin: &RawPlugin) -> Vec<String> {
+    let RawValue::Map(args) = &plugin.args else {
+        return Vec::new();
+    };
+    let Some(RawValue::Sequence(list)) = args.get("categories") else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter_map(|item| match item {
+            RawValue::Map(map) => match map.get("tag") {
+                Some(RawValue::String(tag)) => Some(tag.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// The effective `enabled` of every category of a `route_learner`: the
+/// category's setting (else the YAML value) while the master switch is on.
+fn route_learner(
+    plugin: &mut RawPlugin,
+    settings: &Settings,
+    report: &mut Vec<EffectiveItem>,
+    defaults: &mut YamlDefaults,
+) -> Result<(), ConfigError> {
+    let path = format!("{}.args.categories", plugin.source_path);
+    let master = settings.domain_generation.enabled.unwrap_or(true);
+    let RawValue::Map(args) = &mut plugin.args else {
+        return Ok(());
+    };
+    let Some((_, RawValue::Sequence(list))) = args
+        .entries
+        .iter_mut()
+        .find(|(name, _)| name == "categories")
+    else {
+        return Ok(());
+    };
+    for (index, item) in list.iter_mut().enumerate() {
+        let RawValue::Map(map) = item else { continue };
+        let Some(RawValue::String(tag)) = map.get("tag").cloned() else {
+            continue;
+        };
+        let yaml = match map.get("enabled") {
+            None | Some(RawValue::Null) => true,
+            Some(RawValue::Bool(value)) => *value,
+            Some(_) => {
+                return Err(ConfigError::new(
+                    format!("{path}[{index}].enabled"),
+                    "expected a boolean",
+                ));
+            }
+        };
+        defaults.generation.insert(tag.clone(), yaml);
+        let own = settings
+            .domain_generation
+            .plugins
+            .get(&tag)
+            .map(|switch| switch.enabled);
+        let effective = master && own.unwrap_or(yaml);
+        set_arg(map, "enabled", RawValue::Bool(effective));
+        report.push(EffectiveItem {
+            object: tag,
+            kind: "domain_output",
+            field: "enabled",
+            value: effective.to_string(),
+            source: if own.is_some() || !master {
+                SETTINGS
+            } else {
+                YAML
+            },
+        });
+    }
+    Ok(())
 }
 
 /// The effective `enabled` of a `domain_output`: the plugin's setting (else

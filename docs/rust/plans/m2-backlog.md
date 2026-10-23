@@ -71,6 +71,11 @@
 ### 可提前的小项（可在 5D-2 或 Phase 6 期间评估）
 - 学习写入时规范化为小写（不改其它结构），消除“大小写不同的重复/无效规则”这一类问题。需单独评估对现有生成文件与 Go 回退的影响后再决定。
 
+**2026-10-23 已完成（任务 `10-22-rust-native-route-learner`）**：声明式 `route_learner` + `route_learn` 取代 `domain_output` 学习名单与 `config_rust` 里约 30 处分散的学习触发；
+每条记录单独过期（直连/代理 7 天、无 V6 1 天、无 V4/特殊域名 8 天），状态一个 JSON 文件、6 小时一次且有变化才写，热应用在内存里交接；不导入旧名单；
+requery 不再清空学习名单（缓存照旧清空）；配置 schema 升到 2。契约 [native-route-learner](../contracts/native-route-learner.md)，验证记录 [10-22-route-learner](../validation-records/10-22-route-learner/README.md)。
+未做：按需复核/后台复核、单条固定/删除、指标（可后续）。
+
 ## M2-3：热应用编译移出 DNS 线程
 
 5D-2b（2026-10-17）测得：设置 API 修改与专用组保存的热应用在唯一 DNS 线程上编译配置，DNS 停顿约 0.5–0.65 s；500 qps 下内核 UDP 缓冲溢出丢包，

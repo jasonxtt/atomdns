@@ -1504,6 +1504,23 @@ async fn local_plugin_reply(
             .map_or("", |(_, query)| query);
         return Some(output.runtime.handle(&request.method, action, query).await);
     }
+    if let Some(learner) = config
+        .local
+        .learners
+        .iter()
+        .find(|learner| learner.runtime.owns(tag.as_ref()))
+    {
+        let query = request
+            .target
+            .split_once('?')
+            .map_or("", |(_, query)| query);
+        return Some(
+            learner
+                .runtime
+                .handle(tag.as_ref(), &request.method, action, query)
+                .await,
+        );
+    }
     if let Some(requery) = config
         .local
         .requeries
@@ -3372,7 +3389,7 @@ fn ui_operations(
         (
             "system.domain_generation",
             generation,
-            "当前配置没有 domain_output 插件",
+            "当前配置没有 route_learner 或 domain_output 插件",
         ),
     ] {
         operations.insert(
@@ -3380,16 +3397,17 @@ fn ui_operations(
             serde_json::json!({"supported": supported, "reason": if supported { None } else { Some(reason) }}),
         );
     }
-    let remembered = config
-        .local
-        .domain_outputs
-        .iter()
-        .any(|output| output.tag.starts_with("my_") || output.tag == "top_domains");
+    let remembered = !config.local.learners.is_empty()
+        || config
+            .local
+            .domain_outputs
+            .iter()
+            .any(|output| output.tag.starts_with("my_") || output.tag == "top_domains");
     operations.insert(
         "lists.remembered".to_owned(),
         serde_json::json!({
             "supported": remembered,
-            "reason": if remembered { None } else { Some("当前配置没有 my_* 或 top_domains 的 domain_output 插件") }
+            "reason": if remembered { None } else { Some("当前配置没有 route_learner 或 top_domains 的 domain_output 插件") }
         }),
     );
     let restart = crate::restart::target().is_some();
@@ -3838,7 +3856,10 @@ mod tests {
             assert_eq!(health["ready"], true);
             assert_eq!(health["runtime"], "rust");
             assert_eq!(health["version"], crate::build_identity::VERSION);
-            assert_eq!(health["required_config_schema"], 1);
+            assert_eq!(
+                health["required_config_schema"],
+                crate::update::REQUIRED_CONFIG_SCHEMA
+            );
             assert!(
                 health["applied_config_schema"].is_null(),
                 "no configuration root here"

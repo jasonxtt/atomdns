@@ -149,6 +149,18 @@ struct Status {
     last_error: String,
     #[serde(default, deserialize_with = "null_default")]
     progress: Progress,
+    /// `flush_rules` URLs the last task skipped because they flush a learned
+    /// route category (config schema 2). Absent (0) in files of the reference.
+    #[serde(
+        default,
+        deserialize_with = "null_default",
+        skip_serializing_if = "is_zero"
+    )]
+    skipped_flush_urls: i64,
+}
+
+fn is_zero(value: &i64) -> bool {
+    *value == 0
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -297,6 +309,9 @@ pub struct Requery {
     wake: tokio::sync::Notify,
     env: RefCell<Option<Env>>,
     fenced: Cell<bool>,
+    /// Learned-route category tags: a `flush_rules` URL that flushes one of
+    /// them is skipped (the caches are still flushed).
+    protected: RefCell<Vec<String>>,
 }
 
 /// The compiled plugin: the executable-less handle the API looks up by tag.
@@ -330,7 +345,13 @@ impl Requery {
             wake: tokio::sync::Notify::new(),
             env: RefCell::new(None),
             fenced: Cell::new(false),
+            protected: RefCell::new(Vec::new()),
         }
+    }
+
+    /// Names the learned-route category tags whose `flush` URLs are skipped.
+    pub(crate) fn protect_flush(&self, tags: Vec<String>) {
+        *self.protected.borrow_mut() = tags;
     }
 
     /// A source path as the reference reads it: relative to the working
@@ -517,6 +538,7 @@ impl Requery {
             config.status.last_run_start_time = GoTime(Some(self.now()));
             config.status.last_run_end_time = GoTime(None);
             config.status.last_run_domain_count = 0;
+            config.status.skipped_flush_urls = 0;
             config.status.last_error.clear();
             config.status.progress = Progress::default();
         }
@@ -635,6 +657,15 @@ impl Requery {
             crate::diag::info_line!("{}: no domains found to process", self.tag);
             return End::Done;
         }
+        let (flush, skipped) = self.split_flush(flush);
+        if skipped > 0 {
+            crate::diag::info_line!(
+                "{}: skipping {skipped} flush_rules URL(s) that flush learned routes",
+                self.tag
+            );
+            self.config.borrow_mut().status.skipped_flush_urls =
+                i64::try_from(skipped).unwrap_or(i64::MAX);
+        }
         if let Err(error) = self.call_urls(token, &flush, delay).await {
             return End::Failed(format!("failed during flush_rules step: {error}"));
         }
@@ -651,6 +682,36 @@ impl Requery {
             return End::Failed(format!("failed during final save_rules step: {error}"));
         }
         End::Done
+    }
+
+    /// The `flush_rules` URLs to call, and how many were dropped because they
+    /// are `/plugins/<tag>/flush` on this host for a learned-route category.
+    fn split_flush(&self, urls: Vec<String>) -> (Vec<String>, usize) {
+        let api = self.env.borrow().as_ref().and_then(|env| env.api.api);
+        let protected = self.protected.borrow();
+        if protected.is_empty() {
+            return (urls, 0);
+        }
+        let mut kept = Vec::with_capacity(urls.len());
+        let mut skipped = 0;
+        for url in urls {
+            let learned = match local_url::normalized(&url, api) {
+                Target::Local(path) => path
+                    .split('?')
+                    .next()
+                    .and_then(|path| path.strip_prefix("/plugins/"))
+                    .and_then(|rest| rest.strip_suffix("/flush"))
+                    .and_then(crate::api::decode_plugin_tag)
+                    .is_some_and(|tag| protected.iter().any(|have| *have == *tag)),
+                Target::Http(_) => false,
+            };
+            if learned {
+                skipped += 1;
+            } else {
+                kept.push(url);
+            }
+        }
+        (kept, skipped)
     }
 
     /// Calls each URL with GET in order, `delay` apart; every answer must be 2xx.

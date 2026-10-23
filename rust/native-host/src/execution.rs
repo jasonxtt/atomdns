@@ -1578,6 +1578,27 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                     };
                     continue;
                 }
+                if let Some(learn) = config
+                    .local
+                    .learns
+                    .iter()
+                    .find(|learn| learn.executable == dispatch.executable())
+                {
+                    let outcome = learn.runtime.run(machine.state());
+                    step = match machine.resume(
+                        dispatch.executable(),
+                        outcome.map(|()| ExecutorOutcome::Continue),
+                    ) {
+                        Ok(step) => step,
+                        Err(_) => {
+                            facts.set_failure_provenance(FailureProvenance::LocalFailure(
+                                LocalFailureKind::InternalExecution,
+                            ));
+                            return result_from_state(&machine, &header, &question, facts);
+                        }
+                    };
+                    continue;
+                }
                 if let Some(rewrite) = config
                     .local
                     .rewrites
@@ -2496,6 +2517,25 @@ async fn drive_branch_inner<'a, E: ExchangeExecutor + ?Sized>(
                     };
                     continue;
                 }
+                if let Some(learn) = context
+                    .config
+                    .local
+                    .learns
+                    .iter()
+                    .find(|learn| learn.executable == dispatch.executable())
+                {
+                    let outcome = learn.runtime.run(machine.state());
+                    step = match machine.resume(
+                        dispatch.executable(),
+                        outcome.map(|()| ExecutorOutcome::Continue),
+                    ) {
+                        Ok(step) => step,
+                        Err(error) => {
+                            return BranchOutcome::failure(machine.state().clone(), error);
+                        }
+                    };
+                    continue;
+                }
                 if let Some(rewrite) = context
                     .config
                     .local
@@ -2981,6 +3021,21 @@ fn run_target<'a, E: ExchangeExecutor + ?Sized>(
                         .runtime
                         .record(context.raw(), &successor.state().query.question);
                     return drive_branch(successor, context, source).await;
+                }
+                if let Some(learn) = context
+                    .config
+                    .local
+                    .learns
+                    .iter()
+                    .find(|learn| learn.executable == executable)
+                {
+                    return match learn.runtime.run(successor.state()) {
+                        Ok(()) => drive_branch(successor, context, source).await,
+                        Err(error) => BranchOutcome::failure(
+                            successor.state().clone(),
+                            ExecutionError::Executor(error),
+                        ),
+                    };
                 }
                 if let Some(rewrite) = context
                     .config

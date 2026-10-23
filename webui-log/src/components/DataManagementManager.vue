@@ -87,9 +87,6 @@ const schedulerForm = reactive({
 const saveRulePaths = [
   'top_domains/save',
   'my_fakeiplist/save',
-  'my_nodenov4list/save',
-  'my_nodenov6list/save',
-  'my_notinlist/save',
   'my_nov4list/save',
   'my_nov6list/save',
   'my_realiplist/save'
@@ -98,9 +95,6 @@ const saveRulePaths = [
 const flushRulePaths = [
   'top_domains/flush',
   'my_fakeiplist/flush',
-  'my_nodenov4list/flush',
-  'my_nodenov6list/flush',
-  'my_notinlist/flush',
   'my_nov4list/flush',
   'my_nov6list/flush',
   'my_realiplist/flush'

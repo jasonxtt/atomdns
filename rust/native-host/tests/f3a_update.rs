@@ -381,10 +381,10 @@ fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
     out
 }
 
-/// A configuration package for `config_custom.yaml` (schema 1, `rust` channel).
+/// A configuration package for `config_custom.yaml` (schema 2, `rust` channel).
 fn config_package(content: &str, edit: impl Fn(&mut serde_json::Value)) -> Vec<u8> {
     let mut manifest = serde_json::json!({
-        "format": 1, "channel": "rust", "package_id": "rust-config-schema-1", "config_schema": 1,
+        "format": 1, "channel": "rust", "package_id": "rust-config-schema-2", "config_schema": 2,
         "managed_files": ["config_custom.yaml"],
         "sha256": {"config_custom.yaml": sha256(content.as_bytes())},
     });
@@ -398,8 +398,8 @@ fn config_package(content: &str, edit: impl Fn(&mut serde_json::Value)) -> Vec<u
 fn manifest_json(tag: &str, archive: &[u8], config: Option<(&str, &[u8])>) -> Vec<u8> {
     let mut manifest = serde_json::json!({
         "format": 1, "channel": "rust", "version": tag,
-        "required_config_schema": if config.is_some() { 1 } else { 0 },
-        "config_package_id": "rust-config-schema-1",
+        "required_config_schema": if config.is_some() { 2 } else { 0 },
+        "config_package_id": "rust-config-schema-2",
         "artifacts": {"rtdns-linux-amd64.tar.gz": {"sha256": sha256(archive)}},
     });
     if let Some((url, bytes)) = config {
@@ -676,7 +676,7 @@ fn status_and_check_use_the_cache_ignore_other_tag_families_and_degrade_on_failu
             .unwrap()
             .ends_with("/v99.0.0/rtdns-linux-amd64.tar.gz")
     );
-    assert_eq!(status["config_schema_required"], 1);
+    assert_eq!(status["config_schema_required"], 2);
     assert!(status.get("pending_restart").is_none() && status.get("rollback_performed").is_none());
     assert!(
         status["release_url"]
@@ -699,7 +699,7 @@ fn status_and_check_use_the_cache_ignore_other_tag_families_and_degrade_on_failu
     }
     let health = host.health().unwrap();
     assert_eq!(health["version"], version);
-    assert_eq!(health["required_config_schema"], 1);
+    assert_eq!(health["required_config_schema"], 2);
     assert_eq!(health["config_management_enabled"], true);
     assert_eq!(health["update"]["state"], "idle");
     // The server fails: a forced check still answers 200 with the reason.
@@ -956,9 +956,9 @@ fn a_full_update_replaces_program_and_config_in_the_same_process_and_is_confirme
         "DNS answers on the new program"
     );
     let health = host.health().unwrap();
-    assert_eq!(health["applied_config_schema"], 1);
+    assert_eq!(health["applied_config_schema"], 2);
     let status = host.api("GET", "/api/v1/update/status", b"").json();
-    assert_eq!(status["config_schema_applied"], 1);
+    assert_eq!(status["config_schema_applied"], 2);
     assert_eq!(status["config_update_status"], "success");
     assert!(status.get("pending_restart").is_none(), "{status}");
     assert!(host.root.join("update/installed.json").exists());
@@ -1258,7 +1258,7 @@ fn a_configuration_update_from_a_url_goes_through_the_guard_and_stays() {
     assert_eq!(host.exe_bytes(), *binary());
     assert_eq!(host.child.id(), pid);
     assert!(ask(host.dns, "after-config.example.com"));
-    assert_eq!(host.health().unwrap()["applied_config_schema"], 1);
+    assert_eq!(host.health().unwrap()["applied_config_schema"], 2);
     let _ = &mut host;
 }
 
