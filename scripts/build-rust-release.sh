@@ -55,8 +55,10 @@ else
   )
   cp "${ROOT_DIR}/release/rtdns-webui.tar.gz" "${WEBUI}"
 fi
+# List once: `tar | grep -q` under pipefail fails when grep exits early and tar gets SIGPIPE.
+WEBUI_ENTRIES="$(tar -tzf "${WEBUI}")"
 for required in index.html ui-manifest.json; do
-  if ! tar -tzf "${WEBUI}" | grep -qx "${required}"; then
+  if ! grep -qx "${required}" <<<"${WEBUI_ENTRIES}"; then
     echo "rtdns-webui.tar.gz has no top-level ${required}" >&2
     exit 1
   fi
