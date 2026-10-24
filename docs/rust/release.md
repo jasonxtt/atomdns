@@ -72,7 +72,7 @@
 6. **全新安装包**：用同一份 `rtdns-webui.tar.gz` 在 file 仓库运行 `mosdns/config/build_config_rust_zip.sh <rtdns-webui.tar.gz>` 重新生成 `config_rust.zip`（带 `ui/main/`）并提交 file 仓库。
    Release 建好后，用 `curl -fsSL <config.url> | sha256sum` 再核对一次与元数据一致。更新器只在 `applied_config_schema < required_config_schema` 时下载配置包。
 
-## v0.4.0 升级须知（配置 schema 4，草稿 2026-10-24；WebUI 拆出程序）
+## v0.4.0 升级须知（配置 schema 4，2026-10-24；WebUI 拆出程序）
 
 ### WebUI 从程序里拆出来
 
