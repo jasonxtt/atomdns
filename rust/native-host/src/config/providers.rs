@@ -1024,15 +1024,34 @@ pub struct DomainMapperConfig {
 #[derive(Default)]
 pub(crate) struct LearnerSlot {
     learner: std::cell::RefCell<Option<Rc<crate::route_learner::RouteLearner>>>,
+    labels: std::cell::RefCell<Arc<[String]>>,
 }
 
 impl LearnerSlot {
     /// Installs the learner; `false` when the mapper already has one.
-    pub(crate) fn set(&self, learner: Rc<crate::route_learner::RouteLearner>) -> bool {
+    pub(crate) fn set(
+        &self,
+        learner: Rc<crate::route_learner::RouteLearner>,
+        default_tag: &str,
+    ) -> bool {
         let mut slot = self.learner.borrow_mut();
         if slot.is_some() {
             return false;
         }
+        let mut labels: Vec<String> = learner
+            .settings()
+            .categories
+            .iter()
+            .map(|c| c.label.trim().to_owned())
+            .collect();
+        labels.extend(
+            default_tag
+                .split('|')
+                .map(str::trim)
+                .filter(|tag| !tag.is_empty())
+                .map(str::to_owned),
+        );
+        *self.labels.borrow_mut() = labels.into();
         *slot = Some(learner);
         true
     }
@@ -1110,6 +1129,10 @@ pub struct MapperOutcome {
 }
 
 impl DomainMapperConfig {
+    pub(super) fn default_tag(&self) -> &str {
+        &self.default_tag
+    }
+
     /// The number of unique rules in the current generation.
     #[must_use]
     pub fn rule_count(&self) -> usize {
@@ -1128,8 +1151,25 @@ impl DomainMapperConfig {
     /// Evaluates a presentation-form query name (no trailing dot required).
     #[must_use]
     pub fn evaluate(&self, name: Option<&str>) -> MapperOutcome {
+        self.evaluate_with_overlay(name).0
+    }
+
+    fn evaluate_with_overlay(
+        &self,
+        name: Option<&str>,
+    ) -> (
+        MapperOutcome,
+        Option<mosdns_sequence_core::RoutingLabelOverlay>,
+    ) {
         let matcher = self.matcher.get();
         let hot = name.and_then(|name| self.learner.lookup(name));
+        let overlay = self.learner.learner.borrow().as_ref().map(|learner| {
+            mosdns_sequence_core::RoutingLabelOverlay {
+                prefix_len: hot.as_ref().map_or(0, |hit| hit.tags.len()),
+                dynamic_label_count: learner.settings().categories.len(),
+                replaced: Arc::clone(&self.learner.labels.borrow()),
+            }
+        });
         if let Some(result) = name.and_then(|name| matcher.r#match(name)) {
             // Rule mark `m` is stored as bit `m - 1` of the result mask and
             // set as fast flag `m`.
@@ -1152,32 +1192,38 @@ impl DomainMapperConfig {
                 );
                 outcome.matched_rule_source = (!sources.is_empty()).then_some(sources);
             }
-            return outcome;
+            return (outcome, overlay);
         }
         if let Some(learned) = hot {
-            return MapperOutcome {
-                fast_flags: learned.flags,
-                ctx_marks: Vec::new(),
-                domain_set: (!learned.tags.is_empty()).then_some(learned.tags),
-                matched_rule_source: (!learned.sources.is_empty()).then_some(learned.sources),
-                matched: true,
-            };
+            return (
+                MapperOutcome {
+                    fast_flags: learned.flags,
+                    ctx_marks: Vec::new(),
+                    domain_set: (!learned.tags.is_empty()).then_some(learned.tags),
+                    matched_rule_source: (!learned.sources.is_empty()).then_some(learned.sources),
+                    matched: true,
+                },
+                overlay,
+            );
         }
-        MapperOutcome {
-            fast_flags: if self.default_mark == 0 {
-                0
-            } else {
-                1 << self.default_mark
+        (
+            MapperOutcome {
+                fast_flags: if self.default_mark == 0 {
+                    0
+                } else {
+                    1 << self.default_mark
+                },
+                ctx_marks: if self.default_ctx_mark == 0 {
+                    Vec::new()
+                } else {
+                    vec![self.default_ctx_mark]
+                },
+                domain_set: (!self.default_tag.is_empty()).then(|| self.default_tag.clone()),
+                matched_rule_source: None,
+                matched: false,
             },
-            ctx_marks: if self.default_ctx_mark == 0 {
-                Vec::new()
-            } else {
-                vec![self.default_ctx_mark]
-            },
-            domain_set: (!self.default_tag.is_empty()).then(|| self.default_tag.clone()),
-            matched_rule_source: None,
-            matched: false,
-        }
+            overlay,
+        )
     }
 
     pub(super) fn executor(&self) -> Box<dyn Executor> {
@@ -1193,7 +1239,8 @@ struct MapperExecutor {
 
 impl Executor for MapperExecutor {
     fn execute(&self, state: &mut ExecutionState) -> Result<ExecutorOutcome, ExecutorError> {
-        let outcome = self.config.evaluate_wire(&state.query.question.qname_wire);
+        let name = presentation_name(&state.query.question.qname_wire);
+        let (outcome, overlay) = self.config.evaluate_with_overlay(name.as_deref());
         if outcome.fast_flags != 0 {
             state.apply_mutation(StateMutation::SetFastFlags(
                 state.fast_flags | outcome.fast_flags,
@@ -1213,6 +1260,11 @@ impl Executor for MapperExecutor {
                 field: RoutingField::MatchedRuleSource,
                 value: Some(sources),
             });
+        }
+        // A no-op mapper must not discard a preceding mapper's live labels.
+        // A label-producing mapper already cleared the old context above.
+        if overlay.is_some() {
+            state.domain_set_overlay = overlay;
         }
         Ok(ExecutorOutcome::Continue)
     }

@@ -49,10 +49,26 @@ user: `exit` crossing a cache successor is successful completion, aligned with
 Go's entry-handler semantics. Publish the response present at that boundary,
 before a surviving `try` caller resumes or overwrites it, for both watched
 caches and direct fallback cache targets. Lazy refresh follows the same rule.
-An enclosing cache stores the committed response's domain_set even if an inner
-completion cleared the parent's routing candidate; a later response replacement
-uses its own metadata. The warm hit must restore the cold label, not retain a
-newly learned mapper label because the stored label was accidentally empty.
+An enclosing cache stores the committed response's original domain_set (before
+query-local annotations) even if an inner completion cleared the parent's routing
+candidate; a later response replacement
+uses its own metadata. The warm hit must restore the cold response's non-learning
+labels, rather than accidentally inheriting unrelated mapper metadata from an
+empty stored label. User decision **2026-10-24**: a mapper with a `route_learner`
+carries the current query's learning-label prefix through a cache hit. These
+live labels precede the stored non-learning labels, with duplicates dropped.
+Historical learning labels are replaced by the current learning prefix; the
+mapper default is superseded only while learning is live. Expired or flushed
+learning labels disappear even while the DNS
+response stays cached. If filtering leaves no label, retain the current mapper
+result (including its default). An explicit later label assignment replaces that
+mapper context. This uses the existing mapper evaluation, without another learner
+lookup or changes to marks, learning counters, DNS responses, or cache formats.
+The added learning annotation changes `domain_set` only: derivation of
+`effective_tag` retains the cached response's original labels. An explicit later
+label assignment replaces that derivation context as well.
+Nested cache publication and lazy refresh retain those response-owned labels;
+the query-local annotation must not become durable response provenance.
 Absent/invalid responses, executor errors, cancellation, deadline expiry or fuel
 exhaustion never publish. The earlier exit-unwound prohibition was an implementation
 choice, not an approved product-visible deviation.
