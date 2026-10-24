@@ -2502,7 +2502,10 @@ fn compile_definitions(
                     ),
                 )
             })?;
-        if !mapper.learner.set(Rc::clone(&learner)) {
+        if !mapper
+            .learner
+            .set(Rc::clone(&learner), mapper.default_tag())
+        {
             return Err(ConfigError::new(
                 format!("{}.args.target_mapper", pending.path),
                 format!("`{}` already has a route_learner", mapper.tag),

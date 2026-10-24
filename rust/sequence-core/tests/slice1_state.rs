@@ -43,12 +43,26 @@ fn complete_response_wire() -> Vec<u8> {
 }
 
 #[test]
+fn cached_default_is_preserved_without_a_live_learning_prefix() {
+    let mut state = state();
+    state.routing.domain_set = Some("NEW_STATIC".to_owned());
+    state.domain_set_overlay = Some(mosdns_sequence_core::RoutingLabelOverlay {
+        prefix_len: 0,
+        dynamic_label_count: 1,
+        replaced: vec!["LEARNED".to_owned(), "DEFAULT".to_owned()].into(),
+    });
+    state.restore_cached_domain_set("DEFAULT".to_owned());
+    assert_eq!(state.routing.domain_set.as_deref(), Some("DEFAULT"));
+}
+
+#[test]
 fn state_snapshot_is_typed_owned_and_deterministic() {
     let mut state = state();
     state.marks.extend([49, 7, 7]);
     state.fast_flags = 1 << 48;
     state.routing = RoutingState {
         domain_set: Some("domain".to_owned()),
+        effective_domain_set: None,
         effective_tag: None,
         matched_group: Some("group".to_owned()),
         final_sequence: Some("sequence".to_owned()),

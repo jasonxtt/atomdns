@@ -170,7 +170,7 @@ impl RefreshEnvironment {
                 if let MachineResponseState::Raw(wire) = &result.state.response {
                     let _ = token.publish_with_origin(
                         wire.as_bytes(),
-                        result.state.routing.domain_set.as_deref().unwrap_or(""),
+                        result.state.routing.response_domain_set().unwrap_or(""),
                         result.state.response_origin().cloned(),
                     );
                 }
@@ -1476,7 +1476,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                     facts
                         .response_routing
                         .as_ref()
-                        .and_then(|routing| routing.domain_set.as_deref())
+                        .and_then(RoutingState::response_domain_set)
                         .unwrap_or(""),
                     request_shutdown.is_cancelled(),
                     publication_deadline,
@@ -1487,6 +1487,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                 // empty audit-routing candidate so stale child provenance
                 // cannot become the parent's final decision.
                 machine.state_mut().routing = RoutingState::default();
+                machine.state_mut().domain_set_overlay = None;
                 facts.routing = RoutingState::default();
                 facts.routing_changed_since_response = false;
                 step = match machine.resume_scope_completion(completion.token()) {
@@ -1945,9 +1946,9 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                         facts.cache_status = CacheStatus::Hit;
                         facts.set_response_source(ResponseSource::Cache);
                         facts.failure_provenance = None;
-                        if !hit.domain_set.is_empty() {
-                            machine.state_mut().routing.domain_set = Some(hit.domain_set);
-                        }
+                        machine
+                            .state_mut()
+                            .restore_cached_domain_set(hit.domain_set);
                         machine
                             .state_mut()
                             .set_raw_response_with_origin(hit.response, hit.origin);
@@ -2427,7 +2428,7 @@ async fn drive_branch_inner<'a, E: ExchangeExecutor + ?Sized>(
                     &mut pending_stores,
                     completion.token(),
                     &machine,
-                    machine.state().routing.domain_set.as_deref().unwrap_or(""),
+                    machine.state().routing.response_domain_set().unwrap_or(""),
                     context.root_cancellation.is_cancelled(),
                     publication_deadline,
                 );
@@ -2754,9 +2755,9 @@ async fn drive_branch_inner<'a, E: ExchangeExecutor + ?Sized>(
                                 environment.start(cache_config.id, recipe, context.view.clone());
                             }
                         }
-                        if !hit.domain_set.is_empty() {
-                            machine.state_mut().routing.domain_set = Some(hit.domain_set);
-                        }
+                        machine
+                            .state_mut()
+                            .restore_cached_domain_set(hit.domain_set);
                         machine
                             .state_mut()
                             .set_raw_response_with_origin(hit.response, hit.origin);
@@ -3135,9 +3136,9 @@ fn run_target<'a, E: ExchangeExecutor + ?Sized>(
                                 environment.start(cache_config.id, recipe, context.view.clone());
                             }
                         }
-                        if !hit.domain_set.is_empty() {
-                            successor.state_mut().routing.domain_set = Some(hit.domain_set);
-                        }
+                        successor
+                            .state_mut()
+                            .restore_cached_domain_set(hit.domain_set);
                         successor
                             .state_mut()
                             .set_raw_response_with_origin(hit.response, hit.origin);
@@ -3159,7 +3160,7 @@ fn run_target<'a, E: ExchangeExecutor + ?Sized>(
                             if let MachineResponseState::Raw(wire) = &result.state.response {
                                 let _ = token.publish_with_origin(
                                     wire.as_bytes(),
-                                    result.state.routing.domain_set.as_deref().unwrap_or(""),
+                                    result.state.routing.response_domain_set().unwrap_or(""),
                                     result.state.response_origin().cloned(),
                                 );
                             }
@@ -4423,8 +4424,7 @@ fn result_from_wire(response_wire: Vec<u8>, mut facts: ExecutionFacts) -> Execut
         .or(derived_final_upstream.clone());
     let effective_tag = routing.effective_tag.clone().or_else(|| {
         routing
-            .domain_set
-            .as_deref()
+            .response_domain_set()
             .map(|domain_set| {
                 compute_effective_tag(
                     domain_set,
@@ -4515,6 +4515,7 @@ fn overlay_routing(target: &mut RoutingState, before: &RoutingState, after: &Rou
     }
     overlay!(
         domain_set,
+        effective_domain_set,
         effective_tag,
         matched_group,
         final_sequence,

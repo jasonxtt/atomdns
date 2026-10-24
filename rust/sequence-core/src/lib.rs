@@ -19,7 +19,8 @@ pub use program::{
 pub use state::{
     ClientContext, ClientTransport, DnsResponseInspector, ExecutionState, OwnedResponseWire,
     QueryState, ResponseError, ResponseInspection, ResponseInspector, ResponseOrigin,
-    ResponseState, RoutingField, RoutingState, StateMutation, StateSnapshot, SynthesizedResponse,
+    ResponseState, RoutingField, RoutingLabelOverlay, RoutingState, StateMutation, StateSnapshot,
+    SynthesizedResponse,
 };
 
 #[cfg(test)]

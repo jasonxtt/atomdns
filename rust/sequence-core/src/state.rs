@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use mosdns_dns_core::{QueryHeader, QuestionInfo, ResponseError as DnsResponseError, TtlInfo};
 
@@ -12,6 +13,8 @@ pub struct ExecutionState {
     pub fast_flags: u64,
     pub response: ResponseState,
     pub routing: RoutingState,
+    /// Query-local dynamic labels; never part of response provenance or dumps.
+    pub domain_set_overlay: Option<RoutingLabelOverlay>,
     response_generation: u64,
     response_origin: Option<ResponseOrigin>,
 }
@@ -29,6 +32,7 @@ impl ExecutionState {
             fast_flags: 0,
             response: ResponseState::None,
             routing: RoutingState::default(),
+            domain_set_overlay: None,
             response_generation: 0,
             response_origin: None,
         }
@@ -103,6 +107,10 @@ impl ExecutionState {
                 self.fast_flags = flags;
             }
             StateMutation::SetRouting { field, value } => {
+                if field == RoutingField::DomainSet {
+                    self.domain_set_overlay = None;
+                    self.routing.effective_domain_set = None;
+                }
                 self.routing.set(field, value);
             }
             StateMutation::SetRoutingFields {
@@ -111,6 +119,8 @@ impl ExecutionState {
                 matched_rule_source,
             } => {
                 self.routing.domain_set = domain_set;
+                self.domain_set_overlay = None;
+                self.routing.effective_domain_set = None;
                 self.routing.effective_tag = effective_tag;
                 self.routing.matched_rule_source = matched_rule_source;
             }
@@ -200,6 +210,9 @@ pub struct QueryState {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RoutingState {
     pub domain_set: Option<String>,
+    /// Response-owned labels used to derive the effective route, before a
+    /// query-local learning annotation. Not a public audit or dump field.
+    pub effective_domain_set: Option<String>,
     pub effective_tag: Option<String>,
     pub matched_group: Option<String>,
     pub final_sequence: Option<String>,
@@ -209,7 +222,77 @@ pub struct RoutingState {
     pub matched_rule_source: Option<String>,
 }
 
+/// A mapper's live label prefix and the labels it replaces in a stored result.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RoutingLabelOverlay {
+    /// Byte length of the live prefix already present in `domain_set`.
+    pub prefix_len: usize,
+    /// Category labels precede mapper defaults in `replaced`. Defaults are
+    /// superseded only when this query has a live learning prefix.
+    pub dynamic_label_count: usize,
+    pub replaced: Arc<[String]>,
+}
+
+impl ExecutionState {
+    /// Restores response-owned labels while retaining the mapper's live prefix.
+    pub fn restore_cached_domain_set(&mut self, cached: String) {
+        if cached.is_empty() {
+            return;
+        }
+        let Some(overlay) = &self.domain_set_overlay else {
+            self.routing.domain_set = Some(cached);
+            self.routing.effective_domain_set = None;
+            return;
+        };
+        let current = self.routing.domain_set.as_deref().unwrap_or("");
+        let superseded = |part: &str| {
+            overlay
+                .replaced
+                .iter()
+                .take(if overlay.prefix_len == 0 {
+                    overlay.dynamic_label_count
+                } else {
+                    overlay.replaced.len()
+                })
+                .any(|label| label == part)
+                && !current.split('|').any(|label| label.trim() == part)
+        };
+        // With no learning annotation or stale label, keep the original
+        // move-only restoration path (and the stored string's formatting).
+        if overlay.prefix_len == 0 && !cached.split('|').map(str::trim).any(superseded) {
+            self.routing.domain_set = Some(cached);
+            self.routing.effective_domain_set = None;
+            return;
+        }
+        let mut joined = current.get(..overlay.prefix_len).unwrap_or("").to_owned();
+        for part in cached.split('|').map(str::trim).filter(|s| !s.is_empty()) {
+            if superseded(part) || joined.split('|').any(|label| label == part) {
+                continue;
+            }
+            if !joined.is_empty() {
+                joined.push('|');
+            }
+            joined.push_str(part);
+        }
+        // If only expired learning labels remain, keep the current mapper
+        // result (including its default) rather than an empty label.
+        if !joined.is_empty() {
+            self.routing.domain_set = Some(joined);
+        }
+        self.routing.effective_domain_set =
+            (self.routing.domain_set.as_deref() != Some(cached.as_str())).then_some(cached);
+    }
+}
+
 impl RoutingState {
+    /// The response's labels before query-local learning annotations.
+    #[must_use]
+    pub fn response_domain_set(&self) -> Option<&str> {
+        self.effective_domain_set
+            .as_deref()
+            .or(self.domain_set.as_deref())
+    }
+
     fn set(&mut self, field: RoutingField, value: Option<String>) {
         match field {
             RoutingField::DomainSet => self.domain_set = value,
