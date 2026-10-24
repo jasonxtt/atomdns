@@ -40,6 +40,15 @@ The learner's categories are looked up in category order. A hit or-s `1 << mark`
 and counts as a match: the mapper default mark/tag are not applied even when no rule matched. Learned facts and matcher rules are a union; which route a name takes is decided by the sequences' `fast_mark` order, not here.
 No matcher is rebuilt for learning.
 
+Response-cache hits preserve this current query's learned-label prefix before
+the cached non-learning labels. They must not restore a historical learning
+label after expiry or flush, or restore a mapper default over a live learned
+match. The existing mapper lookup supplies the prefix; cache restoration does
+not perform another lookup or increment learning hit counts. Explicit later
+label assignments replace the mapper context. The cached response's
+`effective_tag` is not relabelled by this query-local annotation. See the
+[cache lifecycle contract](native-cache-lifecycle.md).
+
 ## State file
 
 `gen/route_learner.json`: `{"format":1,"saved_at":<unix>,"categories":{"<tag>":[[name, first, last, hits, reason], …]}}` (seconds). Written through a same-directory temporary file and a rename.
