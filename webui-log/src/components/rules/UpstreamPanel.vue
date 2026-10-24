@@ -7,12 +7,13 @@ import { openConfirm } from '../../utils/confirm'
 import { isModified, settingsBackedProxy, settingsSources } from '../../utils/nativeSettings'
 import { clearTopNotice, setError, setSuccess } from '../../utils/notice'
 import { latencyTone } from '../../utils/overviewMetrics'
-import { orderUpstreamGroups, parseUpstreamStatsMetrics, protocolDisplayLabel, upstreamAddressDisplay, upstreamGroupDisplay } from '../../utils/upstreamStats'
+import { lastUpstreamReason, loadUpstreamGroups, orderUpstreamGroups, parseUpstreamStatsMetrics, protocolDisplayLabel, upstreamAddressDisplay, upstreamGroupDisplay } from '../../utils/upstreamStats'
 import UpstreamEditorModal from './UpstreamEditorModal.vue'
 
 // The upstream list by group: identifier, protocol, address, enabled and latency; every
 // other parameter is in the edit dialog. The upstreams that belong to a special group are
-// listed read-only with a link to the group.
+// listed read-only with a link to the group. Groups not in use under the current switches
+// (`show_when` in the configuration) are hidden unless "显示未生效的组" is on.
 const loading = ref(false)
 const upstreamConfig = ref({})
 const specialGroups = ref([])
@@ -22,13 +23,20 @@ const stats = ref({})
 const globalSocks5 = ref('')
 const editor = reactive({ open: false, group: '', index: -1, entry: null })
 const HIDE_DISABLED_KEY = 'rtdns-hide-disabled-upstreams'
+const SHOW_INACTIVE_KEY = 'rtdns-show-inactive-upstream-groups'
 const filterGroup = ref('all')
 const hideDisabled = ref(false)
+const showInactive = ref(false)
+// tag → { active, inactive_reason } from /api/v1/upstream/groups (empty: every group is in use).
+const groupStates = ref({})
 const sort = reactive({ key: '', order: 'asc' })
 
 const canManage = computed(() => supportsOperation('upstreams.manage'))
 const settingsProxy = computed(() => settingsBackedProxy(capabilities.value))
-const allGroups = computed(() => orderUpstreamGroups(Object.keys(upstreamConfig.value).filter((group) => !/^special_upstream_\d+$/.test(group)), specialGroups.value))
+const configuredGroups = computed(() => orderUpstreamGroups(Object.keys(upstreamConfig.value).filter((group) => !/^special_upstream_\d+$/.test(group)), specialGroups.value))
+const inactive = (group) => groupStates.value[group]?.active === false
+const inactiveCount = computed(() => configuredGroups.value.filter(inactive).length)
+const allGroups = computed(() => configuredGroups.value.filter((group) => showInactive.value || !inactive(group)))
 const groups = computed(() => allGroups.value.filter((group) => filterGroup.value === 'all' || group === filterGroup.value))
 const specialRows = computed(() => specialGroups.value.map((group) => {
   const list = upstreamConfig.value[group.upstream_plugin_tag]
@@ -53,6 +61,15 @@ function onSort(key) {
 }
 
 const sortMark = (key) => (sort.key !== key ? '' : sort.order === 'asc' ? '▲' : '▼')
+
+function toggleShowInactive() {
+  showInactive.value = !showInactive.value
+  try {
+    localStorage.setItem(SHOW_INACTIVE_KEY, showInactive.value ? '1' : '0')
+  } catch {
+    // the choice only lasts for this page
+  }
+}
 
 function toggleHideDisabled() {
   hideDisabled.value = !hideDisabled.value
@@ -99,6 +116,7 @@ async function load() {
     ])
     upstreamConfig.value = config && typeof config === 'object' && !Array.isArray(config) ? config : {}
     specialGroups.value = Array.isArray(groupList) ? groupList : []
+    groupStates.value = await loadUpstreamGroups(getJSON, capabilities.value)
     const [effective, metrics, overrides] = await Promise.allSettled([
       getJSON('/api/v1/settings/effective'),
       supportsOperation('metrics.cache') ? getText('/metrics') : Promise.reject(new Error('unavailable')),
@@ -144,25 +162,47 @@ async function onSave(entry) {
   }
 }
 
-async function toggle(group, row) {
-  if (row.status.readOnly) return setError(row.status.reason || '保持只读')
+// Why a change would leave `group` without an enabled upstream (refused before sending).
+const refusal = (group, list) => lastUpstreamReason(group, list, groupStates.value[group], groupTitle(group))
+
+// After a refused or failed change the switch shows what the host has again (the data did not
+// change, so Vue would leave the clicked checkbox as it is).
+function resetSwitch(input, group, index) {
+  if (input) input.checked = Boolean(upstreamConfig.value[group]?.[index]?.enabled)
+}
+
+async function toggle(group, row, event) {
+  const input = event?.target
+  if (row.status.readOnly) {
+    resetSwitch(input, group, row.index)
+    return setError(row.status.reason || '保持只读')
+  }
   clearTopNotice()
+  const list = [...upstreamConfig.value[group]]
+  list[row.index] = { ...list[row.index], enabled: !list[row.index].enabled }
+  const reason = refusal(group, list)
+  if (reason) {
+    resetSwitch(input, group, row.index)
+    return setError(reason)
+  }
   try {
-    const list = [...upstreamConfig.value[group]]
-    list[row.index] = { ...list[row.index], enabled: !list[row.index].enabled }
     await saveGroup(group, list)
   } catch (error) {
     setError(`切换失败: ${error.message}`)
   }
   await load()
+  resetSwitch(input, group, row.index)
 }
 
 async function remove(group, row) {
   if (row.status.readOnly) return setError(row.status.reason || '保持只读')
+  const list = [...upstreamConfig.value[group]]
+  list.splice(row.index, 1)
+  // An empty list would mean "restore the configuration file's list", not "delete".
+  const reason = refusal(group, list)
+  if (reason) return setError(reason)
   if (!(await openConfirm(`确定删除上游“${row.entry.tag || '未命名'}”吗？`, { tone: 'danger' }))) return
   try {
-    const list = [...upstreamConfig.value[group]]
-    list.splice(row.index, 1)
     await saveGroup(group, list)
     setSuccess('上游已删除')
     await load()
@@ -185,8 +225,10 @@ async function restore(group) {
 onMounted(() => {
   try {
     hideDisabled.value = localStorage.getItem(HIDE_DISABLED_KEY) === '1'
+    showInactive.value = localStorage.getItem(SHOW_INACTIVE_KEY) === '1'
   } catch {
     hideDisabled.value = false
+    showInactive.value = false
   }
   load()
   window.addEventListener('mosdns-log-refresh', load)
@@ -204,6 +246,7 @@ onBeforeUnmount(() => window.removeEventListener('mosdns-log-refresh', load))
           <option v-for="group in allGroups" :key="group" :value="group">{{ groupTitle(group) }}</option>
         </select>
         <button class="btn secondary" type="button" @click="toggleHideDisabled">{{ hideDisabled ? '显示全部上游' : '隐藏未启用上游' }}</button>
+        <button v-if="inactiveCount > 0" class="btn secondary" type="button" data-show-inactive @click="toggleShowInactive">{{ showInactive ? '隐藏未生效的组' : `显示未生效的组（${inactiveCount}）` }}</button>
       </div>
     </header>
     <p v-if="!supportsOperation('upstreams.read')" class="muted" role="note">{{ operationReason('upstreams.read') }}</p>
@@ -230,6 +273,7 @@ onBeforeUnmount(() => window.removeEventListener('mosdns-log-refresh', load))
                   <strong>{{ groupTitle(group) }}</strong>
                   <span class="muted">{{ (upstreamConfig[group] || []).length }} 个</span>
                   <span v-if="modifiedGroup(group)" class="rt-flag-mark" data-native-modified>已修改</span>
+                  <span v-if="inactive(group)" class="rt-flag-mark" data-inactive-group :title="groupStates[group]?.inactive_reason || ''">当前未生效</span>
                   <span class="rt-upstream-group-actions">
                     <button v-if="modifiedGroup(group)" class="btn tiny secondary" type="button" :disabled="!canManage" @click="restore(group)">恢复默认</button>
                     <button class="btn tiny primary" type="button" :disabled="!canManage" @click="beginAdd(group)">添加</button>
@@ -244,7 +288,7 @@ onBeforeUnmount(() => window.removeEventListener('mosdns-log-refresh', load))
               <td class="mono" :title="upstreamAddressDisplay(row.entry)">{{ upstreamAddressDisplay(row.entry) }}</td>
               <td class="rt-col-switch">
                 <label class="switch switch-table">
-                  <input type="checkbox" :checked="Boolean(row.entry.enabled)" :disabled="!canManage || row.status.readOnly" :aria-label="`启用 ${row.entry.tag}`" @change="toggle(group, row)" />
+                  <input type="checkbox" :checked="Boolean(row.entry.enabled)" :disabled="!canManage || row.status.readOnly" :aria-label="`启用 ${row.entry.tag}`" @change="toggle(group, row, $event)" />
                   <span class="slider"></span>
                 </label>
               </td>

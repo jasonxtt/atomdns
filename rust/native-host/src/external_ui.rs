@@ -1,4 +1,5 @@
-//! Startup-pinned external UI registry and request-owned blocking file work.
+//! Startup-pinned UI registry and request-owned blocking file work: the WebUI
+//! `<config root>/ui/main/` at `/`, every other `ui/<name>/` at `/<name>/`.
 use mosdns_upstream_core::TransportCancellation;
 #[cfg(target_os = "linux")]
 use std::collections::BTreeMap;
@@ -19,7 +20,8 @@ pub(crate) enum Kind {
     Unusable,
 }
 
-/// One directory under `ui/` and whether (and why not) it is served at `/<name>/`.
+/// One directory under `ui/` and whether (and why not) it is served (`main` at
+/// `/`, any other name at `/<name>/`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Entry {
     pub(crate) name: String,
@@ -43,7 +45,20 @@ pub(crate) struct Registry {
     io_gate: Option<Arc<IoGate>>,
     #[cfg(target_os = "linux")]
     mounts: BTreeMap<String, Arc<std::os::fd::OwnedFd>>,
+    /// `ui/main`, served at `/`.
+    #[cfg(target_os = "linux")]
+    main: Option<Arc<std::os::fd::OwnedFd>>,
     entries: Vec<Entry>,
+}
+
+/// The name of the directory served at `/`.
+pub(crate) const MAIN: &str = "main";
+
+/// Whether `route` (decoded) belongs to the API whatever `ui/main` holds.
+fn api_route(route: &str) -> bool {
+    ["/api", "/plugins", "/metrics"]
+        .iter()
+        .any(|prefix| route == *prefix || route.starts_with(&format!("{prefix}/")))
 }
 
 impl Registry {
@@ -123,6 +138,7 @@ impl Registry {
                             | "metrics"
                             | "plugins"
                             | "api"
+                            | "chunks"
                     ) {
                         skipped += 1;
                         registry.entries.push(unusable("保留名，不会挂载"));
@@ -150,7 +166,9 @@ impl Registry {
                                     (false, Kind::MosdnsUi, None, Some(reason))
                                 }
                             };
-                            if mounted {
+                            if mounted && name == MAIN {
+                                registry.main = Some(Arc::new(fd));
+                            } else if mounted {
                                 registry.mounts.insert(name.to_owned(), Arc::new(fd));
                             }
                             registry.entries.push(Entry {
@@ -197,6 +215,10 @@ impl Registry {
         }
     }
 
+    /// Serves `ui/<name>/` at `/<name>/` and `ui/main` at every other path
+    /// that is not an API route (`GET`/`HEAD` only); `/` without a usable
+    /// `ui/main` is the "not installed" page. Returns false when the request
+    /// belongs to the ordinary API dispatcher.
     pub(crate) async fn serve<W: AsyncWrite + Unpin>(
         &self,
         writer: &mut W,
@@ -206,98 +228,138 @@ impl Registry {
         shutdown: &TransportCancellation,
     ) -> io::Result<bool> {
         #[cfg(not(target_os = "linux"))]
-        {
-            let _ = (writer, target, method, slots, shutdown);
-            Ok(false)
-        }
+        let _ = &slots;
+        let raw = target.split('?').next().unwrap_or(target);
+        let decoded = crate::static_ui::decoded_path(target);
+        let route = decoded.as_deref().unwrap_or(raw);
         #[cfg(target_os = "linux")]
         {
-            let raw = target.split('?').next().unwrap_or(target);
-            let decoded = crate::static_ui::decoded_path(target);
-            let route = decoded.as_deref().unwrap_or(raw);
             let name = route
                 .strip_prefix('/')
                 .unwrap_or(route)
                 .split('/')
                 .next()
                 .unwrap_or("");
-            let Some(root) = self.mounts.get(name) else {
-                return Ok(false);
-            };
-            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-            let response = async {
+            if let Some(root) = self.mounts.get(name) {
                 if !matches!(method, "GET" | "HEAD") {
-                    return quick(header(writer, 405, 0, "Allow: GET, HEAD\r\n"), shutdown).await;
+                    quick(header(writer, 405, 0, "Allow: GET, HEAD\r\n"), shutdown).await?;
+                    return Ok(true);
                 }
                 let Some(path) = decoded.as_deref() else {
-                    return quick(header(writer, 404, 0, ""), shutdown).await;
+                    quick(header(writer, 404, 0, ""), shutdown).await?;
+                    return Ok(true);
                 };
                 if path == format!("/{name}") {
-                    return quick(redirect(writer, &format!("/{name}/"), target), shutdown).await;
+                    quick(redirect(writer, &format!("/{name}/"), target), shutdown).await?;
+                    return Ok(true);
                 }
-                let Some(permit) = slots.try_acquire_owned().ok() else {
-                    return quick(header(writer, 503, 0, ""), shutdown).await;
-                };
-                let permit = Arc::new(permit);
-                let root = root.clone();
                 let relative = path[name.len() + 2..].to_owned();
-                let index = path.ends_with('/');
-                let head = method == "HEAD";
-                let (sender, mut receiver) = mpsc::channel(1);
-                let worker_permit = permit.clone();
-                #[cfg(test)]
-                let gate = self.io_gate.clone();
-                let worker = tokio::task::spawn_blocking(move || {
-                    #[cfg(test)]
-                    if let Some(gate) = gate {
-                        gate.wait();
-                    }
-                    let _permit = worker_permit;
-                    read_file(root, &relative, index, head, sender);
-                });
-                // Cancellation/timeouts close the channel first, then join the
-                // started operation. No dropped await can orphan an FD/permit.
-                let transfer = async {
-                    match receiver.recv().await {
-                        Some(Event::Status(status)) => header(writer, status, 0, "").await,
-                        Some(Event::Directory) => {
-                            redirect(writer, &format!("{path}/"), target).await
-                        }
-                        Some(Event::Ready(length)) => {
-                            let kind =
-                                crate::static_ui::mime(if index { "index.html" } else { path });
-                            header(writer, 200, length, &format!("Content-Type: {kind}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n")).await?;
-                            while let Some(event) = receiver.recv().await {
-                                match event {
-                                    Event::Chunk(bytes) => writer.write_all(&bytes).await?,
-                                    Event::Error(error) => return Err(error),
-                                    _ => {
-                                        return Err(io::Error::other(
-                                            "external UI worker protocol",
-                                        ));
-                                    }
-                                }
-                            }
-                            writer.flush().await
-                        }
-                        _ => Err(io::Error::other("external UI worker failed")),
-                    }
-                };
-                let result = tokio::select! {
-                    biased;
-                    () = shutdown.cancelled() => Ok(()),
-                    result = tokio::time::timeout_at(deadline, transfer) => result.unwrap_or_else(|_| Err(io::Error::new(io::ErrorKind::TimedOut, "external UI response deadline"))),
-                };
-                receiver.close();
-                drop(receiver);
-                let joined = worker.await.map_err(io::Error::other);
-                drop(permit);
-                joined?;
-                result
-            };
-            response.await?;
-            Ok(true)
+                self.serve_file(
+                    writer, root, path, relative, target, method, slots, shutdown,
+                )
+                .await?;
+                return Ok(true);
+            }
         }
+        // `ui/main` is the WebUI at `/` only: `/main` and below are never its files (a
+        // `main` inside it included), whatever `ui/main` holds.
+        let main_path = route == format!("/{MAIN}") || route.starts_with(&format!("/{MAIN}/"));
+        if api_route(route) || main_path || !matches!(method, "GET" | "HEAD") {
+            return Ok(false);
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(root) = &self.main {
+            let Some(path) = decoded.as_deref() else {
+                quick(header(writer, 404, 0, ""), shutdown).await?;
+                return Ok(true);
+            };
+            let relative = path[1..].to_owned();
+            self.serve_file(
+                writer, root, path, relative, target, method, slots, shutdown,
+            )
+            .await?;
+            return Ok(true);
+        }
+        if route != "/" {
+            return Ok(false);
+        }
+        let refused = self
+            .entries
+            .iter()
+            .find(|entry| entry.name == MAIN && !entry.mounted)
+            .and_then(|entry| entry.reason.as_deref());
+        crate::static_ui::write_not_installed(writer, method, refused, shutdown).await?;
+        Ok(true)
+    }
+
+    /// One file (or a directory's `index.html`) of the pinned `root`.
+    #[cfg(target_os = "linux")]
+    #[allow(clippy::too_many_arguments)]
+    async fn serve_file<W: AsyncWrite + Unpin>(
+        &self,
+        writer: &mut W,
+        root: &Arc<std::os::fd::OwnedFd>,
+        path: &str,
+        relative: String,
+        target: &str,
+        method: &str,
+        slots: Arc<Semaphore>,
+        shutdown: &TransportCancellation,
+    ) -> io::Result<()> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let Some(permit) = slots.try_acquire_owned().ok() else {
+            return quick(header(writer, 503, 0, ""), shutdown).await;
+        };
+        let permit = Arc::new(permit);
+        let root = root.clone();
+        let index = path.ends_with('/');
+        let head = method == "HEAD";
+        let (sender, mut receiver) = mpsc::channel(1);
+        let worker_permit = permit.clone();
+        #[cfg(test)]
+        let gate = self.io_gate.clone();
+        let worker = tokio::task::spawn_blocking(move || {
+            #[cfg(test)]
+            if let Some(gate) = gate {
+                gate.wait();
+            }
+            let _permit = worker_permit;
+            read_file(root, &relative, index, head, sender);
+        });
+        // Cancellation/timeouts close the channel first, then join the
+        // started operation. No dropped await can orphan an FD/permit.
+        let transfer = async {
+            match receiver.recv().await {
+                Some(Event::Status(status)) => header(writer, status, 0, "").await,
+                Some(Event::Directory) => redirect(writer, &format!("{path}/"), target).await,
+                Some(Event::Ready(length)) => {
+                    let kind = crate::static_ui::mime(if index { "index.html" } else { path });
+                    header(writer, 200, length, &format!("Content-Type: {kind}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n")).await?;
+                    while let Some(event) = receiver.recv().await {
+                        match event {
+                            Event::Chunk(bytes) => writer.write_all(&bytes).await?,
+                            Event::Error(error) => return Err(error),
+                            _ => {
+                                return Err(io::Error::other("external UI worker protocol"));
+                            }
+                        }
+                    }
+                    writer.flush().await
+                }
+                _ => Err(io::Error::other("external UI worker failed")),
+            }
+        };
+        let result = tokio::select! {
+            biased;
+            () = shutdown.cancelled() => Ok(()),
+            result = tokio::time::timeout_at(deadline, transfer) => result.unwrap_or_else(|_| Err(io::Error::new(io::ErrorKind::TimedOut, "external UI response deadline"))),
+        };
+        receiver.close();
+        drop(receiver);
+        let joined = worker.await.map_err(io::Error::other);
+        drop(permit);
+        joined?;
+        result
     }
 }
 
@@ -753,5 +815,175 @@ mod tests {
             drop(readers);
         });
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// One request against `registry`: `None` when it belongs to the API dispatcher.
+    fn request(registry: &Registry, method: &str, target: &str) -> Option<String> {
+        crate::HostRuntime::new().unwrap().block_on(async {
+            let (mut writer, mut reader) = tokio::io::duplex(1 << 20);
+            let served = registry
+                .serve(
+                    &mut writer,
+                    target,
+                    method,
+                    Arc::new(Semaphore::new(4)),
+                    &TransportCancellation::new(),
+                )
+                .await
+                .unwrap();
+            drop(writer);
+            let mut bytes = Vec::new();
+            reader.read_to_end(&mut bytes).await.unwrap();
+            served.then(|| String::from_utf8_lossy(&bytes).into_owned())
+        })
+    }
+
+    fn status(response: &Option<String>) -> &str {
+        response
+            .as_deref()
+            .and_then(|text| text.split(' ').nth(1))
+            .unwrap_or("api")
+    }
+
+    #[test]
+    fn ui_main_is_served_at_the_root_and_never_shadows_the_api() {
+        let root = root_with(
+            "main",
+            &[
+                (
+                    "main",
+                    &[
+                        ("ui-manifest.json", GOOD),
+                        ("index.html", "MAIN-INDEX"),
+                        ("app.js", "APP"),
+                        ("metrics", "x"),
+                    ],
+                ),
+                (
+                    "aa",
+                    &[("ui-manifest.json", GOOD), ("index.html", "AA-INDEX")],
+                ),
+                ("chunks", &[("index.html", "x")]),
+            ],
+        );
+        for dir in ["main/chunks", "main/api/v1", "main/plugins"] {
+            std::fs::create_dir_all(root.join("ui").join(dir)).unwrap();
+        }
+        std::fs::write(root.join("ui/main/chunks/c.js"), "CHUNK").unwrap();
+        // A `main` inside the WebUI is still not served at `/main/`.
+        std::fs::create_dir_all(root.join("ui/main/main")).unwrap();
+        std::fs::write(root.join("ui/main/main/index.html"), "NESTED").unwrap();
+        std::fs::write(root.join("ui/main/api/v1/capabilities"), "FAKE").unwrap();
+        std::fs::write(root.join("secret.txt"), "SECRET").unwrap();
+        std::os::unix::fs::symlink(root.join("secret.txt"), root.join("ui/main/link.txt")).unwrap();
+        let registry = Registry::scan(Some(&root));
+        let main = entry(&registry, "main");
+        assert!(main.mounted && main.kind == Kind::MosdnsUi);
+        assert!(registry.main.is_some() && !registry.mounts.contains_key("main"));
+        let chunks = entry(&registry, "chunks");
+        assert!(!chunks.mounted && chunks.reason.as_deref().unwrap().contains("保留名"));
+
+        let index = request(&registry, "GET", "/");
+        assert_eq!(status(&index), "200");
+        assert!(index.as_deref().unwrap().ends_with("MAIN-INDEX"));
+        assert!(index.as_deref().unwrap().contains("text/html"));
+        assert!(
+            request(&registry, "GET", "/index.html")
+                .unwrap()
+                .ends_with("MAIN-INDEX")
+        );
+        assert!(
+            request(&registry, "GET", "/app.js?v=1")
+                .unwrap()
+                .ends_with("APP")
+        );
+        assert!(
+            request(&registry, "GET", "/chunks/c.js")
+                .unwrap()
+                .ends_with("CHUNK")
+        );
+        let head = request(&registry, "HEAD", "/").unwrap();
+        assert!(head.starts_with("HTTP/1.1 200") && head.ends_with("\r\n\r\n"));
+        assert!(
+            request(&registry, "GET", "/aa/")
+                .unwrap()
+                .ends_with("AA-INDEX")
+        );
+        assert_eq!(status(&request(&registry, "GET", "/chunks")), "301");
+        // Only `/`: `/main` is not a second address of the same UI, even when the UI holds
+        // a `main` of its own (the dispatcher answers, with its 404).
+        for target in ["/main/", "/main", "/main/index.html", "/%6dain/"] {
+            assert_eq!(request(&registry, "GET", target), None, "{target}");
+        }
+        let encoded = request(&registry, "GET", "/main%2findex.html");
+        assert_eq!(status(&encoded), "404");
+        assert!(!encoded.unwrap().contains("NESTED"));
+        // API routes are never answered from `ui/main`, whatever it holds.
+        for target in [
+            "/api/v1/capabilities",
+            "/api",
+            "/plugins/x/show",
+            "/plugins",
+            "/metrics",
+        ] {
+            assert_eq!(request(&registry, "GET", target), None, "{target}");
+        }
+        // Other methods go to the dispatcher (an unknown path stays its 404).
+        assert_eq!(request(&registry, "POST", "/"), None);
+        assert_eq!(request(&registry, "DELETE", "/app.js"), None);
+        for target in [
+            "/%2e%2e/secret.txt",
+            "/chunks%2fc.js",
+            "/a\\b",
+            "/%00",
+            "/link.txt",
+            "/missing.js",
+        ] {
+            let response = request(&registry, "GET", target);
+            assert_eq!(status(&response), "404", "{target}");
+            assert!(!response.unwrap().contains("SECRET"), "{target}");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn without_a_usable_ui_main_the_root_explains_and_everything_else_is_unchanged() {
+        const NEWER: &str =
+            r#"{"manifest_schema":1,"ui_version":"v","api_level":2,"requires_api_level":2}"#;
+        let missing = root_with("no-main", &[("aa", &[("index.html", "AA")])]);
+        let refused = root_with(
+            "refused-main",
+            &[("main", &[("ui-manifest.json", NEWER), ("index.html", "x")])],
+        );
+        let linked = root_with("linked-main", &[("real", &[("index.html", "REAL")])]);
+        std::os::unix::fs::symlink(linked.join("ui/real"), linked.join("ui/main")).unwrap();
+        for (root, reason) in [
+            (&missing, None),
+            (&refused, Some("需要接口级别 2")),
+            (&linked, Some("符号链接")),
+        ] {
+            let registry = Registry::scan(Some(root));
+            assert!(registry.main.is_none());
+            let page = request(&registry, "GET", "/").unwrap();
+            assert!(
+                page.starts_with("HTTP/1.1 404") && page.contains("没有安装 WebUI"),
+                "{page}"
+            );
+            if let Some(reason) = reason {
+                assert!(page.contains(reason), "{page}");
+            }
+            assert_eq!(status(&request(&registry, "HEAD", "/")), "404");
+            // Any other path is the dispatcher's, as is the API.
+            assert_eq!(request(&registry, "GET", "/app.js"), None);
+            assert_eq!(request(&registry, "GET", "/api/v1/system/health"), None);
+        }
+        assert!(
+            request(&Registry::scan(Some(&missing)), "GET", "/aa/")
+                .unwrap()
+                .ends_with("AA")
+        );
+        for root in [missing, refused, linked] {
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 }

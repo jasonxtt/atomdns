@@ -177,3 +177,27 @@ export function upstreamAddressDisplay(item = {}) {
   }
   return String(item.addr || '-').trim() || '-'
 }
+
+// `GET /api/v1/upstream/groups` as `tag → { active, inactive_reason, used_when }`; empty (every
+// group in use) when the host does not offer it or the request fails.
+export async function loadUpstreamGroups(getJSON, capabilities) {
+  if (capabilities?.endpoints?.upstream?.groups_get !== true) return {}
+  try {
+    const list = await getJSON('/api/v1/upstream/groups')
+    if (!Array.isArray(list)) return {}
+    return Object.fromEntries(list.filter((group) => typeof group?.tag === 'string').map((group) => [group.tag, { active: group.active !== false, inactive_reason: String(group.inactive_reason || ''), used_when: String(group.used_when || '') }]))
+  } catch {
+    return {}
+  }
+}
+
+// The reason a change is refused when it would leave a group without an enabled upstream
+// (`list` is the group's list after the change); '' when the change is fine. An empty list
+// would mean "restore the configuration file's list" to the host, never "delete the last one".
+export function lastUpstreamReason(group, list = [], state = null, title = group) {
+  if (Array.isArray(list) && list.some((entry) => entry?.enabled)) return ''
+  // `used_when` names the switch for groups in use too; older answers only had the reason.
+  const usage = String(state?.used_when || '') || String(state?.inactive_reason || '').replace(/^仅在/, '').replace(/时使用$/, '')
+  const switchHint = usage ? `这个组只在${usage}时使用；不想用它，关闭该开关即可。` : ''
+  return `上游组「${title}」至少要保留一个启用的上游。${switchHint}`
+}

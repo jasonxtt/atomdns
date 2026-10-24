@@ -1,10 +1,10 @@
 <script setup>
 import { capabilityState, getRuntimeCapabilities, retryRuntimeCapabilities, supportsOperation } from './api/runtimeCapabilities'
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getJSON } from './api/http'
 import ConfirmBubbleHost from './components/ConfirmBubbleHost.vue'
-import { NAV_MODULES } from './navigation'
+import { NAV_MODULES, expandedAfterRoute, inModule } from './navigation'
 import { loadAutoRefreshState } from './utils/autoRefresh'
 import { installBeforeUnload } from './utils/unsaved'
 
@@ -12,7 +12,16 @@ const route = useRoute()
 const router = useRouter()
 
 // A module owns `/<id>` and everything below it (`#/logs/diagnostic` keeps 日志 highlighted).
-const activeModule = computed(() => NAV_MODULES.find(module => route.path === `/${module.id}` || route.path.startsWith(`/${module.id}/`)) || NAV_MODULES[0])
+const activeModule = computed(() => NAV_MODULES.find(module => inModule(module.id, route.path)) || NAV_MODULES[0])
+// Sub-item lists (规则设置): collapsed by default, opened by clicking the module or by being on one of its pages.
+const expanded = reactive(Object.fromEntries(NAV_MODULES.filter(module => module.items.length > 0).map(module => [module.id, false])))
+const expandedModules = computed(() => NAV_MODULES.filter(module => module.items.length > 0 && expanded[module.id]))
+watch(() => route.path, (path) => {
+  for (const id of Object.keys(expanded)) expanded[id] = expandedAfterRoute(id, path, expanded[id])
+}, { immediate: true })
+function toggleModule(id) {
+  expanded[id] = !expanded[id]
+}
 const pageTitle = computed(() => {
   const module = activeModule.value
   const title = route.meta?.title
@@ -157,16 +166,29 @@ onBeforeUnmount(() => {
             {{ module.label }}
           </router-link>
           <template v-else>
-            <div class="rt-nav-group" :class="{ active: activeModule.id === module.id }">{{ module.label }}</div>
-            <router-link
-              v-for="item in module.items"
-              :key="item.path"
-              :to="item.path"
-              class="rt-nav-link rt-nav-item"
-              active-class="active"
+            <button
+              type="button"
+              class="rt-nav-group"
+              :class="{ active: activeModule.id === module.id, open: expanded[module.id] }"
+              :aria-expanded="expanded[module.id] ? 'true' : 'false'"
+              :aria-controls="`rt-nav-items-${module.id}`"
+              :data-nav-toggle="module.id"
+              @click="toggleModule(module.id)"
             >
-              {{ item.label }}
-            </router-link>
+              <span>{{ module.label }}</span>
+              <span class="rt-nav-caret" aria-hidden="true">{{ expanded[module.id] ? '▾' : '▸' }}</span>
+            </button>
+            <div v-show="expanded[module.id]" :id="`rt-nav-items-${module.id}`" class="rt-nav-items">
+              <router-link
+                v-for="item in module.items"
+                :key="item.path"
+                :to="item.path"
+                class="rt-nav-link rt-nav-item"
+                active-class="active"
+              >
+                {{ item.label }}
+              </router-link>
+            </div>
           </template>
         </template>
       </nav>
@@ -174,19 +196,31 @@ onBeforeUnmount(() => {
 
     <nav class="rt-mobile-nav" aria-label="导航">
       <div class="rt-mobile-row">
-        <router-link
-          v-for="module in NAV_MODULES"
-          :key="module.id"
-          :to="module.path"
-          class="rt-mobile-tab"
-          :class="{ active: activeModule.id === module.id }"
-        >
-          {{ module.label }}
-        </router-link>
+        <template v-for="module in NAV_MODULES" :key="module.id">
+          <router-link
+            v-if="module.items.length === 0"
+            :to="module.path"
+            class="rt-mobile-tab"
+            :class="{ active: activeModule.id === module.id }"
+          >
+            {{ module.label }}
+          </router-link>
+          <button
+            v-else
+            type="button"
+            class="rt-mobile-tab"
+            :class="{ active: activeModule.id === module.id }"
+            :aria-expanded="expanded[module.id] ? 'true' : 'false'"
+            :data-nav-toggle="module.id"
+            @click="toggleModule(module.id)"
+          >
+            {{ module.label }} {{ expanded[module.id] ? '▾' : '▸' }}
+          </button>
+        </template>
       </div>
-      <div v-if="activeModule.items.length > 0" class="rt-mobile-row rt-mobile-sub">
+      <div v-for="module in expandedModules" :key="`sub-${module.id}`" class="rt-mobile-row rt-mobile-sub">
         <router-link
-          v-for="item in activeModule.items"
+          v-for="item in module.items"
           :key="item.path"
           :to="item.path"
           class="rt-mobile-tab"

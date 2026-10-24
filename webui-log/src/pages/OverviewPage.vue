@@ -15,6 +15,7 @@ import {
   parseProcessMetrics
 } from '../utils/overviewMetrics'
 import {
+  loadUpstreamGroups,
   orderUpstreamGroups,
   parseUpstreamStatsMetrics,
   protocolDisplayLabel,
@@ -51,6 +52,8 @@ const slowestQueries = ref([])
 const domainSetRank = ref([])
 const specialGroups = ref([])
 const upstreamConfig = ref({})
+// Groups not in use under the current switches (`show_when`) are left out of the statistics.
+const upstreamGroupStates = ref({})
 const upstreamMetricsText = ref('')
 const slowDetailOpen = ref(false)
 const selectedSlowQuery = ref(null)
@@ -284,7 +287,7 @@ function toneClass(tone) {
 
 const upstreamStatsMap = computed(() => parseUpstreamStatsMetrics(upstreamMetricsText.value))
 const upstreamStatSections = computed(() => {
-  const configuredGroups = Object.keys(upstreamConfig.value || {})
+  const configuredGroups = Object.keys(upstreamConfig.value || {}).filter((group) => upstreamGroupStates.value[group]?.active !== false)
   const orderedGroups = orderUpstreamGroups(configuredGroups, specialGroups.value)
   const sections = []
   orderedGroups.forEach((group) => {
@@ -779,6 +782,7 @@ async function reloadOverview(showMessage = false) {
     specialGroups.value = Array.isArray(specialGroupsRes.data) ? specialGroupsRes.data : []
     aliases.value = normalizeAliasMap(aliasesRes.data)
     upstreamConfig.value = upstreamConfigRes.data && typeof upstreamConfigRes.data === 'object' ? upstreamConfigRes.data : {}
+    upstreamGroupStates.value = upstreamConfigRes.error ? {} : await loadUpstreamGroups(getJSON, capabilityState.value)
     upstreamMetricsText.value = metricsRes.error ? '' : String(metricsRes.data?.text || '')
     learner.value = learnerRes.error ? null : learnerRes.data
     if (!metricsRes.error && metricsRes.data !== null) {

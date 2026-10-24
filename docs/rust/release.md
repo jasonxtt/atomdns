@@ -11,6 +11,7 @@
 | tag / Release 名 | `vX.Y.Z`（只认这一种写法；`rust-v*`、`lite-v*`、`vX.Y`、`vX.Y.Z-rc1` 都会被更新器忽略） |
 | 程序 | `rtdns`（`rust/native-host` 的 cargo bin；crate 名仍是 `mosdns-native-host`） |
 | 发布包 | `rtdns-linux-amd64.tar.gz`（包内只有一个文件 `rtdns`） |
+| 界面包 | `rtdns-webui.tar.gz`（v0.4.0 起；顶层即 `<配置根>/ui/main/` 的文件，`ui-manifest.json` 的 `ui_version` 等于 tag） |
 | 清单 | `rtdns-update-manifest.json`（`format 1`、`channel "rust"`、`version` 等于 tag、各发布包的 sha256） |
 | 程序自报版本 | `rtdns version` 与 `GET /api/v1/system/health` 的 `version` 都等于 tag |
 
@@ -26,24 +27,25 @@
    scripts/build-rust-release.sh v0.2.0 release/rust
    ```
 
-   产物：`release/rust/rtdns-linux-amd64.tar.gz`、`release/rust/rtdns-update-manifest.json`。
-   脚本会拒绝非 `vX.Y.Z` 的 tag，要求构建出的程序自报版本等于 tag，并核对 `scripts/rust-release-metadata.json`
-   与 `update/mod.rs` 里的配置包标识和两个资产名。脚本只构建，不发布。
+   产物：`release/rust/rtdns-linux-amd64.tar.gz`、`release/rust/rtdns-webui.tar.gz`、`release/rust/rtdns-update-manifest.json`。
+   脚本会拒绝非 `vX.Y.Z` 的 tag，要求构建出的程序自报版本、界面包的 `ui_version` 都等于 tag，并核对 `scripts/rust-release-metadata.json`
+   与 `update/mod.rs` 里的配置包标识和三个资产名（清单的 `artifacts` 必须同时有程序包与界面包）。脚本只构建，不发布。
 3. 核对：
 
    ```bash
    cd release/rust
-   sha256sum rtdns-linux-amd64.tar.gz
+   sha256sum rtdns-linux-amd64.tar.gz rtdns-webui.tar.gz
    jq '.version, .artifacts' rtdns-update-manifest.json
+   tar -tzf rtdns-webui.tar.gz | head
    mkdir -p /tmp/rtdns-verify && tar -xzf rtdns-linux-amd64.tar.gz -C /tmp/rtdns-verify
    /tmp/rtdns-verify/rtdns version
    ```
 
    sha256 必须与清单一致，`version` 必须等于 tag。
-4. 在 GitHub 建 Release（tag 与 Release 同名，不是 draft、不是 prerelease），把上面两个文件作为资产上传，例如：
+4. 在 GitHub 建 Release（tag 与 Release 同名，不是 draft、不是 prerelease），把上面三个文件作为资产上传，例如：
 
    ```bash
-   gh release create v0.2.0 release/rust/rtdns-linux-amd64.tar.gz release/rust/rtdns-update-manifest.json \
+   gh release create v0.2.0 release/rust/rtdns-linux-amd64.tar.gz release/rust/rtdns-webui.tar.gz release/rust/rtdns-update-manifest.json \
      --repo jasonxtt/rtdns --title v0.2.0 --notes "说明"
    ```
 
@@ -66,8 +68,48 @@
    ```
 
    脚本核对该文件的 sha256 与包内 manifest 是否等于元数据，通过后清单带 `config{url,sha256}`。
-5. **建 Release**，一次上传三个资产：程序包、清单、`config_rust_up.zip`（文件名必须与 `config.url` 末段一致）。
+5. **建 Release**，一次上传四个资产：程序包、界面包、清单、`config_rust_up.zip`（文件名必须与 `config.url` 末段一致）。
+6. **全新安装包**：用同一份 `rtdns-webui.tar.gz` 在 file 仓库运行 `mosdns/config/build_config_rust_zip.sh <rtdns-webui.tar.gz>` 重新生成 `config_rust.zip`（带 `ui/main/`）并提交 file 仓库。
    Release 建好后，用 `curl -fsSL <config.url> | sha256sum` 再核对一次与元数据一致。更新器只在 `applied_config_schema < required_config_schema` 时下载配置包。
+
+## v0.4.0 升级须知（配置 schema 4，草稿 2026-10-24；WebUI 拆出程序）
+
+### WebUI 从程序里拆出来
+
+- 程序**不再内嵌 WebUI**。WebUI 是 `<配置根>/ui/main/`，由 `/` 提供（不需要路径前缀）；其它 `ui/<名字>/` 照旧在 `/<名字>/`。没有 `ui/main/` 时 `/` 只显示"没有安装 WebUI"，接口照常（纯后端）。
+- 每个 Release 多一个资产 `rtdns-webui.tar.gz`。从 v0.4.0 起，在线更新**只在 `ui/main/` 已存在时**把它与程序、配置包放进同一个事务替换，失败一起回滚；没有 `ui/main/` 的机器保持纯后端。
+- 全新安装的 `config_rust.zip` 自带 `ui/main/`。
+
+### 从 v0.3.0 升级（一次性手动步骤）
+
+v0.3.0 的更新器不认识界面资产：它会照常升级程序与配置包（schema 3 → 4），但不会放 `ui/main/`，而 v0.4.0 已不内嵌界面。**先放界面、再在线升级**：
+
+1. 从 v0.4.0 的 Release 下载 `rtdns-webui.tar.gz`，核对 sha256 与同一 Release 的 `rtdns-update-manifest.json` 里 `artifacts["rtdns-webui.tar.gz"].sha256` 一致：
+
+   ```bash
+   sha256sum rtdns-webui.tar.gz
+   jq -r '.artifacts["rtdns-webui.tar.gz"].sha256' rtdns-update-manifest.json
+   ```
+
+2. 解压到配置根（`rtdns start -d` 的目录）下的 `ui/main/`（v0.3.0 会把它当作外置界面挂在 `/main/`，不影响使用）：
+
+   ```bash
+   mkdir -p /cus/rtdns/ui/main && tar -xzf rtdns-webui.tar.gz -C /cus/rtdns/ui/main
+   ```
+
+3. 在 v0.3.0 的界面里照常"在线更新"到 v0.4.0（自动切换）。
+4. 打开 `http://<主机>:<API 端口>/`，系统管理页"界面版本"应为 v0.4.0。
+
+已经先升级了的：`/` 会显示"没有安装 WebUI"，做第 1–2 步后重启一次（`systemctl restart rtdns` 或 `curl -X POST http://127.0.0.1:<API 端口>/api/v1/system/restart`）。
+回退到 v0.3.0 时 `ui/main/` 留着无害（v0.3.0 用内嵌界面，把它挂在 `/main/`）。
+
+### 配置（schema 4）
+
+- `ddns_foreign`（DDNS 优先国外解析）移到"运行模式"。
+- 上游组可声明 `show_when`：`cnfake` 只在"国内域名 FakeIP"开启时、`nocnfake` 只在"FakeIP 分流"时显示在上游设置与概览（可点"显示未生效的组"查看）；3099 端口（clashmi）不看 `cn_fakeip`，始终使用 `cnfake`。
+- 一个上游组至少要保留一个启用的上游：停用或删除最后一个会被明确拒绝（以前停用报看不懂的 400，删除则显示成功、刷新后又回来）。
+- 修正：RealIP 分流下，刷新（requery）不再向 sing-box 要 FakeIP 并写进客户端共用的缓存。
+- 侧栏"规则设置"的 8 个子项默认收起，点"规则设置"展开/收起。
 
 ## v0.3.0 升级须知（配置 schema 3，2026-10-24；功能开关 + UI 重做）
 
@@ -91,7 +133,7 @@
 
 调用这些接口的外置界面（旧的 `ilog`、第三方控制台、自写脚本）升级后对应功能会失效，需要改用上面的新接口或停用。"备份配置"保留，下载文件名 `rtdns_backup.zip`。
 
-### 内置 WebUI
+### 内置 WebUI（v0.3.0 时）
 
 - 侧栏布局：概览、日志、规则设置（8 个子项：运行模式、上游设置、分流规则、请求屏蔽、域名学习、缓存设置、客户端、专属分流组）、系统管理（一页），
   地址形如 `#/overview`、`#/rules/upstream`，刷新保持当前页；`#/rules/rewrite` 跳到 `#/rules/routing`。

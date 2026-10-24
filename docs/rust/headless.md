@@ -1,5 +1,10 @@
 # 不使用 WebUI 的配置方式
 
+从 v0.4.0 起程序不内嵌 WebUI：WebUI 是配置根目录下的 `ui/main/`（由 `/` 提供）。**没有 `ui/main/` 就是纯后端**：
+`/` 只返回一段"没有安装 WebUI"的说明（404），接口、`/metrics` 与其它 `ui/<名字>/` 照常；在线更新也不会创建它
+（`ui/main/` 存在时才随程序一起替换）。全新安装包 `config_rust.zip` 自带 `ui/main/`，不要界面就删掉它。
+之后需要界面时，把同版本 Release 的 `rtdns-webui.tar.gz` 解到 `ui/main/` 再重启一次即可（见 [external-ui.md](external-ui.md)）。
+
 YAML 提供默认值。通过 `config_rust_up.zip` 管理的 `config_custom.yaml` 和
 `sub_config/*.yaml` 会随配置包更新替换；希望更新后保留的代理、上游列表和 ECS
 设置，写在**配置根目录下的 `webinfo/settings.json`**。这个文件不属于配置包的覆盖范围。
@@ -91,6 +96,7 @@ EFFECTIVE ecs_address client_ecs addr=198.51.100.5 source=settings
 | 需跨配置包更新保留的代理、ECS、普通 aliapi 上游列表、生成开关及功能开关 | `webinfo/settings.json`；手写后 check、重启，或用已有设置 API |
 | 用户规则、IP 名单、学习结果 | YAML 指定的 `rule/`、`gen/` 等文件；不写进 settings，配置包不管理这些用户数据 |
 | 专属分流组 | `webinfo/special_upstream_groups.json` 是权威 JSON；通过专属组 API 管理，相关 YAML 由程序生成 |
+| WebUI | `ui/main/`（可选）；在线更新只在它存在时替换，配置包不管理 `ui/` |
 
 不要直接修改生成的 `sub_config/special_groups.yaml` 来保存专属组变更，也不要用普通
 上游 API 修改专属组拥有的上游。细节见 [专属组契约](contracts/native-special-groups.md)。

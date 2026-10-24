@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { createMemoryHistory } from 'vue-router'
 
-import { NAV_MODULES, PAGES, RULE_SECTIONS } from '../src/navigation.js'
+import { NAV_MODULES, PAGES, RULE_SECTIONS, expandedAfterRoute, inModule } from '../src/navigation.js'
 import { createAppRouter } from '../src/router.js'
 import { THEME_STORAGE_KEY, createThemeController, normalizeThemeMode, resolveTheme } from '../src/utils/theme.js'
 import {
@@ -33,6 +33,26 @@ test('the four modules carry the eight rule sub-items; logs has a diagnostic pag
   assert.deepEqual(PAGES.filter((page) => /^\/(logs|system)/.test(page.path)).map((page) => page.path), ['/logs', '/logs/diagnostic', '/system'])
   assert.equal(PAGES.length, 3 + 8 + 1)
   assert.equal(new Set(PAGES.map((page) => page.path)).size, PAGES.length)
+})
+
+test('the rule sub-items are collapsed until opened and open on any rule page', () => {
+  assert.equal(inModule('rules', '/rules/mode'), true)
+  assert.equal(inModule('rules', '/rulesx'), false)
+  assert.equal(inModule('rules', '/'), false)
+  // Arriving on a rule page opens the list; elsewhere the user's choice stays.
+  assert.equal(expandedAfterRoute('rules', '/rules/upstream', false), true)
+  assert.equal(expandedAfterRoute('rules', '/overview', false), false)
+  assert.equal(expandedAfterRoute('rules', '/overview', true), true)
+  assert.equal(expandedAfterRoute('rules', '/system', undefined), false)
+  const app = read('../src/App.vue')
+  // The module header is a button that only toggles; the sub-items are links.
+  assert.match(app, /<button[^>]*class="rt-nav-group"[\s\S]*?@click="toggleModule\(module\.id\)"/)
+  assert.match(app, /:aria-expanded="expanded\[module\.id\] \? 'true' : 'false'"/)
+  assert.match(app, /<div v-show="expanded\[module\.id\]"[^>]*class="rt-nav-items"/)
+  assert.doesNotMatch(app, /<div class="rt-nav-group"/, 'no static header any more')
+  // Mobile: the same toggle, the second row only while open.
+  assert.match(app, /v-for="module in expandedModules"[^>]*class="rt-mobile-row rt-mobile-sub"/)
+  assert.match(app, /watch\(\(\) => route\.path,[\s\S]*?expandedAfterRoute\(id, path, expanded\[id\]\)[\s\S]*?immediate: true/)
 })
 
 test('every page address resolves to its own route, so a reload stays on the page', async () => {
@@ -178,7 +198,8 @@ test('the diagnostic capture is its own page, reached from and returning to the 
   assert.match(diagnostic, /router\.push\('\/logs'\)/)
   assert.match(read('../src/components/QueryManager.vue'), /返回实时查询/)
   // The sidebar keeps 日志 highlighted below /logs.
-  assert.match(read('../src/App.vue'), /route\.path\.startsWith\(`\/\$\{module\.id\}\/`\)/)
+  assert.match(read('../src/App.vue'), /inModule\(module\.id, route\.path\)/)
+  assert.match(read('../src/navigation.js'), /String\(path \|\| ''\)\.startsWith\(`\/\$\{id\}\/`\)/)
 })
 
 test('the system page stacks its five sections in setting rows', () => {

@@ -458,6 +458,59 @@ pub(super) fn matches(args: &str, path: &str, flags: &[Flag]) -> Result<bool, Co
     }
 }
 
+/// One condition of an `aliapi` `show_when`: `flag <key>[=<option>]`, or the
+/// same after `!`. Validated like the matcher; the answer is this
+/// generation's.
+pub(crate) fn condition(text: &str, path: &str, flags: &[Flag]) -> Result<bool, ConfigError> {
+    let trimmed = text.trim();
+    let (negated, rest) = match trimmed.strip_prefix('!') {
+        Some(rest) => (true, rest.trim_start()),
+        None => (false, trimmed),
+    };
+    let Some(args) = rest.strip_prefix("flag ") else {
+        return Err(ConfigError::new(
+            path,
+            "show_when takes `flag <key>`, `flag <key>=<option>` or the same after `!`",
+        ));
+    };
+    Ok(matches(args, path, flags)? != negated)
+}
+
+/// Why a group whose `condition` does not hold is not used, in the WebUI's
+/// words: `「国内域名 FakeIP」开启`, `「DNS 分流模式」为「FakeIP 分流」`.
+pub(crate) fn describe(text: &str, flags: &[Flag]) -> String {
+    let trimmed = text.trim();
+    let (negated, rest) = match trimmed.strip_prefix('!') {
+        Some(rest) => (true, rest.trim_start()),
+        None => (false, trimmed),
+    };
+    let args = rest.strip_prefix("flag ").unwrap_or(rest);
+    let (key, option) = match args.split_once('=') {
+        Some((key, option)) => (key.trim(), Some(option.trim())),
+        None => (args.trim(), None),
+    };
+    let Some(flag) = flags.iter().find(|flag| flag.key == key) else {
+        return trimmed.to_owned();
+    };
+    match option {
+        None if negated => format!("「{}」关闭", flag.label),
+        None => format!("「{}」开启", flag.label),
+        Some(option) => {
+            let label = flag
+                .options
+                .iter()
+                .flatten()
+                .find(|candidate| candidate.value == option)
+                .map_or(option, |candidate| candidate.label.as_str());
+            if negated {
+                format!("「{}」不是「{label}」", flag.label)
+            } else {
+                format!("「{}」为「{label}」", flag.label)
+            }
+        }
+    }
+}
+
 /// Whether `name` is one of the schema-2 `switch1`..`switch17` names, which
 /// are refused with a pointer to `feature_flag`.
 pub(super) fn legacy_switch(name: &str) -> bool {

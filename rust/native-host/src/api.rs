@@ -443,7 +443,6 @@ impl std::error::Error for ApiServerError {}
 struct Request {
     method: String,
     target: String,
-    if_none_match: Option<String>,
     body: Vec<u8>,
 }
 
@@ -617,7 +616,7 @@ async fn process_connection(
                     "pending_cleanup": control
                         .as_ref()
                         .map_or_else(Vec::new, |control| control.pending_cleanup()),
-                    // Every directory under `<config root>/ui/` (served at `/<name>/`):
+                    // Every directory under `<config root>/ui/` (`main` at `/`, others at `/<name>/`):
                     // whether it is mounted and, for a mosdns UI package, its version or the
                     // reason it is refused. Never affects `ready`.
                     "external_ui": external_ui_json(external_ui.entries()),
@@ -650,18 +649,6 @@ async fn process_connection(
             control.stop_host();
         }
         return result;
-    }
-    if crate::static_ui::serve_embedded(
-        &mut stream,
-        &request.target,
-        &request.method,
-        request.if_none_match.as_deref(),
-        static_slots.clone(),
-        &shutdown,
-    )
-    .await?
-    {
-        return Ok(());
     }
     if external_ui
         .serve(
@@ -782,8 +769,8 @@ fn capture_start(body: &[u8]) -> Response {
     ))
 }
 
-/// The health document's view of the external UI directories: one object per directory under
-/// `ui/` — `name`, `mounted`, `kind` (`mosdns_ui` with a manifest, `static` without one,
+/// The health document's view of the UI directories: one object per directory under
+/// `ui/` — `name`, `path` (`/` for `main`, else `/<name>/`), `mounted`, `kind` (`mosdns_ui` with a manifest, `static` without one,
 /// `unusable` for a reserved name or a non-directory), the package's `ui_version`/`built_at`
 /// when it has a compatible manifest, and a `reason` (why it is refused, or the note that a
 /// manifest-less directory is not a mosdns UI package).
@@ -795,6 +782,7 @@ fn external_ui_json(entries: &[crate::external_ui::Entry]) -> serde_json::Value 
             .map(|entry| {
                 serde_json::json!({
                     "name": entry.name,
+                    "path": if entry.name == crate::external_ui::MAIN { "/".to_owned() } else { format!("/{}/", entry.name) },
                     "mounted": entry.mounted,
                     "kind": match entry.kind {
                         Kind::MosdnsUi => "mosdns_ui",
@@ -881,7 +869,7 @@ async fn read_request(stream: &mut TcpStream) -> io::Result<Option<Request>> {
         buffer.extend_from_slice(&chunk[..read]);
     };
 
-    let (method, target, content_length, if_none_match) = {
+    let (method, target, content_length) = {
         let head = std::str::from_utf8(&buffer[..head_end])
             .map_err(|_| io::Error::other("request head is not UTF-8"))?;
         let mut lines = head.split("\r\n");
@@ -897,12 +885,8 @@ async fn read_request(stream: &mut TcpStream) -> io::Result<Option<Request>> {
             .ok_or_else(|| io::Error::other("missing request target"))?;
 
         let mut content_length = 0_usize;
-        let mut if_none_match = None;
         for line in lines {
             if let Some((key, value)) = line.split_once(':') {
-                if key.trim().eq_ignore_ascii_case("if-none-match") {
-                    if_none_match = Some(value.trim().to_owned());
-                }
                 if key.trim().eq_ignore_ascii_case("content-length") {
                     content_length = value
                         .trim()
@@ -911,12 +895,7 @@ async fn read_request(stream: &mut TcpStream) -> io::Result<Option<Request>> {
                 }
             }
         }
-        (
-            method.to_owned(),
-            target.to_owned(),
-            content_length,
-            if_none_match,
-        )
+        (method.to_owned(), target.to_owned(), content_length)
     };
     let body_limit = if matches!(
         route(&target),
@@ -953,7 +932,6 @@ async fn read_request(stream: &mut TcpStream) -> io::Result<Option<Request>> {
     Ok(Some(Request {
         method,
         target,
-        if_none_match,
         body,
     }))
 }
@@ -1032,6 +1010,7 @@ enum Route<'a> {
 
 enum UpstreamRoute<'a> {
     Tags,
+    Groups,
     Config,
     Runtime(std::borrow::Cow<'a, str>),
 }
@@ -1106,6 +1085,7 @@ fn route(target: &str) -> Route<'_> {
     if let Some(action) = path.strip_prefix("/api/v1/upstream/") {
         return match action {
             "tags" => Route::Upstream(UpstreamRoute::Tags),
+            "groups" => Route::Upstream(UpstreamRoute::Groups),
             "config" => Route::Upstream(UpstreamRoute::Config),
             runtime if runtime.starts_with("runtime/") => {
                 let raw_tag = runtime.strip_prefix("runtime/").unwrap_or_default();
@@ -1343,7 +1323,6 @@ pub(crate) fn local_plugin_request<'a>(
         let request = Request {
             method: method.to_owned(),
             target: target.to_owned(),
-            if_none_match: None,
             body: body.to_vec(),
         };
         if !control.admission_open() {
@@ -2919,6 +2898,9 @@ async fn dispatch(
             UpstreamRoute::Config if request.method == "GET" => {
                 Response::json(&crate::settings_api::upstream_config(config))
             }
+            UpstreamRoute::Groups if request.method == "GET" => {
+                Response::json(&crate::settings_api::upstream_groups(config))
+            }
             UpstreamRoute::Runtime(tag) if request.method == "GET" => {
                 let Some(definition_index) = config
                     .forward_definitions
@@ -2986,9 +2968,10 @@ async fn dispatch(
                 }
                 Response::error(400, "native special_groups profile is disabled")
             }
-            UpstreamRoute::Tags | UpstreamRoute::Config | UpstreamRoute::Runtime(_) => {
-                Response::method_not_allowed()
-            }
+            UpstreamRoute::Tags
+            | UpstreamRoute::Groups
+            | UpstreamRoute::Config
+            | UpstreamRoute::Runtime(_) => Response::method_not_allowed(),
         },
         Route::DiversionCatalog { slot } => {
             if slot.is_none() {
@@ -3253,7 +3236,7 @@ fn capabilities(config: &CompiledConfig) -> serde_json::Value {
         "endpoints": {
             "capabilities_get": true,
             "special_groups": {"get": true, "post": enabled, "delete": enabled},
-            "upstream": {"tags_get": true, "config_get": true, "runtime_get": true, "config_post": upstream_edit},
+            "upstream": {"tags_get": true, "groups_get": true, "config_get": true, "runtime_get": true, "config_post": upstream_edit},
             "diversion_sources": {"list_get": enabled, "put": enabled, "delete": enabled},
             "manual_rules": {"show_get": true, "save_get": true, "post": enabled},
             "cache_inventory_get": true,

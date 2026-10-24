@@ -73,10 +73,19 @@ old generation still run on the DNS thread and can delay answers briefly; UDP qu
 ## API
 
 - `GET /api/v1/upstream/tags` (the `aliapi` tags), `GET /api/v1/upstream/config` (`{tag:[entries]}`: the effective list in the WebUI shape, `use_socks_proxy` = the effective switch),
-  `GET /api/v1/upstream/runtime/{tag}` (`override_config` = the settings entries), `POST /api/v1/upstream/config {plugin_tag, upstreams}` (validated, stored, applied; an empty list removes the override;
+  `GET /api/v1/upstream/runtime/{tag}` (`override_config` = the settings entries), `POST /api/v1/upstream/config {plugin_tag, upstreams}` (validated, stored, applied; an empty list removes the override,
+  i.e. restores the YAML list — never "delete the last upstream"; a non-empty list without an enabled entry is refused before anything is stored with
+  `400 上游组「<tag>」至少要保留一个启用的上游。`, plus `这个组只在<conditions>时使用；不想用它，关闭该开关即可。` when the group declares `show_when` (v0.4.0; before, the
+  `aliapi` compile error `…upstreams must not be empty` came back as the 400 text);
   404 unknown tag; 400 with the reason above). Standard schema-4 profiles expose
   `/api/v1/upstream/sources`; special-group tags are refused by ordinary upstream
   POST and maintained through `/api/v1/special-groups` instead.
+- `GET /api/v1/upstream/groups` (v0.4.0; capability `endpoints.upstream.groups_get`, operation `upstreams.read`) -> one object per `aliapi` tag (sorted by tag):
+  `{tag, active, show_when: [conditions], used_when?, inactive_reason?}` (`used_when`: the conditions in words, e.g. `「国内域名 FakeIP」开启`, whenever there are any). An `aliapi` may declare `args.show_when` (display only, never affects resolution): one condition or a
+  non-empty list of conditions that must all hold, each `flag <key>`, `flag <key>=<option>` or the same after `!`, validated at load like the `flag` matcher (unknown
+  flag/option, bool/choice mismatch, any other shape → load error at `…args.show_when[i]`). `active` is whether they all hold in the current generation (a flag change
+  publishes a new one); `inactive_reason` reads `仅在「<flag label>」开启时使用` / `仅在「<label>」为「<option label>」时使用` (`关闭` / `不是` for `!`, conditions joined by `且`).
+  The WebUI hides inactive groups in 上游设置 (unless asked) and in the overview's upstream statistics.
 - `GET /api/v1/overrides` -> `{socks5, ecs, replacements: []}` from the unique `socks5_proxy` / `ecs_address`; `POST` sets them (an empty value returns to the YAML value; non-empty `replacements` -> 400;
   several objects of a kind -> 409 `ambiguous`; no object but a value -> 400).
 - `GET /api/v1/domain-generation` -> `{enabled, remember_direct, remember_proxy, no_v4, no_v6}`; `POST` takes a partial of the same keys and answers `{settings, flush_targets}`. `enabled` is the

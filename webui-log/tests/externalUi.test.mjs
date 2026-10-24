@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-import { API_LEVEL, archiveName, buildManifest, validVersion } from '../../scripts/external-ui-manifest.mjs'
+import { API_LEVEL, ARCHIVE_NAME, buildManifest, validVersion } from '../../scripts/external-ui-manifest.mjs'
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8')
 
@@ -19,7 +19,8 @@ test('the manifest of an external package has the fields the host judges', () =>
     assert.equal(validVersion(bad), false, String(bad))
     assert.throws(() => buildManifest({ version: bad }))
   }
-  assert.equal(archiveName('v1.2/3 beta'), 'mosdns-ui-v1.2_3_beta.zip')
+  assert.equal(ARCHIVE_NAME, 'rtdns-webui.tar.gz')
+  assert.match(read('../../rust/native-host/src/update/mod.rs'), /pub\(crate\) const WEBUI_ASSET: &str = "rtdns-webui\.tar\.gz";/)
 })
 
 test('the build script and the host agree on the interface level', () => {
@@ -27,22 +28,28 @@ test('the build script and the host agree on the interface level', () => {
   assert.equal(Number(host.match(/pub\(crate\) const HOST_API_LEVEL: u64 = (\d+);/)[1]), API_LEVEL)
 })
 
-test('the external build uses relative resource URLs and a name-independent output directory', () => {
-  const config = read('../vite.external.config.js')
+test('one build makes the WebUI package: relative URLs, a name-independent directory, a manifest and a tar.gz', () => {
+  const config = read('../vite.config.js')
   assert.match(config, /base: '\.\/'/)
-  assert.match(config, /dist-external\/package/)
-  assert.doesNotMatch(config, /\/main\//, 'nothing in the package depends on a mount name')
-  assert.match(config, /index\.html/)
+  assert.match(config, /path\.resolve\(__dirname, 'dist'\)/)
+  const code = config.split('\n').filter((line) => !line.trim().startsWith('//')).join('\n')
+  assert.doesNotMatch(code, /\/main\/|native-host\/ui/, 'nothing depends on a mount name or the program tree')
   const pkg = JSON.parse(read('../package.json'))
-  assert.equal(pkg.scripts['build:external'], 'node ../scripts/build-external-ui.mjs')
-  assert.equal(pkg.scripts.build, 'vite build', 'the built-in build is unchanged')
-  const script = read('../../scripts/build-external-ui.mjs')
-  assert.match(script, /vite\.external\.config\.js/)
+  assert.equal(pkg.scripts.build, 'node ../scripts/build-webui.mjs')
+  assert.equal(pkg.scripts['build:package'], 'node ../scripts/build-webui.mjs --package')
+  assert.equal(pkg.scripts['build:external'], undefined)
+  const script = read('../../scripts/build-webui.mjs')
   assert.match(script, /ui-manifest\.json/)
+  assert.match(script, /--format=ustar/)
+  assert.match(script, /COPYFILE_DISABLE/)
+  assert.doesNotMatch(script, /\bzip\b/)
 })
 
-test('the built-in UI links to every mounted mosdns UI package and explains refused ones', () => {
+test('the system page shows the WebUI version and links to every other mounted UI package', () => {
   const panel = read('../src/pages/system/SystemUpdateSection.vue')
+  assert.match(panel, /entry\.path === '\/'/, 'ui/main is the WebUI, not an external package')
+  assert.match(panel, /label="界面版本"/)
+  assert.match(panel, /uiEntries\.value\.filter\(\(entry\) => !isWebui\(entry\)\)/)
   assert.match(panel, /health\.value\?\.external_ui/)
   assert.match(panel, /entry\.kind === 'mosdns_ui' && entry\.mounted/)
   assert.match(panel, /entry\.kind === 'mosdns_ui' && !entry\.mounted/)
@@ -58,17 +65,12 @@ test('a port change made in an external UI stays under that UI\'s own path', () 
   assert.doesNotMatch(control, /\/main\//)
 })
 
-test('the native build embeds the maintained UI from rust/native-host/ui and carries no compatibility UI', () => {
-  const build = read('../../scripts/build-rust-native.sh')
-  assert.doesNotMatch(build, /log1/)
+test('the program embeds no UI: the native build runs no frontend build and build.rs reads no UI files', () => {
+  const build = read('../../scripts/build-rust-native.sh').split('\n').filter((line) => !line.startsWith('#')).join('\n')
+  assert.doesNotMatch(build, /npm|log1/)
   const manifest = read('../../scripts/native-build-manifest.mjs')
-  assert.doesNotMatch(manifest, /log1|coremain/)
-  assert.match(manifest, /rust\/native-host\/ui\/index\.html|'index\.html'/)
+  assert.doesNotMatch(manifest, /log1|coremain|native-host\/ui/)
   const buildRs = read('../../rust/native-host/build.rs')
-  assert.doesNotMatch(buildRs, /log1|coremain/)
-  assert.match(buildRs, /join\("ui"\)/)
-  const vite = read('../vite.config.js')
-  assert.match(vite, /rust\/native-host\/ui\/assets\/vue-log/)
-  assert.match(vite, /rust\/native-host\/ui\/index\.html/)
+  assert.doesNotMatch(buildRs, /log1|coremain|"ui"|include_bytes/)
   assert.doesNotMatch(read('../package.json'), /log1/)
 })

@@ -23,12 +23,12 @@ These files are short, source-backed rules for MosDNS-T backend and Rust migrati
 | [Native feature flags](native-feature-flags.md) | Named `feature_flag` declarations, the `flag` matcher, values in `settings.json` with hot apply, `/api/v1/flags`, the `requery_on_change` follow-up, one-time migration from `rule/switchN.txt`, config schema 3 (replaces [native switch state](native-switch-state.md), removed) |
 
 | [Native aliapi/rewrite/webinfo](native-aliapi-rewrite-webinfo.md) | YAML-only `aliapi` with SOCKS5 for TCP-based upstreams, `rewrite` rules and API, `webinfo` document API (M1-b1); runtime overrides excluded |
-| [Native typed settings](native-settings.md) | `socks5_proxy`/`ecs_address` objects and `$tag` references, `webinfo/settings.json`, effective configuration with sources, hot apply, WebUI settings routes |
+| [Native typed settings](native-settings.md) | `socks5_proxy`/`ecs_address` objects and `$tag` references, `webinfo/settings.json`, effective configuration with sources, hot apply, WebUI settings routes, `aliapi` `show_when` and `/api/v1/upstream/groups` (v0.4.0) |
 | [Native `requery`](native-requery.md) | Scheduled / triggered re-query job, reference state file, shared in-process URL actions, scheduler and API |
 | [Native `domain_output`](native-domain-output.md) | Name statistics (the access ranking), reference file formats, rule publication, `/show` `/save` `/flush` API; mapper injection moved to `route_learner` |
 | [Native `route_learner`](native-route-learner.md) | Learned routing facts (remembered direct/proxy, no-V4/no-V6, special names): per-entry expiry, mapper merge, state file, hot-apply hand-over, `show`/`save`/`flush`/`entries`/`status`, config schema 2 |
-| [Native online update](native-update.md) | `vX.Y.Z` releases of `jasonxtt/rtdns`, sha256-verified program and `config_rust` package updates, guarded transaction with automatic rollback that does not depend on the service manager, configuration export (update from URL removed 2026-10-23) |
-| [Native WebUI hosting](native-webui-hosting.md) | Same-origin embedded/external UI, built-in UI structure (sidebar, hash routes, themes, the eight 规则设置 sub-items and the shared list editor; appearance API removed 2026-10-23), truthful health/version, capability admission and opt-in pure native build |
+| [Native online update](native-update.md) | `vX.Y.Z` releases of `jasonxtt/rtdns`, sha256-verified program, `config_rust` package and WebUI (`ui/main`, when present; v0.4.0) updates, guarded transaction with automatic rollback that does not depend on the service manager, configuration export (update from URL removed 2026-10-23) |
+| [Native WebUI hosting](native-webui-hosting.md) | Same-origin UI hosting (v0.4.0: no embedded UI; `ui/main` at `/`, other `ui/<name>` at `/<name>/`, the "no WebUI" page), WebUI structure (sidebar with collapsed 规则设置, hash routes, themes, the eight 规则设置 sub-items and the shared list editor; appearance API removed 2026-10-23), truthful health/version, capability admission and the program build |
 
 ## Before development
 

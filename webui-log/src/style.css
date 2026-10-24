@@ -2170,12 +2170,30 @@ label.switch-table *,
 }
 
 .rt-nav-group {
-  margin-top: 12px;
-  padding: 4px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin-top: 2px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-0);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rt-nav-group:hover {
+  background: var(--surface-hover);
+}
+
+.rt-nav-caret {
   color: var(--ink-1);
   font-size: 0.75rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
 }
 
 .rt-nav-group.active {
@@ -2500,7 +2518,11 @@ label.switch-table *,
   .rt-mobile-tab {
     flex: 0 0 auto;
     padding: 5px 10px;
+    border: 0;
     border-radius: 6px;
+    background: transparent;
+    font: inherit;
+    cursor: pointer;
     color: var(--ink-0);
     text-decoration: none;
     font-size: 0.86rem;

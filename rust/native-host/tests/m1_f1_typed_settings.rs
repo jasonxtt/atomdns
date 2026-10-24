@@ -745,7 +745,7 @@ fn a_rejected_change_leaves_the_file_and_the_running_configuration_alone() {
             (
                 r#"{"plugin_tag":"foreign","upstreams":[{"tag":"a","enabled":false,"protocol":"udp","addr":"1.1.1.1"}]}"#,
                 400,
-                "must not be empty",
+                "至少要保留一个启用的上游",
             ),
             (
                 r#"{"plugin_tag":"foreign","upstreams":[{"tag":"a","enabled":true,"protocol":"tcp","addr":"127.0.0.1:1","use_socks_proxy":true}],"extra":1}"#,

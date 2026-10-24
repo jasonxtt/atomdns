@@ -20,8 +20,7 @@ behavioural reference (see `tools/go-reference/README.md`).
 ## Repository map
 
 - `rust/`: the Cargo workspace. `native-host` is the product (`rtdns` binary, built-in `/` UI, management API, update guard); `dns-core`, `cache-core`, `matcher-core`, `sequence-core`, `upstream-core` are its libraries
-- `rust/native-host/ui/`: the built `/` UI (checked in; produced from `webui-log/src` by `npm run build`, embedded by `rust/native-host/build.rs`)
-- `webui-log/`: active Vue frontend workspace (historical name); `src/` builds the maintained UI (built in at `/`, or as an external package for any `ui/<name>/` with `npm run build:external`)
+- `webui-log/`: active Vue frontend workspace (historical name); `src/` builds the WebUI package (`npm run build` → `webui-log/dist/`, `npm run build:package` → `release/rtdns-webui.tar.gz`), installed as `<config root>/ui/main/` (served at `/`) or any other `ui/<name>/`. The program embeds no UI (v0.4.0)
 - `scripts/`: Rust build and release scripts (`build-rust-native.sh`, `build-rust-release.sh`, `generate-rust-update-manifest.sh`; release steps in `docs/rust/release.md`) and measurement helpers
 - `tools/`: differential and evidence tools (Python, plus thin Go wrappers built from the Go repository by `tools/go-reference/build.sh`)
 - `tests/phase5a-baseline/`: workload/config fixtures read by Rust tests, and the standalone Go load-generator helper (own `go.mod`, not needed by the Rust build)
@@ -34,13 +33,12 @@ behavioural reference (see `tools/go-reference/README.md`).
 
 The normal route contract is:
 
-- `/` → maintained Vue UI (built in)
+- `/` → the WebUI from `<config root>/ui/main/` (without it, a short "no WebUI installed" page; the API is unaffected)
 - `/log` → does not exist on the Rust-native host (the Go repository's compatibility UI)
 - `/<name>/` → optional external UI package from `<config root>/ui/<name>/`, any directory name (Rust-native; see `docs/rust/external-ui.md`)
 
-Do not infer the route from a directory name. Verify `rust/native-host/build.rs`,
-`rust/native-host/src/static_ui.rs`, `rust/native-host/ui/index.html` and the Vite
-configuration before changing UI behavior.
+Do not infer the route from a directory name. Verify `rust/native-host/src/external_ui.rs`,
+`rust/native-host/src/static_ui.rs` and `webui-log/vite.config.js` before changing UI behavior.
 
 ## Compatibility contracts
 

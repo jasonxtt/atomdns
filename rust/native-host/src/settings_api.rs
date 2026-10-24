@@ -99,6 +99,59 @@ pub(crate) fn upstream_config(config: &CompiledConfig) -> serde_json::Value {
     )
 }
 
+/// `GET /api/v1/upstream/groups`: every `aliapi` group, whether its
+/// `show_when` holds in this generation, the conditions, when they are met
+/// (`used_when`, in words; only with conditions) and, when they are not, why the
+/// group is not in use.
+pub(crate) fn upstream_groups(config: &CompiledConfig) -> serde_json::Value {
+    serde_json::Value::Array(
+        config
+            .effective_upstreams
+            .keys()
+            .map(|tag| {
+                let conditions = show_when(config, tag);
+                let active = group_active(config, tag);
+                let mut value = serde_json::json!({
+                    "tag": tag,
+                    "active": active,
+                    "show_when": conditions,
+                });
+                if !conditions.is_empty() {
+                    value["used_when"] = usage(config, tag).into();
+                }
+                if !active {
+                    value["inactive_reason"] = format!("仅在{}时使用", usage(config, tag)).into();
+                }
+                value
+            })
+            .collect(),
+    )
+}
+
+fn show_when<'a>(config: &'a CompiledConfig, tag: &str) -> &'a [String] {
+    config
+        .yaml_defaults
+        .show_when
+        .get(tag)
+        .map_or(&[], Vec::as_slice)
+}
+
+/// Whether every `show_when` condition of `tag` holds (validated at load).
+fn group_active(config: &CompiledConfig, tag: &str) -> bool {
+    show_when(config, tag).iter().all(|text| {
+        crate::config::flags::condition(text, "show_when", &config.flags).unwrap_or(true)
+    })
+}
+
+/// `「国内域名 FakeIP」开启` (conditions joined by `且`).
+fn usage(config: &CompiledConfig, tag: &str) -> String {
+    show_when(config, tag)
+        .iter()
+        .map(|text| crate::config::flags::describe(text, &config.flags))
+        .collect::<Vec<_>>()
+        .join("且")
+}
+
 /// The settings entries of `tag`, for `GET /runtime/{tag}`.
 pub(crate) fn override_config(config: &CompiledConfig, tag: &str) -> Vec<serde_json::Value> {
     config
@@ -139,6 +192,18 @@ pub(crate) async fn post_upstream(control: &RuntimeControl, body: &[u8]) -> Repl
         if let Err(reason) = entry.validate(index) {
             return text(400, &reason);
         }
+    }
+    // An empty list restores the YAML list; a list must keep one enabled
+    // upstream (an `aliapi` without one does not load).
+    if !payload.upstreams.is_empty() && !payload.upstreams.iter().any(|entry| entry.enabled) {
+        let mut reason = format!("上游组「{tag}」至少要保留一个启用的上游。");
+        if !show_when(&current.config, &tag).is_empty() {
+            reason.push_str(&format!(
+                "这个组只在{}时使用；不想用它，关闭该开关即可。",
+                usage(&current.config, &tag)
+            ));
+        }
+        return text(400, &reason);
     }
     if let Some(profile) = &current.config.standard_groups {
         if profile
