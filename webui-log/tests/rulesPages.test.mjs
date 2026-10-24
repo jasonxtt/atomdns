@@ -299,3 +299,58 @@ test('the old rule-page components are gone', () => {
   }
   assert.doesNotMatch(read('../src/utils/nativeSettings.js'), /NATIVE_REPLACEMENTS_NOTE/)
 })
+
+// ----- upstream groups that are not in use (show_when) -------------------------------
+
+test('the groups answer becomes a map and degrades to "all in use"', async () => {
+  const { loadUpstreamGroups } = await import('../src/utils/upstreamStats.js')
+  const caps = { endpoints: { upstream: { groups_get: true } } }
+  const answer = [{ tag: 'cnfake', active: false, inactive_reason: '仅在「国内域名 FakeIP」开启时使用', used_when: '「国内域名 FakeIP」开启' }, { tag: 'domestic', active: true }, { nope: 1 }]
+  assert.deepEqual(await loadUpstreamGroups(async () => answer, caps), {
+    cnfake: { active: false, inactive_reason: '仅在「国内域名 FakeIP」开启时使用', used_when: '「国内域名 FakeIP」开启' },
+    domestic: { active: true, inactive_reason: '', used_when: '' }
+  })
+  assert.deepEqual(await loadUpstreamGroups(async () => answer, { endpoints: { upstream: {} } }), {}, 'an older host')
+  assert.deepEqual(await loadUpstreamGroups(async () => { throw new Error('x') }, caps), {})
+  assert.deepEqual(await loadUpstreamGroups(async () => ({}), caps), {})
+})
+
+test('a change that leaves a group without an enabled upstream is refused with the reason', async () => {
+  const { lastUpstreamReason } = await import('../src/utils/upstreamStats.js')
+  const on = { tag: 'a', enabled: true }
+  const off = { tag: 'b', enabled: false }
+  assert.equal(lastUpstreamReason('cnfake', [on, off]), '')
+  assert.equal(lastUpstreamReason('cnfake', [off], null, '国内 FakeIP 上游'), '上游组「国内 FakeIP 上游」至少要保留一个启用的上游。')
+  assert.equal(
+    lastUpstreamReason('cnfake', [], { active: false, inactive_reason: '仅在「国内域名 FakeIP」开启时使用' }, '国内 FakeIP 上游'),
+    '上游组「国内 FakeIP 上游」至少要保留一个启用的上游。这个组只在「国内域名 FakeIP」开启时使用；不想用它，关闭该开关即可。'
+  )
+  // A group in use (switch on) still names its switch.
+  assert.equal(
+    lastUpstreamReason('cnfake', [off], { active: true, inactive_reason: '', used_when: '「国内域名 FakeIP」开启' }, '国内 FakeIP 上游'),
+    '上游组「国内 FakeIP 上游」至少要保留一个启用的上游。这个组只在「国内域名 FakeIP」开启时使用；不想用它，关闭该开关即可。'
+  )
+})
+
+test('the upstream page hides groups not in use unless asked, and checks before disabling or deleting the last one', () => {
+  const panel = read('../src/components/rules/UpstreamPanel.vue')
+  assert.match(panel, /loadUpstreamGroups\(getJSON, capabilities\.value\)/)
+  assert.match(panel, /configuredGroups\.value\.filter\(\(group\) => showInactive\.value \|\| !inactive\(group\)\)/)
+  assert.match(panel, /显示未生效的组（\$\{inactiveCount\}）/)
+  assert.match(panel, /data-inactive-group/)
+  assert.match(panel, /rtdns-show-inactive-upstream-groups/)
+  // toggle and remove compute the list first and refuse before any request.
+  for (const name of ['toggle', 'remove']) {
+    const body = panel.slice(panel.indexOf(`async function ${name}(`))
+    const refusal = body.indexOf('refusal(group, list)')
+    assert.ok(refusal > 0 && refusal < body.indexOf('saveGroup(group, list)'), name)
+  }
+  // A refused click puts the switch back (the data did not change, so Vue would not).
+  assert.match(panel, /@change="toggle\(group, row, \$event\)"/)
+  const toggleBody = panel.slice(panel.indexOf('async function toggle('), panel.indexOf('async function remove('))
+  assert.equal((toggleBody.match(/resetSwitch\(input, group, row\.index\)/g) || []).length, 3)
+  const overview = read('../src/pages/OverviewPage.vue')
+  assert.match(overview, /filter\(\(group\) => upstreamGroupStates\.value\[group\]\?\.active !== false\)/)
+  const upstream = read('../src/pages/rules/RulesUpstreamPage.vue')
+  assert.match(upstream, /运行模式 › DDNS 优先国外解析/)
+})

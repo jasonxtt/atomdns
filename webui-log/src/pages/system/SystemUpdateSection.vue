@@ -18,11 +18,15 @@ const now = ref(Date.now())
 let restartProbeTimerId = 0
 
 const health = computed(() => capabilityState.health || null)
-// The host lists every directory under `<config root>/ui/` in its health (served at /<name>/).
-const externalEntries = computed(() => (Array.isArray(health.value?.external_ui) ? health.value.external_ui : []))
+// The host lists every directory under `<config root>/ui/` in its health: `ui/main` (the WebUI,
+// `path` "/") and the external ones (served at /<name>/).
+const uiEntries = computed(() => (Array.isArray(health.value?.external_ui) ? health.value.external_ui : []))
+const isWebui = (entry) => entry.path === '/' || (entry.path === undefined && entry.name === 'main')
+const webuiEntry = computed(() => uiEntries.value.find(isWebui) || null)
+const externalEntries = computed(() => uiEntries.value.filter((entry) => !isWebui(entry)))
 // The directory this page was loaded from ('/' for the built-in UI, '/<name>/' for an external one).
 const currentDirectory = typeof window !== 'undefined' ? new URL('./', window.location.href).pathname : '/'
-const packageUrl = (entry) => `/${encodeURIComponent(entry.name)}/`
+const packageUrl = (entry) => entry.path || `/${encodeURIComponent(entry.name)}/`
 // Compatible UI packages other than the one being viewed.
 const mountedPackages = computed(() => externalEntries.value.filter((entry) => entry.kind === 'mosdns_ui' && entry.mounted && packageUrl(entry) !== currentDirectory))
 // Packages the host refused (incompatible, broken manifest, ...), with the reason.
@@ -235,6 +239,9 @@ onBeforeUnmount(() => {
     <SettingRow label="程序版本" :description="processInfo.startTime ? `启动于 ${new Date(processInfo.startTime * 1000).toLocaleString('zh-CN', { hour12: false })}` : '当前运行的 rtdns'">
       <span class="rt-setting-text">{{ supportsOperation('system.version') ? (health?.version || '读取中') : operationReason('system.version') }}</span>
       <span v-if="supportsOperation('metrics.process')" class="muted rt-setting-note">已运行 {{ uptimeText }}</span>
+    </SettingRow>
+    <SettingRow label="界面版本" description="配置目录 ui/main 下的 WebUI，在线更新时随程序一起替换" data-webui-version>
+      <span class="rt-setting-text">{{ webuiEntry?.mounted ? (webuiEntry.ui_version || '无版本信息') : (webuiEntry?.reason || '未安装') }}</span>
     </SettingRow>
     <SettingRow label="资源占用" description="本进程当前的内存与累计 CPU 时间">
       <span class="rt-setting-text">{{ supportsOperation('metrics.process') ? resourceText : operationReason('metrics.process') }}</span>

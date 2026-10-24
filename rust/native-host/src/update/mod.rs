@@ -1,8 +1,8 @@
-//! Online update of the native program and its configuration package.
+//! Online update of the native program, its configuration package and its WebUI.
 //!
 //! Releases come from GitHub Releases of `jasonxtt/rtdns`, tags `vX.Y.Z` only. An
-//! update downloads the program and, when the release needs a newer configuration
-//! package, that package; verifies every sha256; pre-checks the candidate; and then
+//! update downloads the program, the WebUI when `<root>/ui/main` exists (`webui.rs`)
+//! and, when the release needs a newer configuration package, that package; verifies every sha256; pre-checks the candidate; and then
 //! hands over to a guard process (`update-guard`, see `guard.rs`) that replaces the
 //! files, runs the candidate as its child and rolls everything back when the candidate
 //! is not healthy in time. The design and its failure analysis are in
@@ -14,6 +14,7 @@ pub(crate) mod fsio;
 pub(crate) mod guard;
 pub(crate) mod package;
 pub(crate) mod transaction;
+pub(crate) mod webui;
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -26,14 +27,18 @@ use serde::{Deserialize, Serialize};
 /// The configuration package schema this program requires; bump together with
 /// `REQUIRED_CONFIG_PACKAGE_ID` (and the package build script) when the structure of
 /// the managed configuration files changes. Binary-only releases leave both alone.
-pub(crate) const REQUIRED_CONFIG_SCHEMA: u32 = 3;
-pub(crate) const REQUIRED_CONFIG_PACKAGE_ID: &str = "rust-config-schema-3";
+pub(crate) const REQUIRED_CONFIG_SCHEMA: u32 = 4;
+pub(crate) const REQUIRED_CONFIG_PACKAGE_ID: &str = "rust-config-schema-4";
 /// The `channel` of the configuration package and of the update manifest.
 pub(crate) const CHANNEL: &str = "rust";
 /// The release asset holding the executable (a `tar.gz` with a file named `rtdns`).
 pub(crate) const RELEASE_ASSET: &str = "rtdns-linux-amd64.tar.gz";
 /// The executable's name inside `RELEASE_ASSET`.
 pub(crate) const RELEASE_BINARY: &str = "rtdns";
+/// The release asset holding the WebUI: the files of `<config root>/ui/main/` at the top
+/// level of a `tar.gz`. Listed in the manifest's `artifacts` like the program (a new
+/// top-level manifest field would make older updaters refuse the manifest).
+pub(crate) const WEBUI_ASSET: &str = "rtdns-webui.tar.gz";
 /// The release asset naming every artifact's sha256 and the configuration package.
 pub(crate) const MANIFEST_ASSET: &str = "rtdns-update-manifest.json";
 const DEFAULT_API_URL: &str = "https://api.github.com/repos/jasonxtt/rtdns/releases?per_page=100";
@@ -47,6 +52,7 @@ pub(crate) const MAX_MANIFEST_BYTES: usize = 1 << 20;
 pub(crate) const MAX_ARCHIVE_BYTES: usize = 64 << 20;
 pub(crate) const MAX_BINARY_BYTES: u64 = 128 << 20;
 pub(crate) const MAX_CONFIG_PACKAGE_BYTES: usize = 64 << 20;
+pub(crate) const MAX_WEBUI_ARCHIVE_BYTES: usize = 32 << 20;
 pub(crate) const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// The release listing endpoint; `MOSDNS_UPDATE_API_URL` replaces it (tests, mirrors).
@@ -615,6 +621,22 @@ mod tests {
         let format2 = manifest_json("v1.2.3", "rust").replace("\"format\":1", "\"format\":2");
         assert!(parse_manifest(format2.as_bytes(), "v1.2.3").is_err());
         assert!(parse_manifest(b"not json", "v1.2.3").is_err());
+    }
+
+    #[test]
+    fn the_webui_is_one_more_artifact_so_older_updaters_still_read_the_manifest() {
+        // v0.3.0 refuses unknown top-level fields but takes any artifact name.
+        let with_webui = manifest_json("v1.2.3", "rust").replacen(
+            &format!(r#""{RELEASE_ASSET}":"#),
+            &format!(
+                r#""{WEBUI_ASSET}":{{"sha256":"{}"}},"{RELEASE_ASSET}":"#,
+                "c".repeat(64)
+            ),
+            1,
+        );
+        let manifest = parse_manifest(with_webui.as_bytes(), "v1.2.3").unwrap();
+        assert_eq!(manifest.artifacts[WEBUI_ASSET].sha256, "c".repeat(64));
+        assert_eq!(WEBUI_ASSET, "rtdns-webui.tar.gz");
     }
 
     #[test]

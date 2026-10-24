@@ -1,9 +1,9 @@
 //! Minimal, bounded archive readers and writers for the updater.
 //!
-//! No `zip`/`tar` crate is available offline, and the updater only needs three small
-//! things: pull the `rtdns` executable out of a release `tar.gz`, read a configuration
-//! package (a zip of stored or deflated files), and write a stored zip for the
-//! configuration export. Every reader bounds entry counts and sizes before it
+//! No `zip`/`tar` crate is available offline, and the updater only needs four small
+//! things: pull the `rtdns` executable out of a release `tar.gz`, unpack the WebUI
+//! `tar.gz` into a fresh directory, read a configuration package (a zip of stored or
+//! deflated files), and write a stored zip for the configuration export. Every reader bounds entry counts and sizes before it
 //! allocates, rejects anything it does not understand, and never trusts a name.
 
 use std::io::Read;
@@ -78,6 +78,157 @@ pub(crate) fn extract_tar_gz_file(
             }
         }
     }
+}
+
+/// Bounds for [`extract_tar_gz_tree`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TreeLimits {
+    pub(crate) max_entries: usize,
+    pub(crate) max_depth: usize,
+    pub(crate) max_file: u64,
+    pub(crate) max_total: u64,
+}
+
+/// One path of a tree archive: `./` prefixes and a directory's trailing `/` dropped;
+/// `None` for the archive root itself. Absolute paths, `.`/`..`/empty components,
+/// backslashes, control characters and hidden (`.`-prefixed) names are refused.
+fn tree_path(name: &str, max_depth: usize) -> Result<Option<String>, String> {
+    let mut rest = name;
+    while let Some(stripped) = rest.strip_prefix("./") {
+        rest = stripped;
+    }
+    let rest = rest.strip_suffix('/').unwrap_or(rest);
+    if rest.is_empty() || rest == "." {
+        return Ok(None);
+    }
+    let refused = || format!("archive entry {name:?} has an unsafe path");
+    if rest.starts_with('/') || rest.contains('\\') || rest.chars().any(char::is_control) {
+        return Err(refused());
+    }
+    let parts: Vec<&str> = rest.split('/').collect();
+    if parts
+        .iter()
+        .any(|part| part.is_empty() || part.starts_with('.'))
+    {
+        return Err(refused());
+    }
+    if parts.len() > max_depth {
+        return Err(format!("archive entry {name:?} is nested too deeply"));
+    }
+    Ok(Some(rest.to_owned()))
+}
+
+/// Unpacks a gzip-compressed tar of plain files and directories into `destination`,
+/// which must not exist yet. Anything else — links, devices, FIFOs, pax headers, an
+/// unsafe or repeated path — is an error, as is going over `limits`. Files are written
+/// `0644`, directories `0755`; every file and directory is flushed before it returns
+/// (directories deepest first), so renaming `destination` afterwards publishes a complete
+/// tree. On error `destination` may hold a partial tree; the caller removes it.
+pub(crate) fn extract_tar_gz_tree(
+    data: &[u8],
+    destination: &std::path::Path,
+    limits: TreeLimits,
+) -> Result<(), String> {
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    let io = |what: &str, error: std::io::Error| format!("{what}: {error}");
+    std::fs::DirBuilder::new()
+        .mode(0o755)
+        .create(destination)
+        .map_err(|error| io("create the unpack directory", error))?;
+    let max_scan = limits
+        .max_total
+        .saturating_add((limits.max_entries as u64 + 2) * 2 * BLOCK as u64);
+    let mut stream = GzDecoder::new(data).take(max_scan.saturating_add(1));
+    let mut entries = 0_usize;
+    let mut total = 0_u64;
+    let mut long_name: Option<String> = None;
+    loop {
+        let mut header = [0_u8; BLOCK];
+        if !read_exact_or_end(&mut stream, &mut header)? || header.iter().all(|byte| *byte == 0) {
+            return sync_tree(destination).map_err(|error| io("flush the unpacked tree", error));
+        }
+        let size = parse_octal(&header[124..136])?;
+        let padded = size.div_ceil(BLOCK as u64) * BLOCK as u64;
+        let kind = header[156];
+        if kind == b'L' {
+            if size > 4096 {
+                return Err("archive entry name is too long".to_owned());
+            }
+            let mut name = read_block_data(&mut stream, size, padded)?;
+            while name.last() == Some(&0) {
+                name.pop();
+            }
+            long_name = Some(String::from_utf8(name).map_err(|_| "archive name is not UTF-8")?);
+            continue;
+        }
+        let name = match long_name.take() {
+            Some(name) => name,
+            None => header_name(&header),
+        };
+        entries += 1;
+        if entries > limits.max_entries {
+            return Err("archive has too many entries".to_owned());
+        }
+        match kind {
+            b'5' => {
+                skip(&mut stream, padded)?;
+                if let Some(path) = tree_path(&name, limits.max_depth)? {
+                    std::fs::DirBuilder::new()
+                        .recursive(true)
+                        .mode(0o755)
+                        .create(destination.join(&path))
+                        .map_err(|error| io(&format!("create {path:?}"), error))?;
+                }
+            }
+            b'0' | 0 => {
+                let path = tree_path(&name, limits.max_depth)?
+                    .ok_or_else(|| format!("archive entry {name:?} has no file name"))?;
+                if size > limits.max_file {
+                    return Err(format!("archive entry {path:?} is too large"));
+                }
+                total = total.saturating_add(size);
+                if total > limits.max_total {
+                    return Err("archive unpacks to more than the allowed size".to_owned());
+                }
+                let target = destination.join(&path);
+                if let Some(parent) = target.parent() {
+                    std::fs::DirBuilder::new()
+                        .recursive(true)
+                        .mode(0o755)
+                        .create(parent)
+                        .map_err(|error| io(&format!("create the directory of {path:?}"), error))?;
+                }
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o644)
+                    .open(&target)
+                    .map_err(|error| io(&format!("write {path:?}"), error))?;
+                let bytes = read_block_data(&mut stream, size, padded)?;
+                std::io::Write::write_all(&mut file, &bytes)
+                    .and_then(|()| file.sync_all())
+                    .map_err(|error| io(&format!("write {path:?}"), error))?;
+            }
+            other => {
+                return Err(format!(
+                    "archive entry {name:?} has an unsupported type ({})",
+                    char::from(other).escape_default()
+                ));
+            }
+        }
+    }
+}
+
+/// Flushes `dir` and every directory below it, deepest first (the tree holds only
+/// directories and regular files the unpacker created).
+fn sync_tree(dir: &std::path::Path) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            sync_tree(&entry.path())?;
+        }
+    }
+    super::fsio::sync_dir(dir)
 }
 
 fn header_name(header: &[u8; BLOCK]) -> String {
@@ -449,6 +600,130 @@ mod tests {
                 .unwrap_err()
                 .contains("not found")
         );
+    }
+
+    const TREE: TreeLimits = TreeLimits {
+        max_entries: 8,
+        max_depth: 3,
+        max_file: 1024,
+        max_total: 2048,
+    };
+
+    fn unpack(
+        name: &str,
+        entries: &[(&str, u8, &[u8])],
+        limits: TreeLimits,
+    ) -> (std::path::PathBuf, Result<(), String>) {
+        let base = std::env::temp_dir().join(format!("archive-tree-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let destination = base.join("out");
+        let result = extract_tar_gz_tree(&tar_gz(entries), &destination, limits);
+        (base, result)
+    }
+
+    #[test]
+    fn a_tree_of_files_and_directories_is_unpacked_with_fixed_modes() {
+        use std::os::unix::fs::PermissionsExt;
+        let long = format!("chunks/{}.js", "n".repeat(120));
+        let mut long_header = long.clone().into_bytes();
+        long_header.push(0);
+        let (base, result) = unpack(
+            "ok",
+            &[
+                ("./", b'5', b""),
+                ("./index.html", b'0', b"<html>"),
+                ("./chunks/", b'5', b""),
+                ("././LongLink", b'L', &long_header),
+                ("ignored-short-name", b'0', b"long"),
+                ("assets/a.css", 0, b"body{}"),
+            ],
+            TREE,
+        );
+        result.unwrap();
+        let out = base.join("out");
+        assert_eq!(std::fs::read(out.join("index.html")).unwrap(), b"<html>");
+        assert_eq!(std::fs::read(out.join(&long)).unwrap(), b"long");
+        assert_eq!(std::fs::read(out.join("assets/a.css")).unwrap(), b"body{}");
+        let mode = |path: &str| {
+            std::fs::metadata(out.join(path))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        assert_eq!(mode("index.html"), 0o644);
+        assert_eq!(mode("chunks"), 0o755);
+        assert!(!out.join("ignored-short-name").exists());
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn links_special_entries_unsafe_paths_and_limits_are_refused() {
+        for (label, entries, reason) in [
+            ("symlink", vec![("a", b'2', &b""[..])], "unsupported type"),
+            ("hardlink", vec![("a", b'1', &b""[..])], "unsupported type"),
+            ("device", vec![("a", b'3', &b""[..])], "unsupported type"),
+            ("fifo", vec![("a", b'6', &b""[..])], "unsupported type"),
+            (
+                "pax",
+                vec![("a", b'x', &b"30 path=../x\n"[..])],
+                "unsupported type",
+            ),
+            ("parent", vec![("../a", b'0', &b"x"[..])], "unsafe path"),
+            (
+                "inner-parent",
+                vec![("a/../../b", b'0', &b"x"[..])],
+                "unsafe path",
+            ),
+            ("absolute", vec![("/etc/x", b'0', &b"x"[..])], "unsafe path"),
+            ("backslash", vec![("a\\b", b'0', &b"x"[..])], "unsafe path"),
+            (
+                "hidden",
+                vec![("._index.html", b'0', &b"x"[..])],
+                "unsafe path",
+            ),
+            (
+                "double-slash",
+                vec![("a//b", b'0', &b"x"[..])],
+                "unsafe path",
+            ),
+            ("deep", vec![("a/b/c/d", b'0', &b"x"[..])], "too deeply"),
+            (
+                "duplicate",
+                vec![("a", b'0', &b"x"[..]), ("a", b'0', &b"y"[..])],
+                "write",
+            ),
+            ("large", vec![("a", b'0', &[0_u8; 1025][..])], "too large"),
+            (
+                "total",
+                vec![
+                    ("a", b'0', &[0_u8; 1024][..]),
+                    ("b", b'0', &[0_u8; 1024][..]),
+                    ("c", b'0', &[0_u8; 1][..]),
+                ],
+                "allowed size",
+            ),
+            (
+                "entries",
+                (0..9).map(|_| ("d", b'5', &b""[..])).collect(),
+                "too many entries",
+            ),
+        ] {
+            let (base, result) = unpack(label, &entries, TREE);
+            let error = result.expect_err(label);
+            assert!(error.contains(reason), "{label}: {error}");
+            assert!(
+                !base.join("etc").exists() && !base.join("x").exists() && !base.join("b").exists(),
+                "{label}: nothing outside"
+            );
+            std::fs::remove_dir_all(base).unwrap();
+        }
+        // The destination must be new.
+        let base = std::env::temp_dir().join(format!("archive-tree-exists-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        assert!(extract_tar_gz_tree(&tar_gz(&[("a", b'0', b"x")]), &base, TREE).is_err());
+        std::fs::remove_dir_all(base).unwrap();
     }
 
     #[test]

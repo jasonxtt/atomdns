@@ -321,16 +321,23 @@ impl Drop for ReleaseServer {
 // ----- archives ------------------------------------------------------------------------
 
 fn tar_gz(name: &str, data: &[u8]) -> Vec<u8> {
+    tar_gz_files(&[(name, data)])
+}
+
+fn tar_gz_files(entries: &[(&str, &[u8])]) -> Vec<u8> {
     use flate2::{Compression, write::GzEncoder};
-    let mut header = [0_u8; 512];
-    header[..name.len()].copy_from_slice(name.as_bytes());
-    header[100..107].copy_from_slice(b"0000755");
-    header[124..135].copy_from_slice(format!("{:011o}", data.len()).as_bytes());
-    header[156] = b'0';
-    header[257..262].copy_from_slice(b"ustar");
-    let mut tar = header.to_vec();
-    tar.extend_from_slice(data);
-    tar.resize(tar.len().div_ceil(512) * 512, 0);
+    let mut tar = Vec::new();
+    for (name, data) in entries {
+        let mut header = [0_u8; 512];
+        header[..name.len()].copy_from_slice(name.as_bytes());
+        header[100..107].copy_from_slice(b"0000755");
+        header[124..135].copy_from_slice(format!("{:011o}", data.len()).as_bytes());
+        header[156] = b'0';
+        header[257..262].copy_from_slice(b"ustar");
+        tar.extend_from_slice(&header);
+        tar.extend_from_slice(data);
+        tar.resize(tar.len().div_ceil(512) * 512, 0);
+    }
     tar.extend_from_slice(&[0_u8; 1024]);
     let mut gz = GzEncoder::new(Vec::new(), Compression::fast());
     gz.write_all(&tar).unwrap();
@@ -381,10 +388,10 @@ fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
     out
 }
 
-/// A configuration package for `config_custom.yaml` (schema 3, `rust` channel).
+/// A configuration package for `config_custom.yaml` (schema 4, `rust` channel).
 fn config_package(content: &str, edit: impl Fn(&mut serde_json::Value)) -> Vec<u8> {
     let mut manifest = serde_json::json!({
-        "format": 1, "channel": "rust", "package_id": "rust-config-schema-3", "config_schema": 3,
+        "format": 1, "channel": "rust", "package_id": "rust-config-schema-4", "config_schema": 4,
         "managed_files": ["config_custom.yaml"],
         "sha256": {"config_custom.yaml": sha256(content.as_bytes())},
     });
@@ -395,11 +402,32 @@ fn config_package(content: &str, edit: impl Fn(&mut serde_json::Value)) -> Vec<u
     ])
 }
 
+/// `rtdns-webui.tar.gz` whose `index.html` is `marker` (and `ui_version` too).
+fn webui_package(marker: &str) -> Vec<u8> {
+    let manifest = format!(r#"{{"manifest_schema":1,"ui_version":"{marker}","api_level":1}}"#);
+    tar_gz_files(&[
+        ("index.html", marker.as_bytes()),
+        ("ui-manifest.json", manifest.as_bytes()),
+        ("chunks/app.js", b"js"),
+    ])
+}
+
+/// A WebUI the host itself serves at `/` (`ui/main`), with `marker` as its page and version.
+fn install_ui(root: &Path, marker: &str) {
+    std::fs::create_dir_all(root.join("ui/main")).unwrap();
+    std::fs::write(root.join("ui/main/index.html"), marker).unwrap();
+    std::fs::write(
+        root.join("ui/main/ui-manifest.json"),
+        format!(r#"{{"manifest_schema":1,"ui_version":"{marker}","api_level":1}}"#),
+    )
+    .unwrap();
+}
+
 fn manifest_json(tag: &str, archive: &[u8], config: Option<(&str, &[u8])>) -> Vec<u8> {
     let mut manifest = serde_json::json!({
         "format": 1, "channel": "rust", "version": tag,
-        "required_config_schema": if config.is_some() { 3 } else { 0 },
-        "config_package_id": "rust-config-schema-3",
+        "required_config_schema": if config.is_some() { 4 } else { 0 },
+        "config_package_id": "rust-config-schema-4",
         "artifacts": {"rtdns-linux-amd64.tar.gz": {"sha256": sha256(archive)}},
     });
     if let Some((url, bytes)) = config {
@@ -462,13 +490,25 @@ struct Host {
 
 impl Host {
     fn start(name: &str, health_timeout: Option<u64>) -> Self {
-        common::ports::retry_addr_in_use(|| Self::try_start(name, health_timeout))
+        Self::start_with_ui(name, health_timeout, None)
     }
 
-    fn try_start(name: &str, health_timeout: Option<u64>) -> Result<Self, String> {
+    /// `ui`: the `ui/main` page installed before the start.
+    fn start_with_ui(name: &str, health_timeout: Option<u64>, ui: Option<&str>) -> Self {
+        common::ports::retry_addr_in_use(|| Self::try_start(name, health_timeout, ui))
+    }
+
+    fn try_start(
+        name: &str,
+        health_timeout: Option<u64>,
+        ui: Option<&str>,
+    ) -> Result<Self, String> {
         let root = std::env::temp_dir().join(format!("f3a-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
+        if let Some(marker) = ui {
+            install_ui(&root, marker);
+        }
         let exe = root.join("mosdns");
         std::fs::write(&exe, binary()).unwrap();
         std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -585,13 +625,36 @@ impl Host {
 
     /// Publishes one release `tag` with the given executable (as a tar.gz) and manifest.
     fn publish(&self, tag: &str, program: &[u8], config: Option<&[u8]>) {
+        self.publish_with_ui(tag, program, config, None);
+    }
+
+    /// The same with the release's `rtdns-webui.tar.gz`.
+    fn publish_with_ui(
+        &self,
+        tag: &str,
+        program: &[u8],
+        config: Option<&[u8]>,
+        webui: Option<&[u8]>,
+    ) {
         let archive = tar_gz("rtdns", program);
         let config_url = self.server.url(&format!("/dl/{tag}/config_rust_up.zip"));
-        let manifest = manifest_json(
+        let mut manifest = manifest_json(
             tag,
             &archive,
             config.map(|bytes| (config_url.as_str(), bytes)),
         );
+        let mut assets = vec!["rtdns-linux-amd64.tar.gz", "rtdns-update-manifest.json"];
+        if let Some(bytes) = webui {
+            let mut value: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+            value["artifacts"]["rtdns-webui.tar.gz"] = serde_json::json!({"sha256": sha256(bytes)});
+            manifest = serde_json::to_vec(&value).unwrap();
+            self.server.set(
+                &format!("/dl/{tag}/rtdns-webui.tar.gz"),
+                "application/gzip",
+                bytes.to_vec(),
+            );
+            assets.push("rtdns-webui.tar.gz");
+        }
         self.server.set(
             &format!("/dl/{tag}/rtdns-linux-amd64.tar.gz"),
             "application/gzip",
@@ -609,12 +672,13 @@ impl Host {
                 bytes.to_vec(),
             );
         }
-        self.server.list(vec![self.server.release(
-            tag,
-            false,
-            false,
-            &["rtdns-linux-amd64.tar.gz", "rtdns-update-manifest.json"],
-        )]);
+        self.server
+            .list(vec![self.server.release(tag, false, false, &assets)]);
+    }
+
+    /// `ui/main/index.html`, if any.
+    fn ui_page(&self) -> Option<String> {
+        std::fs::read_to_string(self.root.join("ui/main/index.html")).ok()
     }
 }
 
@@ -676,7 +740,7 @@ fn status_and_check_use_the_cache_ignore_other_tag_families_and_degrade_on_failu
             .unwrap()
             .ends_with("/v99.0.0/rtdns-linux-amd64.tar.gz")
     );
-    assert_eq!(status["config_schema_required"], 3);
+    assert_eq!(status["config_schema_required"], 4);
     assert!(status.get("pending_restart").is_none() && status.get("rollback_performed").is_none());
     assert!(
         status["release_url"]
@@ -699,7 +763,7 @@ fn status_and_check_use_the_cache_ignore_other_tag_families_and_degrade_on_failu
     }
     let health = host.health().unwrap();
     assert_eq!(health["version"], version);
-    assert_eq!(health["required_config_schema"], 3);
+    assert_eq!(health["required_config_schema"], 4);
     assert_eq!(health["config_management_enabled"], true);
     assert_eq!(health["update"]["state"], "idle");
     // The server fails: a forced check still answers 200 with the reason.
@@ -911,20 +975,22 @@ fn settle_after_guard(host: &Host) {
 }
 
 #[test]
-fn a_full_update_replaces_program_and_config_in_the_same_process_and_is_confirmed() {
-    let mut host = Host::start("full", None);
+fn a_full_update_replaces_program_config_and_webui_in_the_same_process_and_is_confirmed() {
+    let mut host = Host::start_with_ui("full", None, Some("OLD-UI"));
     let pid = host.child.id();
     let started = start_ticks(pid);
     let version = current_version();
     let mut program = binary().clone();
     program.push(0); // a different build of the same program
     let new_config = config_text(host.api, host.dns, host.upstream, "after the update");
-    host.publish(
+    host.publish_with_ui(
         &version,
         &program,
         Some(&config_package(&new_config, |_| {})),
+        Some(&webui_package("NEW-UI")),
     );
     assert!(ask(host.dns, "before.example.com"));
+    assert_eq!(host.api("GET", "/", b"").text(), "OLD-UI");
     let reply = host.api("POST", "/api/v1/update/apply", br#"{"force": true}"#);
     assert_eq!(reply.status, 200, "{}", reply.text());
     let body = reply.json();
@@ -955,10 +1021,21 @@ fn a_full_update_replaces_program_and_config_in_the_same_process_and_is_confirme
         ask(host.dns, "after.example.com"),
         "DNS answers on the new program"
     );
+    assert_eq!(
+        host.ui_page().as_deref(),
+        Some("NEW-UI"),
+        "the new WebUI is installed"
+    );
+    assert_eq!(
+        host.api("GET", "/", b"").text(),
+        "NEW-UI",
+        "and served at /"
+    );
+    assert_eq!(host.api("GET", "/chunks/app.js", b"").text(), "js");
     let health = host.health().unwrap();
-    assert_eq!(health["applied_config_schema"], 3);
+    assert_eq!(health["applied_config_schema"], 4);
     let status = host.api("GET", "/api/v1/update/status", b"").json();
-    assert_eq!(status["config_schema_applied"], 3);
+    assert_eq!(status["config_schema_applied"], 4);
     assert_eq!(status["config_update_status"], "success");
     assert!(status.get("pending_restart").is_none(), "{status}");
     assert!(host.root.join("update/installed.json").exists());
@@ -1030,20 +1107,121 @@ fn assert_rolled_back(host: &Host, old_program: &[u8], old_config: &str, reason_
 
 #[test]
 fn a_candidate_that_exits_at_once_is_rolled_back_automatically() {
-    let host = Host::start("rollback-exit", None);
+    let host = Host::start_with_ui("rollback-exit", None, Some("OLD-UI"));
     let pid = host.child.id();
     let old_config = host.config();
     let version = current_version();
     let new_config = config_text(host.api, host.dns, host.upstream, "must not stay");
-    host.publish(
+    host.publish_with_ui(
         &version,
         &candidate_script(&version, "exit 3"),
         Some(&config_package(&new_config, |_| {})),
+        Some(&webui_package("NEW-UI")),
     );
     let reply = host.api("POST", "/api/v1/update/apply", br#"{"force": true}"#);
     assert_eq!(reply.status, 200, "{}", reply.text());
     assert_rolled_back(&host, binary(), &old_config, "提前退出");
     assert_eq!(host.child.id(), pid, "still the same process");
+    assert_eq!(
+        host.ui_page().as_deref(),
+        Some("OLD-UI"),
+        "the old WebUI is back"
+    );
+    assert!(!host.root.join("ui/main/chunks").exists());
+    assert_eq!(host.api("GET", "/", b"").text(), "OLD-UI");
+}
+
+#[test]
+fn a_new_webui_the_candidate_does_not_mount_rolls_the_whole_update_back() {
+    let host = Host::start_with_ui("rollback-ui", Some(6), Some("OLD-UI"));
+    let old_config = host.config();
+    let version = current_version();
+    let mut program = binary().clone();
+    program.push(0);
+    let new_config = config_text(host.api, host.dns, host.upstream, "must not stay");
+    // A package the new program refuses (it needs a newer interface): health never
+    // shows `ui/main` mounted.
+    let refused = tar_gz_files(&[
+        ("index.html", b"NEW-UI"),
+        (
+            "ui-manifest.json",
+            br#"{"manifest_schema":1,"ui_version":"v","api_level":9,"requires_api_level":9}"#,
+        ),
+    ]);
+    host.publish_with_ui(
+        &version,
+        &program,
+        Some(&config_package(&new_config, |_| {})),
+        Some(&refused),
+    );
+    assert_eq!(
+        host.api("POST", "/api/v1/update/apply", br#"{"force": true}"#)
+            .status,
+        200
+    );
+    assert_rolled_back(&host, binary(), &old_config, "未通过健康检查");
+    assert_eq!(host.ui_page().as_deref(), Some("OLD-UI"));
+}
+
+#[test]
+fn without_ui_main_an_update_neither_downloads_nor_creates_the_webui() {
+    let host = Host::start("no-ui", None);
+    let version = current_version();
+    let mut program = binary().clone();
+    program.push(0);
+    host.publish_with_ui(&version, &program, None, Some(&webui_package("NEW-UI")));
+    let reply = host.api("POST", "/api/v1/update/apply", br#"{"force": true}"#);
+    assert_eq!(reply.status, 200, "{}", reply.text());
+    wait_until("the update is confirmed", 90, || {
+        host.transactions()
+            .iter()
+            .any(|(_, tx)| tx["status"] == "verified")
+    });
+    settle_after_guard(&host);
+    assert_eq!(host.exe_bytes(), program);
+    assert!(!host.root.join("ui").exists(), "no ui/ is created");
+    assert_eq!(
+        host.server
+            .count(&format!("/dl/{version}/rtdns-webui.tar.gz")),
+        0
+    );
+    assert_eq!(
+        host.api("GET", "/", b"").status,
+        404,
+        "still the pure backend"
+    );
+}
+
+#[test]
+fn with_ui_main_a_release_without_a_webui_asset_is_refused_untouched() {
+    let host = Host::start_with_ui("ui-missing-asset", None, Some("OLD-UI"));
+    let version = current_version();
+    let mut program = binary().clone();
+    program.push(0);
+    host.publish(&version, &program, None);
+    let reply = host.api("POST", "/api/v1/update/apply", br#"{"force": true}"#);
+    assert_eq!(reply.status, 502, "{}", reply.text());
+    assert!(reply.text().contains("没有界面资产"), "{}", reply.text());
+    assert!(host.transactions().is_empty());
+    assert_eq!(host.exe_bytes(), *binary());
+    assert_eq!(host.ui_page().as_deref(), Some("OLD-UI"));
+    // A WebUI asset whose digest does not match is refused the same way.
+    let good = webui_package("NEW-UI");
+    host.publish_with_ui(&version, &program, None, Some(&good));
+    host.server.set(
+        &format!("/dl/{version}/rtdns-webui.tar.gz"),
+        "application/gzip",
+        webui_package("TAMPERED"),
+    );
+    let reply = host.api("POST", "/api/v1/update/apply", br#"{"force": true}"#);
+    assert_eq!(reply.status, 502, "{}", reply.text());
+    assert!(
+        reply.text().contains("界面资产校验失败"),
+        "{}",
+        reply.text()
+    );
+    assert!(host.transactions().is_empty());
+    assert_eq!(host.ui_page().as_deref(), Some("OLD-UI"));
 }
 
 #[test]
@@ -1071,16 +1249,17 @@ fn a_candidate_that_never_becomes_healthy_is_rolled_back_at_the_time_limit() {
 
 #[test]
 fn killing_the_guard_mid_test_is_recovered_at_the_next_start() {
-    let mut host = Host::start("recover", None);
+    let mut host = Host::start_with_ui("recover", None, Some("OLD-UI"));
     let old_config = host.config();
     let version = current_version();
     let mut program = binary().clone();
     program.push(0);
     let new_config = config_text(host.api, host.dns, host.upstream, "interrupted");
-    host.publish(
+    host.publish_with_ui(
         &version,
         &program,
         Some(&config_package(&new_config, |_| {})),
+        Some(&webui_package("NEW-UI")),
     );
     assert_eq!(
         host.api("POST", "/api/v1/update/apply", br#"{"force": true}"#)
@@ -1108,6 +1287,11 @@ fn killing_the_guard_mid_test_is_recovered_at_the_next_start() {
             program,
             "mixed state: new program, new config"
         );
+        assert_eq!(
+            host.ui_page().as_deref(),
+            Some("NEW-UI"),
+            "and the new WebUI"
+        );
         // What the service manager would do: start the installed program again.
         host.launch(None).unwrap();
         wait_until("recovery finished", 30, || host.health().is_some());
@@ -1116,10 +1300,16 @@ fn killing_the_guard_mid_test_is_recovered_at_the_next_start() {
         assert!(tx["last_error"].as_str().unwrap().contains("未完成的更新"));
         assert_eq!(host.exe_bytes(), *binary(), "the old program is back");
         assert_eq!(host.config(), old_config, "the old configuration is back");
+        assert_eq!(
+            host.ui_page().as_deref(),
+            Some("OLD-UI"),
+            "the old WebUI is back"
+        );
         assert!(ask(host.dns, "recovered.example.com"));
     } else {
         // The candidate was confirmed before the kill landed: the update stands.
         assert_eq!(host.exe_bytes(), program);
+        assert_eq!(host.ui_page().as_deref(), Some("NEW-UI"));
     }
 }
 

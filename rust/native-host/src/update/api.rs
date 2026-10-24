@@ -19,8 +19,8 @@ use super::package::{self, Package};
 use super::transaction::{self, StageInput, Transaction};
 use super::{
     CheckEnv, MANIFEST_ASSET, MAX_ARCHIVE_BYTES, MAX_BINARY_BYTES, MAX_CONFIG_PACKAGE_BYTES,
-    MAX_MANIFEST_BYTES, RELEASE_ASSET, RELEASE_BINARY, REQUIRED_CONFIG_PACKAGE_ID,
-    REQUIRED_CONFIG_SCHEMA, UpdateStatus, manager,
+    MAX_MANIFEST_BYTES, MAX_WEBUI_ARCHIVE_BYTES, RELEASE_ASSET, RELEASE_BINARY,
+    REQUIRED_CONFIG_PACKAGE_ID, REQUIRED_CONFIG_SCHEMA, UpdateStatus, WEBUI_ASSET, manager,
 };
 use crate::config::CompiledConfig;
 use crate::rule_sources::Reply;
@@ -253,6 +253,7 @@ async fn stage_and_schedule(
     asset_signature: String,
     candidate: Option<Vec<u8>>,
     package: Option<(Package, Vec<u8>)>,
+    webui: Option<Vec<u8>>,
 ) -> Result<(), (u16, String)> {
     let (Some(control), Some(target)) = (ctx.control, crate::restart::target()) else {
         return Err((501, "此进程不能在线更新".to_owned()));
@@ -293,6 +294,7 @@ async fn stage_and_schedule(
                 asset_signature: &asset_signature,
                 candidate: candidate.as_deref(),
                 package: package_ref,
+                webui: webui.as_deref(),
             },
             &|program, preview| {
                 super::guard::preflight(
@@ -459,6 +461,53 @@ async fn apply(ctx: &Context<'_>, body: &[u8]) -> Reply {
     } else {
         None
     };
+    // The WebUI goes with the program only where `ui/main` already is a directory.
+    let mut notes = "二进制与所需配置已下载并校验，正在安全切换…".to_owned();
+    let webui = match super::webui::presence(root) {
+        super::webui::Presence::Directory => {
+            let (Some(asset), Some(artifact)) = (
+                release.asset(WEBUI_ASSET),
+                manifest.artifacts.get(WEBUI_ASSET),
+            ) else {
+                return fail(
+                    &mut status,
+                    format!(
+                        "版本 {tag} 没有界面资产 {WEBUI_ASSET}，而本机装有 ui/main，已取消更新"
+                    ),
+                );
+            };
+            if !super::valid_sha256(&artifact.sha256) {
+                return fail(
+                    &mut status,
+                    format!("界面资产 {WEBUI_ASSET:?} 的 SHA-256 无效"),
+                );
+            }
+            let bytes = match super::download(
+                &socks5,
+                &asset.browser_download_url,
+                MAX_WEBUI_ARCHIVE_BYTES,
+                ctx.shutdown,
+            )
+            .await
+            {
+                Ok(bytes) => bytes,
+                Err(reason) => return fail(&mut status, format!("界面资产下载失败: {reason}")),
+            };
+            if !super::sha256_hex(&bytes).eq_ignore_ascii_case(artifact.sha256.trim()) {
+                return fail(
+                    &mut status,
+                    "界面资产校验失败: SHA-256 与更新清单不一致".to_owned(),
+                );
+            }
+            notes = "二进制、界面与所需配置已下载并校验，正在安全切换…".to_owned();
+            Some(bytes)
+        }
+        super::webui::Presence::Absent => None,
+        super::webui::Presence::Unusable => {
+            notes.push_str("（ui/main 是符号链接或不是目录，未随更新替换）");
+            None
+        }
+    };
     if let Err((code, reason)) = stage_and_schedule(
         ctx,
         root,
@@ -467,6 +516,7 @@ async fn apply(ctx: &Context<'_>, body: &[u8]) -> Reply {
         status.asset_signature.clone(),
         Some(candidate),
         package,
+        webui,
     )
     .await
     {
@@ -480,10 +530,9 @@ async fn apply(ctx: &Context<'_>, body: &[u8]) -> Reply {
             reason,
         );
     }
-    let notes = "二进制与所需配置已下载并校验，正在安全切换…";
     status.pending_restart = true;
-    status.message = notes.to_owned();
-    action(&status, true, notes)
+    status.message.clone_from(&notes);
+    action(&status, true, &notes)
 }
 
 #[derive(Deserialize, Default)]

@@ -4,40 +4,34 @@ import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
+// The WebUI as one movable package (`dist/`): installed as `<config root>/ui/main/` it is
+// served at `/`, as any other `ui/<name>/` at `/<name>/`. Resource URLs are relative
+// (`base: './'`), so the package does not depend on where it is installed; API calls are
+// same-origin absolute paths. `scripts/build-webui.mjs` adds `ui-manifest.json`.
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
-const assetVersion = process.env.MOSDNS_ASSET_VERSION || new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14)
-const outDir = path.resolve(__dirname, '../rust/native-host/ui/assets/vue-log')
-const rootHtmlPath = path.resolve(__dirname, '../rust/native-host/ui/index.html')
+const version = process.env.UI_VERSION || 'dev'
+const outDir = path.resolve(__dirname, 'dist')
 const devProxyTarget = process.env.MOSDNS_DEV_TARGET || 'http://127.0.0.1'
 
 export default defineConfig({
+  base: './',
   plugins: [
     vue(),
     {
-      name: 'mosdns-asset-version-stamp',
+      name: 'rtdns-version-stamp',
       closeBundle() {
         const indexPath = path.join(outDir, 'index.html')
         if (!fs.existsSync(indexPath)) {
           return
         }
+        const stamp = encodeURIComponent(version)
         const html = fs.readFileSync(indexPath, 'utf8')
         const stamped = html
-          .replace(/\/app\.js(?:\?v=[^"']+)?/g, `/app.js?v=${assetVersion}`)
-          .replace(/\/app\.css(?:\?v=[^"']+)?/g, `/app.css?v=${assetVersion}`)
+          .replace(/\.\/app\.js(?:\?v=[^"']+)?/g, `./app.js?v=${stamp}`)
+          .replace(/\.\/app\.css(?:\?v=[^"']+)?/g, `./app.css?v=${stamp}`)
         if (stamped !== html) {
           fs.writeFileSync(indexPath, stamped, 'utf8')
-        }
-
-        if (!fs.existsSync(rootHtmlPath)) {
-          return
-        }
-        const rootHtml = fs.readFileSync(rootHtmlPath, 'utf8')
-        const stampedRootHtml = rootHtml
-          .replace(/\/assets\/vue-log\/app\.js\?v=[^"']+/g, `/assets/vue-log/app.js?v=${assetVersion}`)
-          .replace(/\/assets\/vue-log\/app\.css\?v=[^"']+/g, `/assets/vue-log/app.css?v=${assetVersion}`)
-        if (stampedRootHtml !== rootHtml) {
-          fs.writeFileSync(rootHtmlPath, stampedRootHtml, 'utf8')
         }
       }
     }

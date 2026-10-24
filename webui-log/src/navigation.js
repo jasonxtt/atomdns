@@ -1,5 +1,5 @@
 // The sidebar and the routes come from this one table: four modules, the sub-items of
-// 规则设置 expanded in the sidebar (`#/rules/<id>`). 日志 has a third-level page
+// 规则设置 (`#/rules/<id>`) listed under it in the sidebar, collapsed until opened. 日志 has a third-level page
 // (`#/logs/diagnostic`) and 系统管理 is one page (`#/system`) with sections.
 
 export const RULE_SECTIONS = Object.freeze([
@@ -33,3 +33,12 @@ export const PAGES = Object.freeze([
   ...RULE_SECTIONS.map(item => ({ name: `rules-${item.id}`, path: `/rules/${item.id}`, title: item.label })),
   { name: 'system', path: '/system', title: '系统管理' }
 ])
+
+// A module owns `/<id>` and everything below it.
+export const inModule = (id, path) => path === `/${id}` || String(path || '').startsWith(`/${id}/`)
+
+// Whether a module's sub-items are shown after a route change: clicking the module only opens
+// or closes the list (`expanded`); arriving on one of its pages opens it, leaving keeps the choice.
+export function expandedAfterRoute(id, path, expanded) {
+  return inModule(id, path) ? true : Boolean(expanded)
+}

@@ -14,9 +14,10 @@ excluded from Git tracking. A fresh clone does not require them to build MosDNS.
 
 ## WebUI
 
-`/` serves `rust/native-host/ui/index.html`, built from `webui-log/src` into
-`rust/native-host/ui/assets/vue-log` (checked in, embedded by
-`rust/native-host/build.rs`). Since Phase 6a the `rust` branch has no Go host and no
+Since v0.4.0 the program embeds no UI: `/` serves `<config root>/ui/main/`, the WebUI package
+built from `webui-log/src` by `npm run build` (`webui-log/dist/`, not checked in) or
+`npm run build:package` (`release/rtdns-webui.tar.gz`, the release asset); the former
+`rust/native-host/ui/` tree was removed. Since Phase 6a the `rust` branch has no Go host and no
 `/log` compatibility UI (`webui-log/src-log1` was removed; it lives in the Go
 repository). The leftover Go-era `webui-blog/` source was removed on 2026-10-18 (user
 decision); it remains in git history and in the Go repository.

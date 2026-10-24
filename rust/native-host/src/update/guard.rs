@@ -161,6 +161,9 @@ fn drive(path: &Path, tx: &mut Transaction) -> Outcome {
             Err(error) => return fail(path, tx, format!("应用配置包失败: {error}")),
         }
     }
+    if let Err(error) = super::webui::install(tx) {
+        return fail(path, tx, format!("安装界面失败: {error}"));
+    }
     if tx.kind == "binary" {
         if let Err(error) = super::fsio::durable_copy(
             Path::new(&tx.candidate_path),
@@ -255,6 +258,7 @@ fn wait_healthy(tx: &Transaction, child: &mut Child) -> Result<(), String> {
             &tx.health_url,
             &tx.target_version,
             tx.required_config_schema,
+            !tx.webui_archive_path.is_empty(),
         ) {
             healthy += 1;
             if healthy >= REQUIRED_HEALTHY {
@@ -273,8 +277,14 @@ fn wait_healthy(tx: &Transaction, child: &mut Child) -> Result<(), String> {
     }
 }
 
-/// One health probe: `200`, `ready`, the target version, and the required config schema.
-pub(crate) fn is_healthy(url: &str, target_version: &str, required_schema: u32) -> bool {
+/// One health probe: `200`, `ready`, the target version, the required config schema and,
+/// when the update replaced the WebUI, `ui/main` mounted by the candidate.
+pub(crate) fn is_healthy(
+    url: &str,
+    target_version: &str,
+    required_schema: u32,
+    webui: bool,
+) -> bool {
     let Some((status, body)) = http_get(url) else {
         return false;
     };
@@ -290,6 +300,12 @@ pub(crate) fn is_healthy(url: &str, target_version: &str, required_schema: u32) 
             || health["applied_config_schema"]
                 .as_u64()
                 .is_some_and(|applied| applied >= u64::from(required_schema)))
+        && (!webui
+            || health["external_ui"].as_array().is_some_and(|entries| {
+                entries.iter().any(|entry| {
+                    entry["name"] == crate::external_ui::MAIN && entry["mounted"] == true
+                })
+            }))
 }
 
 /// A bounded blocking `GET http://host:port/path` (the local management address only).
@@ -516,18 +532,52 @@ mod tests {
         ] {
             let (url, handle) = serve_once(body, status);
             assert_eq!(
-                is_healthy(&url, "v0.2.0", schema),
+                is_healthy(&url, "v0.2.0", schema, false),
                 expected,
                 "{body} {status} {schema}"
             );
             handle.join().unwrap();
         }
+        // When the update replaced the WebUI, the candidate must have mounted `ui/main`.
+        for (external_ui, expected) in [
+            (
+                r#"[{"name":"main","mounted":true},{"name":"aa","mounted":true}]"#,
+                true,
+            ),
+            (
+                r#"[{"name":"main","mounted":false,"reason":"缺少 index.html"}]"#,
+                false,
+            ),
+            (r#"[{"name":"aa","mounted":true}]"#, false),
+            ("[]", false),
+            ("null", false),
+        ] {
+            let body: &'static str = Box::leak(
+                format!(
+                    r#"{{"ready":true,"version":"v0.2.0","applied_config_schema":1,"external_ui":{external_ui}}}"#
+                )
+                .into_boxed_str(),
+            );
+            let (url, handle) = serve_once(body, 200);
+            assert_eq!(
+                is_healthy(&url, "v0.2.0", 1, true),
+                expected,
+                "{external_ui}"
+            );
+            handle.join().unwrap();
+            let (url, handle) = serve_once(body, 200);
+            assert!(
+                is_healthy(&url, "v0.2.0", 1, false),
+                "{external_ui}: not required"
+            );
+            handle.join().unwrap();
+        }
         assert!(
-            !is_healthy("http://127.0.0.1:9/api/v1/system/health", "x", 0),
+            !is_healthy("http://127.0.0.1:9/api/v1/system/health", "x", 0, false),
             "nothing listens"
         );
         assert!(
-            !is_healthy("https://example.invalid/", "x", 0),
+            !is_healthy("https://example.invalid/", "x", 0, false),
             "only plain http to the local address"
         );
     }

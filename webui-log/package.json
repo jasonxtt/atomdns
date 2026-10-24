@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "build:external": "node ../scripts/build-external-ui.mjs",
+    "build": "node ../scripts/build-webui.mjs",
+    "build:package": "node ../scripts/build-webui.mjs --package",
     "preview": "vite preview"
   },
   "dependencies": {

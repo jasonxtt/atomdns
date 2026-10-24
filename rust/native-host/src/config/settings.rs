@@ -351,6 +351,9 @@ pub(crate) struct YamlDefaults {
     /// The `aliapi` groups that name a plugin-level `proxy`: only their
     /// entries can say `use_proxy`.
     pub(crate) proxy_groups: std::collections::BTreeSet<String>,
+    /// The `show_when` conditions of every `aliapi` that declares one (all
+    /// must hold for the group to be shown as in use; display only).
+    pub(crate) show_when: BTreeMap<String, Vec<String>>,
 }
 
 /// What [`apply`] found: the report, the effective upstream lists in the UI
@@ -501,6 +504,7 @@ pub(super) fn apply(
     let mut report = Vec::new();
     let mut upstreams = BTreeMap::new();
     let mut defaults = YamlDefaults::default();
+    let mut show_when_paths = Vec::new();
     let mut objects = Objects {
         proxies: BTreeMap::new(),
         ecs: BTreeMap::new(),
@@ -585,7 +589,7 @@ pub(super) fn apply(
                 if args_mut(plugin).is_some_and(|args| args.get("proxy").is_some()) {
                     defaults.proxy_groups.insert(plugin.tag.clone());
                 }
-                aliapi(
+                let conditions = aliapi(
                     plugin,
                     settings,
                     &objects,
@@ -593,6 +597,10 @@ pub(super) fn apply(
                     &mut upstreams,
                     &mut defaults.upstreams,
                 )?;
+                if !conditions.is_empty() {
+                    show_when_paths.push((plugin.tag.clone(), plugin.source_path.clone()));
+                    defaults.show_when.insert(plugin.tag.clone(), conditions);
+                }
             }
             "sd_set_light" | "si_set" | "adguard_rule" => {
                 let path = format!("{}.args", plugin.source_path);
@@ -633,6 +641,15 @@ pub(super) fn apply(
         .map(super::flags::declaration)
         .collect::<Result<Vec<_>, _>>()?;
     let legacy_notes = super::flags::resolve(&mut flags, settings.flags.as_ref(), legacy_root)?;
+    for (tag, source_path) in &show_when_paths {
+        for (index, text) in defaults.show_when[tag].iter().enumerate() {
+            super::flags::condition(
+                text,
+                &format!("{source_path}.args.show_when[{index}]"),
+                &flags,
+            )?;
+        }
+    }
     for flag in &flags {
         report.push(EffectiveItem {
             object: flag.key.clone(),
@@ -714,7 +731,8 @@ fn resolve_proxy_key(
     Ok(Some(addr))
 }
 
-/// The `aliapi` transformation (see the module docs).
+/// The `aliapi` transformation (see the module docs). Returns the group's
+/// `show_when` conditions (empty without one), taken out of the arguments.
 fn aliapi(
     plugin: &mut RawPlugin,
     settings: &Settings,
@@ -722,11 +740,33 @@ fn aliapi(
     report: &mut Vec<EffectiveItem>,
     effective: &mut BTreeMap<String, Vec<UpstreamEntry>>,
     yaml_defaults: &mut BTreeMap<String, Vec<UpstreamEntry>>,
-) -> Result<(), ConfigError> {
+) -> Result<Vec<String>, ConfigError> {
     let path = format!("{}.args", plugin.source_path);
     let tag = plugin.tag.clone();
     let args =
         args_mut(plugin).ok_or_else(|| ConfigError::new(&path, "aliapi args must be a mapping"))?;
+    let show_when_path = format!("{path}.show_when");
+    let show_when = match take_arg(args, "show_when") {
+        None => Vec::new(),
+        Some(RawValue::String(text)) => vec![text],
+        Some(RawValue::Sequence(items)) if !items.is_empty() => items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| match item {
+                RawValue::String(text) => Ok(text.clone()),
+                _ => Err(ConfigError::new(
+                    format!("{show_when_path}[{index}]"),
+                    "expected a string",
+                )),
+            })
+            .collect::<Result<_, _>>()?,
+        Some(_) => {
+            return Err(ConfigError::new(
+                show_when_path,
+                "expected a condition or a non-empty list of conditions",
+            ));
+        }
+    };
     let plugin_socks5 = string_arg(args, "socks5").unwrap_or_default();
     // The plugin-level default proxy of entries that opt in.
     let mut plugin_proxy: Option<String> = None;
@@ -806,7 +846,7 @@ fn aliapi(
             YAML
         },
     });
-    Ok(())
+    Ok(show_when)
 }
 
 /// The proxy inputs every upstream entry of one `aliapi` is resolved against.

@@ -51,6 +51,17 @@ pub(crate) struct Transaction {
     pub(crate) created_at: u64,
     #[serde(default)]
     pub(crate) last_error: String,
+    /// The staged `rtdns-webui.tar.gz`; empty when `ui/main` is not replaced.
+    #[serde(default)]
+    pub(crate) webui_archive_path: String,
+    #[serde(default)]
+    pub(crate) webui_sha256: String,
+    /// Where the guard unpacks the new WebUI before moving it to `ui/main`.
+    #[serde(default)]
+    pub(crate) webui_new_dir: String,
+    /// Where the old `ui/main` waits until the update is verified or rolled back.
+    #[serde(default)]
+    pub(crate) webui_previous_dir: String,
 }
 
 pub(crate) fn now_secs() -> u64 {
@@ -210,6 +221,8 @@ pub(crate) struct StageInput<'a> {
     pub(crate) candidate: Option<&'a [u8]>,
     /// The configuration package and its original bytes, when the update carries one.
     pub(crate) package: Option<(&'a Package, &'a [u8])>,
+    /// The release's `rtdns-webui.tar.gz`, when `ui/main` is replaced.
+    pub(crate) webui: Option<&'a [u8]>,
 }
 
 /// What a candidate must pass before the service is touched.
@@ -302,6 +315,31 @@ fn stage_into(
         }
         None => (String::new(), String::new(), String::new()),
     };
+    let (webui_archive_path, webui_sha256, webui_new_dir, webui_previous_dir) = match input.webui {
+        Some(bytes) => {
+            let webui = dir.join("webui");
+            std::fs::create_dir_all(&webui)
+                .map_err(|error| format!("创建界面暂存目录失败: {error}"))?;
+            let ui = super::webui::target(input.root)
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_default();
+            if !super::webui::same_filesystem(&ui, &webui).unwrap_or(false) {
+                return Err("ui/ 与 update/ 不在同一文件系统，无法原子替换界面".to_owned());
+            }
+            super::webui::check_archive(bytes, &webui.join("check"))?;
+            let path = dir.join(super::WEBUI_ASSET);
+            durable_write(&path, bytes, 0o600)
+                .map_err(|error| format!("暂存界面资产失败: {error}"))?;
+            (
+                path.display().to_string(),
+                super::sha256_hex(bytes),
+                webui.join("new").display().to_string(),
+                webui.join("previous").display().to_string(),
+            )
+        }
+        None => Default::default(),
+    };
     // Pre-flight: run the candidate against the new configuration before anything is touched.
     match input.package {
         Some((package, _)) => {
@@ -340,6 +378,10 @@ fn stage_into(
         original_args: input.args.clone(),
         created_at: now_secs(),
         last_error: String::new(),
+        webui_archive_path,
+        webui_sha256,
+        webui_new_dir,
+        webui_previous_dir,
     };
     write(&file_of(dir), &tx)?;
     sync_dir(dir).map_err(|error| error.to_string())?;
@@ -366,6 +408,9 @@ pub(crate) fn validate_paths(tx: &Transaction) -> Result<(), String> {
         &tx.previous_binary_path,
         &tx.config_package_path,
         &tx.backup_dir,
+        &tx.webui_archive_path,
+        &tx.webui_new_dir,
+        &tx.webui_previous_dir,
     ] {
         if !inside_update_dir(root, path) {
             return Err(format!(
@@ -376,11 +421,43 @@ pub(crate) fn validate_paths(tx: &Transaction) -> Result<(), String> {
     if tx.previous_binary_path.is_empty() {
         return Err("transaction has no previous program".to_owned());
     }
+    // The WebUI paths are this transaction's own fixed ones (the guard removes and renames
+    // whole directories there): `<txn>/rtdns-webui.tar.gz`, `<txn>/webui/{new,previous}`,
+    // where `<txn>` is the `update/txn-*` directory of the saved program.
+    let webui = [
+        &tx.webui_archive_path,
+        &tx.webui_new_dir,
+        &tx.webui_previous_dir,
+    ];
+    if webui.iter().any(|path| !path.is_empty()) {
+        let txn = Path::new(&tx.previous_binary_path)
+            .parent()
+            .filter(|dir| {
+                dir.parent() == Some(update_dir(root).as_path())
+                    && dir
+                        .file_name()
+                        .is_some_and(|name| name.to_string_lossy().starts_with("txn-"))
+            })
+            .ok_or("transaction has no transaction directory for the WebUI")?;
+        let expected = [
+            txn.join(super::WEBUI_ASSET),
+            txn.join("webui").join("new"),
+            txn.join("webui").join("previous"),
+        ];
+        if webui
+            .iter()
+            .zip(&expected)
+            .any(|(path, expected)| Path::new(path.as_str()) != expected.as_path())
+        {
+            return Err("transaction WebUI paths are not the transaction's own".to_owned());
+        }
+    }
     Ok(())
 }
 
-/// Puts the configuration and (for `binary`) the program back. Idempotent; writes the
-/// `rolled_back` status only after both are restored.
+/// Puts the configuration, the WebUI (when the update replaced it) and (for `binary`)
+/// the program back. Idempotent; writes the `rolled_back` status only after all are
+/// restored.
 pub(crate) fn rollback(path: &Path, tx: &mut Transaction, cause: &str) -> Result<(), String> {
     validate_paths(tx)?;
     let root = Path::new(&tx.config_base_dir);
@@ -389,6 +466,9 @@ pub(crate) fn rollback(path: &Path, tx: &mut Transaction, cause: &str) -> Result
         if let Err(error) = package::restore(root, Path::new(&tx.backup_dir)) {
             problems.push(format!("恢复旧配置失败: {error}"));
         }
+    }
+    if let Err(error) = super::webui::restore(tx) {
+        problems.push(format!("恢复旧界面失败: {error}"));
     }
     if tx.kind == "binary" {
         let previous = Path::new(&tx.previous_binary_path);
@@ -539,6 +619,7 @@ mod tests {
                 asset_signature: "asset:abc",
                 candidate: (kind == "binary").then_some(b"NEW-PROGRAM".as_slice()),
                 package: with_package.then_some((&package, bytes.as_slice())),
+                webui: None,
             },
             preflight,
         )
@@ -835,6 +916,292 @@ mod tests {
         assert_eq!(installed_signature(&fixture.root), "");
         write_installed(&fixture.root, "v0.2.0", "asset:abc").unwrap();
         assert_eq!(installed_signature(&fixture.root), "asset:abc");
+        std::fs::remove_dir_all(fixture.root).unwrap();
+    }
+
+    fn webui_tar(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write as _;
+        let mut tar = Vec::new();
+        for (name, data) in entries {
+            let mut header = [0_u8; 512];
+            header[..name.len()].copy_from_slice(name.as_bytes());
+            header[100..107].copy_from_slice(b"0000644");
+            header[124..135].copy_from_slice(format!("{:011o}", data.len()).as_bytes());
+            header[156] = b'0';
+            header[257..262].copy_from_slice(b"ustar");
+            tar.extend_from_slice(&header);
+            tar.extend_from_slice(data);
+            tar.resize(tar.len().div_ceil(512) * 512, 0);
+        }
+        tar.extend_from_slice(&[0_u8; 1024]);
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gz.write_all(&tar).unwrap();
+        gz.finish().unwrap()
+    }
+
+    fn good_webui(marker: &str) -> Vec<u8> {
+        webui_tar(&[
+            ("index.html", marker.as_bytes()),
+            (
+                "ui-manifest.json",
+                br#"{"manifest_schema":1,"ui_version":"v0.4.0","api_level":1}"#,
+            ),
+            ("chunks/a.js", b"js"),
+        ])
+    }
+
+    fn stage_webui(fixture: &Fixture, webui: &[u8]) -> Result<(PathBuf, Transaction), String> {
+        stage(
+            &StageInput {
+                root: &fixture.root,
+                config_path: &fixture.root.join("config_custom.yaml"),
+                executable: &fixture.exe,
+                args: vec!["mosdns".into(), "start".into()],
+                health_url: "http://127.0.0.1:9/api/v1/system/health".into(),
+                health_timeout_secs: 5,
+                kind: "binary",
+                previous_version: "v0.1.0",
+                target_version: "v0.2.0",
+                asset_signature: "asset:abc",
+                candidate: Some(b"NEW-PROGRAM".as_slice()),
+                package: None,
+                webui: Some(webui),
+            },
+            &|_, _| Ok(()),
+        )
+    }
+
+    fn live_index(fixture: &Fixture) -> Option<String> {
+        std::fs::read_to_string(fixture.root.join("ui/main/index.html")).ok()
+    }
+
+    #[test]
+    fn staging_a_webui_checks_and_keeps_the_archive_and_changes_nothing_live() {
+        let fixture = fixture("webui-stage");
+        std::fs::create_dir_all(fixture.root.join("ui/main")).unwrap();
+        std::fs::write(fixture.root.join("ui/main/index.html"), "OLD-UI").unwrap();
+        let archive = good_webui("NEW-UI");
+        let (path, tx) = stage_webui(&fixture, &archive).unwrap();
+        let dir = path.parent().unwrap();
+        assert_eq!(std::fs::read(&tx.webui_archive_path).unwrap(), archive);
+        assert_eq!(tx.webui_sha256, sha256_hex(&archive));
+        assert_eq!(Path::new(&tx.webui_new_dir), dir.join("webui/new"));
+        assert_eq!(
+            Path::new(&tx.webui_previous_dir),
+            dir.join("webui/previous")
+        );
+        assert!(
+            !dir.join("webui/check").exists(),
+            "the check tree is removed"
+        );
+        assert_eq!(live_index(&fixture).as_deref(), Some("OLD-UI"));
+        validate_paths(&tx).unwrap();
+        std::fs::remove_dir_all(fixture.root).unwrap();
+    }
+
+    #[test]
+    fn a_webui_archive_that_is_no_webui_package_is_refused_before_anything_is_staged() {
+        let fixture = fixture("webui-bad");
+        std::fs::create_dir_all(fixture.root.join("ui/main")).unwrap();
+        for (archive, reason) in [
+            (
+                webui_tar(&[(
+                    "ui-manifest.json",
+                    br#"{"manifest_schema":1,"ui_version":"v"}"#,
+                )]),
+                "index.html",
+            ),
+            (webui_tar(&[("index.html", b"x")]), "ui-manifest.json"),
+            (
+                webui_tar(&[("index.html", b"x"), ("ui-manifest.json", b"{")]),
+                "JSON",
+            ),
+            (
+                webui_tar(&[
+                    ("index.html", b"x"),
+                    (
+                        "ui-manifest.json",
+                        br#"{"manifest_schema":2,"ui_version":"v"}"#,
+                    ),
+                ]),
+                "manifest_schema",
+            ),
+            (webui_tar(&[("../x", b"x")]), "解压"),
+            (b"not gzip".to_vec(), "解压"),
+        ] {
+            let error = stage_webui(&fixture, &archive).unwrap_err();
+            assert!(error.contains(reason), "{reason}: {error}");
+            assert!(list(&fixture.root).is_empty(), "{reason}");
+        }
+        std::fs::remove_dir_all(fixture.root).unwrap();
+    }
+
+    #[test]
+    fn the_webui_is_installed_and_rolled_back_with_the_program_and_the_rollback_repeats() {
+        let fixture = fixture("webui-rollback");
+        std::fs::create_dir_all(fixture.root.join("ui/main")).unwrap();
+        std::fs::write(fixture.root.join("ui/main/index.html"), "OLD-UI").unwrap();
+        let (path, mut tx) = stage_webui(&fixture, &good_webui("NEW-UI")).unwrap();
+        // A rollback before anything was installed leaves `ui/main` alone.
+        let mut early = tx.clone();
+        rollback(&path, &mut early, "未开始").unwrap();
+        assert_eq!(live_index(&fixture).as_deref(), Some("OLD-UI"));
+        tx.status = "installing".into();
+        write(&path, &tx).unwrap();
+        crate::update::webui::install(&tx).unwrap();
+        durable_copy(Path::new(&tx.candidate_path), &fixture.exe, 0o755).unwrap();
+        assert_eq!(live_index(&fixture).as_deref(), Some("NEW-UI"));
+        assert_eq!(
+            std::fs::read(fixture.root.join("ui/main/chunks/a.js")).unwrap(),
+            b"js"
+        );
+        rollback(&path, &mut tx, "候选未通过").unwrap();
+        assert_eq!(live_index(&fixture).as_deref(), Some("OLD-UI"));
+        assert!(!fixture.root.join("ui/main/chunks").exists());
+        assert_eq!(std::fs::read(&fixture.exe).unwrap(), b"OLD-PROGRAM");
+        rollback(&path, &mut tx, "候选未通过").unwrap();
+        assert_eq!(live_index(&fixture).as_deref(), Some("OLD-UI"));
+        std::fs::remove_dir_all(fixture.root).unwrap();
+    }
+
+    #[test]
+    fn an_install_interrupted_between_its_two_renames_is_recovered_at_start() {
+        let fixture = fixture("webui-interrupted");
+        std::fs::create_dir_all(fixture.root.join("ui/main")).unwrap();
+        std::fs::write(fixture.root.join("ui/main/index.html"), "OLD-UI").unwrap();
+        let (path, mut tx) = stage_webui(&fixture, &good_webui("NEW-UI")).unwrap();
+        tx.status = "installing".into();
+        write(&path, &tx).unwrap();
+        // The old directory was moved aside; power was lost before the new one went in.
+        std::fs::create_dir_all(Path::new(&tx.webui_previous_dir).parent().unwrap()).unwrap();
+        std::fs::rename(fixture.root.join("ui/main"), &tx.webui_previous_dir).unwrap();
+        assert!(live_index(&fixture).is_none());
+        let recovered = recover_on_start(&fixture.root).unwrap();
+        assert!(recovered.is_some());
+        assert_eq!(live_index(&fixture).as_deref(), Some("OLD-UI"));
+        assert_eq!(read(&path).unwrap().status, "rolled_back");
+        std::fs::remove_dir_all(fixture.root).unwrap();
+    }
+
+    #[test]
+    fn webui_presence_replaces_only_a_real_directory() {
+        use crate::update::webui::{Presence, presence};
+        let fixture = fixture("webui-presence");
+        assert_eq!(presence(&fixture.root), Presence::Absent);
+        std::fs::create_dir_all(fixture.root.join("ui")).unwrap();
+        assert_eq!(presence(&fixture.root), Presence::Absent);
+        std::fs::create_dir_all(fixture.root.join("elsewhere")).unwrap();
+        std::os::unix::fs::symlink(fixture.root.join("elsewhere"), fixture.root.join("ui/main"))
+            .unwrap();
+        assert_eq!(presence(&fixture.root), Presence::Unusable);
+        std::fs::remove_file(fixture.root.join("ui/main")).unwrap();
+        std::fs::write(fixture.root.join("ui/main"), "a file").unwrap();
+        assert_eq!(presence(&fixture.root), Presence::Unusable);
+        std::fs::remove_file(fixture.root.join("ui/main")).unwrap();
+        std::fs::create_dir(fixture.root.join("ui/main")).unwrap();
+        assert_eq!(presence(&fixture.root), Presence::Directory);
+        std::fs::remove_dir_all(fixture.root).unwrap();
+    }
+
+    #[test]
+    fn a_transaction_written_before_the_webui_fields_still_reads() {
+        let fixture = fixture("webui-old-format");
+        let (path, tx) = stage_for(&fixture, "binary", false, &|_, _| Ok(())).unwrap();
+        let mut value = serde_json::to_value(&tx).unwrap();
+        for key in [
+            "webui_archive_path",
+            "webui_sha256",
+            "webui_new_dir",
+            "webui_previous_dir",
+        ] {
+            value.as_object_mut().unwrap().remove(key);
+        }
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let read_back = read(&path).unwrap();
+        assert!(read_back.webui_archive_path.is_empty());
+        validate_paths(&read_back).unwrap();
+        std::fs::remove_dir_all(fixture.root).unwrap();
+    }
+
+    #[test]
+    fn doctored_webui_paths_are_refused_even_inside_the_update_directory() {
+        let fixture = fixture("webui-doctored");
+        std::fs::create_dir_all(fixture.root.join("ui/main")).unwrap();
+        std::fs::write(fixture.root.join("ui/main/index.html"), "OLD-UI").unwrap();
+        let (path, tx) = stage_webui(&fixture, &good_webui("NEW-UI")).unwrap();
+        validate_paths(&tx).unwrap();
+        let dir = path.parent().unwrap().to_path_buf();
+        for (field, value) in [
+            ("new", update_dir(&fixture.root)),
+            ("new", dir.clone()),
+            ("previous", dir.join("config-backup")),
+            ("archive", dir.join("mosdns.previous")),
+        ] {
+            let mut doctored = tx.clone();
+            let value = value.display().to_string();
+            match field {
+                "new" => doctored.webui_new_dir = value,
+                "previous" => doctored.webui_previous_dir = value,
+                _ => doctored.webui_archive_path = value,
+            }
+            assert!(validate_paths(&doctored).is_err(), "{field}");
+            let mut copy = doctored.clone();
+            assert!(
+                rollback(&path, &mut copy, "x").is_err(),
+                "{field}: nothing is touched"
+            );
+        }
+        let mut no_txn = tx.clone();
+        no_txn.previous_binary_path = update_dir(&fixture.root)
+            .join("mosdns.previous")
+            .display()
+            .to_string();
+        assert!(validate_paths(&no_txn).is_err());
+        assert!(dir.join("mosdns.previous").exists() && dir.join("rtdns-webui.tar.gz").exists());
+        std::fs::remove_dir_all(fixture.root).unwrap();
+    }
+
+    #[test]
+    fn the_webui_is_never_moved_through_a_symlinked_ui_and_an_unreadable_backup_blocks_the_rollback()
+     {
+        let fixture = fixture("webui-ui-link");
+        std::fs::create_dir_all(fixture.root.join("ui/main")).unwrap();
+        std::fs::write(fixture.root.join("ui/main/index.html"), "OLD-UI").unwrap();
+        let (path, mut tx) = stage_webui(&fixture, &good_webui("NEW-UI")).unwrap();
+        // `ui` replaced by a link to another directory after staging: install refuses.
+        let elsewhere = fixture.root.join("elsewhere");
+        std::fs::rename(fixture.root.join("ui"), &elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, fixture.root.join("ui")).unwrap();
+        let error = crate::update::webui::install(&tx).unwrap_err();
+        assert!(error.contains("ui/"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(elsewhere.join("main/index.html")).unwrap(),
+            "OLD-UI"
+        );
+        std::fs::remove_file(fixture.root.join("ui")).unwrap();
+        std::fs::rename(&elsewhere, fixture.root.join("ui")).unwrap();
+        // Installed for real, then `ui` becomes a link: the rollback refuses and keeps its state.
+        tx.status = "testing".into();
+        write(&path, &tx).unwrap();
+        crate::update::webui::install(&tx).unwrap();
+        std::fs::rename(fixture.root.join("ui"), &elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, fixture.root.join("ui")).unwrap();
+        assert!(rollback(&path, &mut tx.clone(), "x").is_err());
+        assert_eq!(read(&path).unwrap().status, "testing");
+        std::fs::remove_file(fixture.root.join("ui")).unwrap();
+        std::fs::rename(&elsewhere, fixture.root.join("ui")).unwrap();
+        // A backup that cannot be looked at is not "no backup".
+        let webui = Path::new(&tx.webui_previous_dir)
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        std::fs::rename(&webui, fixture.root.join("webui-aside")).unwrap();
+        std::fs::write(&webui, "not a directory").unwrap();
+        assert!(crate::update::webui::restore(&tx).is_err());
+        std::fs::remove_file(&webui).unwrap();
+        std::fs::rename(fixture.root.join("webui-aside"), &webui).unwrap();
+        rollback(&path, &mut tx, "候选未通过").unwrap();
+        assert_eq!(live_index(&fixture).as_deref(), Some("OLD-UI"));
         std::fs::remove_dir_all(fixture.root).unwrap();
     }
 }

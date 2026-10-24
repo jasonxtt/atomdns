@@ -862,8 +862,49 @@ fn native_supervisor_health_matches_cli_identity_and_closes_with_listeners() {
 }
 
 #[test]
-fn embedded_ui_roots_assets_and_revalidation_are_real_http() {
-    let fixture = fixture("embedded-ui", free_udp_port(), free_tcp_port());
+fn without_ui_main_the_root_says_no_webui_is_installed_and_the_api_is_unaffected() {
+    let fixture = fixture("no-webui", free_udp_port(), free_tcp_port());
+    let host = assembly_for(&fixture);
+    host.block_on(async {
+        let bound = host.bind_host().await.unwrap();
+        let api = bound.api_addr().unwrap();
+        let shutdown = TransportCancellation::new();
+        let task = tokio::task::spawn_local(bound.serve(shutdown.clone()));
+        let page = http_request(api, &get("/")).await;
+        assert_eq!(page.status, 404);
+        assert_eq!(
+            page.header("content-type"),
+            Some("text/html; charset=utf-8")
+        );
+        assert!(page.body.contains("没有安装 WebUI"), "{}", page.body);
+        let health = http_request(api, &get("/api/v1/system/health")).await;
+        assert_eq!(health.status, 200);
+        // The program embeds no UI any more: no `/assets/...`, no `/log`.
+        for path in [
+            "/assets/vue-log/app.js",
+            "/index.html",
+            "/log",
+            "/log/",
+            "/log1",
+            "/api/missing",
+        ] {
+            assert_eq!(http_request(api, &get(path)).await.status, 404, "{path}");
+        }
+        shutdown.cancel();
+        task.await.unwrap().unwrap();
+    });
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ui_main_is_the_root_served_live_over_real_http_without_audit_or_metrics() {
+    let fixture = fixture("ui-main", free_udp_port(), free_tcp_port());
+    fixture.write(
+        "ui/main/ui-manifest.json",
+        r#"{"manifest_schema":1,"ui_version":"v9.9.9","api_level":1}"#,
+    );
+    fixture.write("ui/main/index.html", "<html>main</html>");
+    fixture.write("ui/main/app.js", "console.log(1)");
     let host = assembly_for(&fixture);
     host.block_on(async {
         let bound = host.bind_host().await.unwrap();
@@ -872,26 +913,20 @@ fn embedded_ui_roots_assets_and_revalidation_are_real_http() {
         let task = tokio::task::spawn_local(bound.serve(shutdown.clone()));
         let before = host.metrics_snapshot();
         host.start_audit();
-        for path in ["/", "/assets/vue-log/app.js?v=proof"] {
+        for (path, mime, body) in [
+            ("/", "text/html; charset=utf-8", "<html>main</html>"),
+            (
+                "/app.js?v=proof",
+                "text/javascript; charset=utf-8",
+                "console.log(1)",
+            ),
+        ] {
             let response = http_request(api, &get(path)).await;
             assert_eq!(response.status, 200, "{path}: {response:?}");
-            assert!(!response.body.is_empty());
-            let mime = if path.contains("app.js") {
-                "text/javascript; charset=utf-8"
-            } else {
-                "text/html; charset=utf-8"
-            };
+            assert_eq!(response.body, body);
             assert_eq!(response.header("content-type"), Some(mime));
-            assert_eq!(response.header("cache-control"), Some("no-cache"));
+            assert_eq!(response.header("cache-control"), Some("no-store"));
             assert_eq!(response.header("x-content-type-options"), Some("nosniff"));
-            let etag = response.header("etag").unwrap();
-            let cached = http_request(
-                api,
-                &format!("GET {path} HTTP/1.1\r\nHost: test\r\nIf-None-Match: {etag}\r\n\r\n"),
-            )
-            .await;
-            assert_eq!(cached.status, 304);
-            assert!(cached.body.is_empty());
             let head =
                 http_request(api, &format!("HEAD {path} HTTP/1.1\r\nHost: test\r\n\r\n")).await;
             assert_eq!(head.status, 200);
@@ -901,28 +936,39 @@ fn embedded_ui_roots_assets_and_revalidation_are_real_http() {
                 response.header("content-length")
             );
         }
+        // Files are read live.
+        fixture.write("ui/main/app.js", "console.log(2)");
+        assert_eq!(
+            http_request(api, &get("/app.js")).await.body,
+            "console.log(2)"
+        );
         for path in [
-            "/assets/no-such.js",
+            "/no-such.js",
+            "/main/",
+            "/%2e%2e/config.yaml",
             "/api/missing",
             "/plugins/missing",
-            "/assets/%2e%2e/log.html",
-            "/assets/vue-log%2fapp.js",
-            // The compatibility UI is not part of the native host (Go only): no root, no
-            // redirect, no assets.
             "/log",
-            "/log/",
-            "/log/?x=1",
-            "/log1",
-            "/assets/vue-log1/app.css",
-            "/assets/vue-log1/app.js",
         ] {
             let response = http_request(api, &get(path)).await;
             assert_eq!(response.status, 404, "{path}");
             assert!(response.header("location").is_none(), "{path}");
         }
-        let wrong = http_request(api, &post("/", "")).await;
-        assert_eq!(wrong.status, 405);
-        assert_eq!(wrong.header("allow"), Some("GET, HEAD"));
+        // Other methods are the API's (an unknown path stays 404).
+        assert_eq!(http_request(api, &post("/", "")).await.status, 404);
+        let health: serde_json::Value =
+            serde_json::from_str(&http_request(api, &get("/api/v1/system/health")).await.body)
+                .unwrap();
+        let main = health["external_ui"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["name"] == "main")
+            .unwrap()
+            .clone();
+        assert_eq!(main["path"], "/");
+        assert_eq!(main["mounted"], true);
+        assert_eq!(main["ui_version"], "v9.9.9");
         assert_eq!(host.metrics_snapshot(), before);
         assert!(host.audit_snapshot().records.is_empty());
         shutdown.cancel();
@@ -1171,8 +1217,8 @@ fn external_ui_packages_use_any_directory_name_and_a_manifest_decides_mounting()
         ] {
             assert_eq!(http_request(api, &get(path)).await.status, 404, "{path}");
         }
-        // The built-in UI and everything else are unaffected.
-        assert_eq!(http_request(api, &get("/")).await.status, 200);
+        // Without `ui/main`, `/` is the "no WebUI" page and everything else is unaffected.
+        assert_eq!(http_request(api, &get("/")).await.status, 404);
         shutdown.cancel();
         task.await.unwrap().unwrap();
     });

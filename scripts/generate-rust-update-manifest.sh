@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Writes rtdns-update-manifest.json for a release: the sha256 of every
-# rtdns-*.tar.gz in the artifact directory, the configuration schema/package ID the
+# rtdns-*.tar.gz in the artifact directory (the program and the WebUI, both required), the configuration schema/package ID the
 # program requires (read from the Rust source and checked against the release metadata),
 # and the configuration package URL + sha256 once the package is published. The asset
 # names must equal the constants of the updater (RELEASE_ASSET, MANIFEST_ASSET).
@@ -16,6 +16,7 @@ SOURCE="${ROOT_DIR}/rust/native-host/src/update/mod.rs"
 VERSION="${1:?version tag is required (vX.Y.Z)}"
 ARTIFACT_DIR="${2:?artifact directory is required}"
 RELEASE_ASSET="rtdns-linux-amd64.tar.gz"
+WEBUI_ASSET="rtdns-webui.tar.gz"
 MANIFEST_ASSET="rtdns-update-manifest.json"
 OUTPUT="${3:-${ARTIFACT_DIR}/${MANIFEST_ASSET}}"
 
@@ -41,14 +42,18 @@ if [ "$(jq 'length' <<<"${artifacts}")" -eq 0 ]; then
   echo "no rtdns-*.tar.gz found in ${ARTIFACT_DIR}" >&2
   exit 1
 fi
-if [ "$(jq --arg name "${RELEASE_ASSET}" 'has($name)' <<<"${artifacts}")" != "true" ]; then
-  echo "${RELEASE_ASSET} is missing from ${ARTIFACT_DIR}" >&2
-  exit 1
-fi
+for name in "${RELEASE_ASSET}" "${WEBUI_ASSET}"; do
+  if [ "$(jq --arg name "${name}" 'has($name)' <<<"${artifacts}")" != "true" ]; then
+    echo "${name} is missing from ${ARTIFACT_DIR}" >&2
+    exit 1
+  fi
+done
 
 code_asset="$(sed -n 's/^pub(crate) const RELEASE_ASSET: &str = "\([^"]*\)";.*/\1/p' "${SOURCE}")"
 code_manifest_asset="$(sed -n 's/^pub(crate) const MANIFEST_ASSET: &str = "\([^"]*\)";.*/\1/p' "${SOURCE}")"
-if [ "${code_asset}" != "${RELEASE_ASSET}" ] || [ "${code_manifest_asset}" != "${MANIFEST_ASSET}" ]; then
+code_webui_asset="$(sed -n 's/^pub(crate) const WEBUI_ASSET: &str = "\([^"]*\)";.*/\1/p' "${SOURCE}")"
+if [ "${code_asset}" != "${RELEASE_ASSET}" ] || [ "${code_manifest_asset}" != "${MANIFEST_ASSET}" ] \
+  || [ "${code_webui_asset}" != "${WEBUI_ASSET}" ]; then
   echo "asset names do not match ${SOURCE}" >&2
   exit 1
 fi
