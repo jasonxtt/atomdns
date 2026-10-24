@@ -63,6 +63,8 @@ pub(crate) struct Flag {
     pub(crate) options: Option<Vec<FlagOption>>,
     pub(crate) default: FlagValue,
     pub(crate) value: FlagValue,
+    /// Whether a changed value makes the host start a `requery` task.
+    pub(crate) requery_on_change: bool,
     /// `yaml`, `settings` or `legacy` (taken from `rule/switchN.txt` while the
     /// settings file has no `flags` section yet).
     pub(crate) source: &'static str,
@@ -126,6 +128,7 @@ pub(super) fn declaration(plugin: &RawPlugin) -> Result<Flag, ConfigError> {
             "kind",
             "options",
             "default",
+            "requery_on_change",
         ],
         &path,
     )?;
@@ -205,6 +208,16 @@ pub(super) fn declaration(plugin: &RawPlugin) -> Result<Flag, ConfigError> {
             ));
         }
     };
+    let requery_on_change = match args.get("requery_on_change") {
+        None => false,
+        Some(RawValue::Bool(value)) => *value,
+        Some(_) => {
+            return Err(ConfigError::new(
+                format!("{path}.requery_on_change"),
+                "expected true or false",
+            ));
+        }
+    };
     Ok(Flag {
         key: plugin.tag.clone(),
         label,
@@ -213,6 +226,7 @@ pub(super) fn declaration(plugin: &RawPlugin) -> Result<Flag, ConfigError> {
         options,
         value: default.clone(),
         default,
+        requery_on_change,
         source: "yaml",
     })
 }

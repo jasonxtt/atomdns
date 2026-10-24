@@ -2,7 +2,9 @@ import { createApp } from 'vue'
 import App from './App.vue'
 import { pageComponent } from './pages'
 import { createAppRouter } from './router'
+import { openConfirm } from './utils/confirm'
 import { createThemeController } from './utils/theme'
+import { leaveMessage } from './utils/unsaved'
 import './style.css'
 
 let storage = null
@@ -10,6 +12,6 @@ try { storage = window.localStorage } catch { /* blocked storage: the theme foll
 const theme = createThemeController({ root: document.documentElement, storage, matchMedia: window.matchMedia?.bind(window) })
 
 createApp(App)
-  .use(createAppRouter({ pageComponent }))
+  .use(createAppRouter({ pageComponent, confirmLeave: () => openConfirm(leaveMessage(), { title: '有未保存的改动', confirmText: '离开', tone: 'danger' }) }))
   .provide('theme', theme)
   .mount('#app')

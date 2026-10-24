@@ -74,19 +74,23 @@
 - 新程序要求 `rust-config-schema-3` 的配置包：`switch1`–`switch17` 换成 `sub_config/flags.yaml` 里的 13 个具名开关（`feature_flag`），包删除 `sub_config/switch.yaml`。
   旧配置里的 `switchN` 插件或匹配写法在新程序里加载失败；手动替换程序时必须同时更新配置包。
 - 开关值改存 `webinfo/settings.json` 的 `flags` 段。首次正常启动时从 `rule/switchN.txt` 迁移一次（在线更新试运行期间不写，回滚安全），旧文件保留但不再读取。
-- 旧接口 `/plugins/switchN/show|post` 已删除；现 WebUI 的开关页在 UI 重做前不可用，可用 `GET/POST/DELETE /api/v1/flags[/{名字}]`（见 [native-feature-flags](contracts/native-feature-flags.md)）。
+- 旧接口 `/plugins/switchN/show|post` 已删除；开关在 WebUI 的规则设置各子项顶部（见 v0.3.0 升级须知），也可用 `GET/POST/DELETE /api/v1/flags[/{名字}]`（见 [native-feature-flags](contracts/native-feature-flags.md)）。
 - **手动降级到 v0.2.2**：先从 `webinfo/settings.json` 删掉 `flags` 键（v0.2.2 不认识它，会拒绝启动），并换回 schema 2 的配置包。
   旧的 `rule/switchN.txt` 仍在，但取值停留在迁移那一刻，降级前若在新程序里改过开关，需要手动把对应文件改成 `A`/`B`。
 
 ## v0.3.0 升级须知（草稿，UI 重做，随第二段完成后发布）
 
-- 内置 WebUI 改为侧栏布局：概览、日志、规则设置（9 个子项）、系统管理（5 个子项），地址形如 `#/overview`、`#/rules/upstream`；刷新保持当前页。
+- 内置 WebUI 改为侧栏布局：概览、日志、规则设置（8 个子项：运行模式、上游设置、分流规则、请求屏蔽、域名学习、缓存设置、客户端、专属分流组）、系统管理（一页），地址形如 `#/overview`、`#/rules/upstream`；刷新保持当前页；`#/rules/rewrite` 跳到 `#/rules/routing`。
 - 外观只保留浅色 / 深色 / 跟随系统（存在浏览器里）。背景图、毛玻璃、透明度、文字与按钮颜色已删除，后端 `/api/v1/appearance/*` 接口与能力 `appearance.server` 一并删除。
   部署机上已有的 `webinfo/appearance_settings.json`、`webinfo/appearance_text_settings.json`、`webinfo/appearance_button_settings.json`、`webinfo/panel_background.bin`、
   `webinfo/panel_background_history/` 新程序不读也不删，可手动删除。外置 UI 要背景图请放进自己的静态包。
 - "应用远程配置"已删除（前端入口与 `POST /api/v1/config/update_from_url`，旧地址返回 404）。配置包只随程序在线更新一起下发；"备份配置"保留，下载文件名 `rtdns_backup.zip`。
 - 浏览器里的旧设置（主题、自动刷新、配置目录等 `mosdns*` 键）不迁移，首次打开新界面按默认值（跟随系统、自动刷新关闭），需要时重新设置一次。
 - 概览的实时趋势图已去掉；统计口径仍是审计保留记录，页面上写明覆盖范围。
+- 功能开关按声明的 `section` 显示在各子项顶部，点一下立即生效；`core_mode`、`dns_mode`、`cn_fakeip` 切换后由程序自己触发一次 requery（清缓存再预热，见 [native-feature-flags](contracts/native-feature-flags.md)），旧 WebUI 在浏览器里做的联动不再保留。
+  自己的配置里要同样的联动，在开关的 `args` 里写 `requery_on_change: true`。
+- 客户端别名从日志页挪到 规则设置 › 客户端（日志页的按钮跳转过去）；"高级替换规则"面板已删除（原生不支持）；域名学习页新增学习明细（`/plugins/route_learner/entries`）。
+- **配置包不再附带 `ui/ilog/`**（旧日志页，用户不用）。包不管理已部署机器的 `ui/`，已有的 `ui/ilog/` 不受影响，不用时可手动删除。
 
 ## v0.2.2 升级说明（配置 schema 2，2026-10-23，路由学习重做）
 

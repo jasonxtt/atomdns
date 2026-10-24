@@ -6,6 +6,7 @@ import { getJSON } from './api/http'
 import ConfirmBubbleHost from './components/ConfirmBubbleHost.vue'
 import { NAV_MODULES } from './navigation'
 import { loadAutoRefreshState } from './utils/autoRefresh'
+import { installBeforeUnload } from './utils/unsaved'
 
 const route = useRoute()
 const router = useRouter()
@@ -28,6 +29,7 @@ const topNotice = reactive({
 let autoRefreshTimerId = 0
 let autoRefreshState = loadAutoRefreshState()
 let topNoticeTimerId = 0
+let removeBeforeUnload = () => {}
 
 function stopAutoRefresh() {
   if (autoRefreshTimerId) {
@@ -118,6 +120,7 @@ onMounted(async () => {
   loadHealth()
   window.addEventListener('mosdns-capabilities-ready', loadHealth)
   startAutoRefresh()
+  removeBeforeUnload = installBeforeUnload()
   window.addEventListener('mosdns-auto-refresh-update', handleAutoRefreshUpdate)
   window.addEventListener('mosdns-top-notice', handleTopNoticeEvent)
   window.addEventListener('mosdns-open-log-filter', handleOpenLogFilter)
@@ -127,6 +130,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   window.removeEventListener('mosdns-capabilities-ready', loadHealth)
   stopAutoRefresh()
+  removeBeforeUnload()
   clearTopNotice()
   window.removeEventListener('mosdns-auto-refresh-update', handleAutoRefreshUpdate)
   window.removeEventListener('mosdns-top-notice', handleTopNoticeEvent)

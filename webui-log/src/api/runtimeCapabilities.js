@@ -27,7 +27,7 @@ async function discover(url) {
 export function createRuntimeCapabilityClient(request = discover) {
   let pending
   const get = () => {
-    // `kind` stays for the rule pages that the second part rewrites.
+    // `kind` marks the runtime for the helpers that check it (settingsBackedProxy).
     if (!pending) pending = Promise.resolve().then(() => request('/api/v1/capabilities'))
       .then(response => ({...validateRuntimeCapabilities(response), kind:'native'}))
       .catch(error => { pending = null; throw error })

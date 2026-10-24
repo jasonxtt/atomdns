@@ -2,7 +2,8 @@
 import CapabilityBoundary from './CapabilityBoundary.vue'
 import { supportsOperation, operationReason } from '../api/runtimeCapabilities'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { getJSON, postJSON, putJSON } from '../api/http'
+import { getJSON, postJSON } from '../api/http'
+import { normalizeAliasMap, normalizeIP } from '../utils/clientAliases'
 import { clearTopNotice, setError, setSuccess } from '../utils/notice'
 import { formatDateTime, formatRelativeTime as formatRelativeTimeText } from '../utils/time'
 
@@ -30,13 +31,6 @@ const detailModalOpen = ref(false)
 
 const clientAliases = ref({})
 const specialGroups = ref([])
-const aliasModalOpen = ref(false)
-const aliasLoading = ref(false)
-const aliasSaving = ref(false)
-const aliasRows = ref([])
-const manualAliasIp = ref('')
-const manualAliasName = ref('')
-const importAliasInput = ref(null)
 
 const captureDuration = ref(15)
 const captureLogs = ref([])
@@ -190,25 +184,6 @@ const detailActionFields = computed(() => {
     }
   }
 })
-
-function normalizeIP(ip) {
-  return String(ip || '').replace(/^::ffff:/, '').trim()
-}
-
-function normalizeAliasMap(input) {
-  const normalized = {}
-  if (!input || typeof input !== 'object' || Array.isArray(input)) {
-    return normalized
-  }
-  Object.entries(input).forEach(([ip, alias]) => {
-    const key = normalizeIP(ip)
-    const value = String(alias || '').trim()
-    if (key && value) {
-      normalized[key] = value
-    }
-  })
-  return normalized
-}
 
 function getDisplayName(ip) {
   const normalizedIp = normalizeIP(ip)
@@ -473,156 +448,6 @@ async function loadSpecialGroups() {
   }
 }
 
-function syncAliasRowsFromMap(baseMap = clientAliases.value, knownIPs = []) {
-  const unique = new Set([
-    ...Object.keys(baseMap || {}),
-    ...knownIPs.map((ip) => normalizeIP(ip)).filter(Boolean)
-  ])
-  const rows = [...unique]
-    .sort((a, b) => a.localeCompare(b, 'zh-CN', { numeric: true, sensitivity: 'base' }))
-    .map((ip) => ({
-      ip,
-      alias: String(baseMap?.[ip] || ''),
-      originalAlias: String(baseMap?.[ip] || '')
-    }))
-  aliasRows.value = rows
-}
-
-async function openAliasManager() {
-  if (!supportsOperation('client.aliases')) return
-  aliasModalOpen.value = true
-  aliasLoading.value = true
-  manualAliasIp.value = ''
-  manualAliasName.value = ''
-  resetMessages()
-  try {
-    const [aliasData, topClients] = await Promise.all([
-      getJSON('/plugins/clientname').catch(() => ({})),
-      getJSON('/api/v2/audit/rank/client?limit=200').catch(() => [])
-    ])
-    const normalizedMap = normalizeAliasMap(aliasData)
-    clientAliases.value = normalizedMap
-    const ips = Array.isArray(topClients) ? topClients.map((item) => item?.key) : []
-    syncAliasRowsFromMap(normalizedMap, ips)
-  } finally {
-    aliasLoading.value = false
-  }
-}
-
-function closeAliasManager() {
-  aliasModalOpen.value = false
-}
-
-async function saveAliasesFromRows(showMessage = true) {
-  if (!supportsOperation('client.aliases')) return
-  aliasSaving.value = true
-  try {
-    const nextMap = {}
-    aliasRows.value.forEach((row) => {
-      const ip = normalizeIP(row.ip)
-      const alias = String(row.alias || '').trim()
-      if (ip && alias) {
-        nextMap[ip] = alias
-      }
-    })
-    await putJSON('/plugins/clientname', nextMap)
-    clientAliases.value = normalizeAliasMap(nextMap)
-    syncAliasRowsFromMap(clientAliases.value, aliasRows.value.map((row) => row.ip))
-    if (showMessage) {
-      setSuccess('客户端别名已保存')
-    }
-  } catch (error) {
-    setError(`保存别名失败: ${error.message}`)
-  } finally {
-    aliasSaving.value = false
-  }
-}
-
-function addManualAlias() {
-  const ip = normalizeIP(manualAliasIp.value)
-  const alias = String(manualAliasName.value || '').trim()
-  if (!ip || !alias) {
-    setError('请填写完整的 IP 与别名')
-    return
-  }
-  const existing = aliasRows.value.find((row) => normalizeIP(row.ip) === ip)
-  if (existing) {
-    existing.alias = alias
-  } else {
-    aliasRows.value.push({ ip, alias, originalAlias: '' })
-    aliasRows.value.sort((a, b) => normalizeIP(a.ip).localeCompare(normalizeIP(b.ip), 'zh-CN', { numeric: true, sensitivity: 'base' }))
-  }
-  manualAliasIp.value = ''
-  manualAliasName.value = ''
-  setSuccess(`已加入待保存项: ${ip}`)
-}
-
-function triggerImportAliases() {
-  importAliasInput.value?.click()
-}
-
-function parseJsonFile(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      try {
-        const parsed = JSON.parse(String(reader.result || '{}'))
-        resolve(parsed)
-      } catch (error) {
-        reject(error)
-      }
-    }
-    reader.onerror = () => reject(new Error('读取文件失败'))
-    reader.readAsText(file)
-  })
-}
-
-async function onImportAliases(event) {
-  if (!supportsOperation('client.aliases')) return
-  const file = event?.target?.files?.[0]
-  if (!file) {
-    return
-  }
-  try {
-    const parsed = await parseJsonFile(file)
-    const imported = normalizeAliasMap(parsed)
-    if (Object.keys(imported).length === 0) {
-      throw new Error('文件中没有可用的别名数据')
-    }
-    const merged = {
-      ...clientAliases.value,
-      ...imported
-    }
-    await putJSON('/plugins/clientname', merged)
-    clientAliases.value = normalizeAliasMap(merged)
-    syncAliasRowsFromMap(clientAliases.value, aliasRows.value.map((row) => row.ip))
-    setSuccess(`已导入 ${Object.keys(imported).length} 条别名`)
-  } catch (error) {
-    setError(`导入别名失败: ${error.message}`)
-  } finally {
-    event.target.value = ''
-  }
-}
-
-async function exportAliases() {
-  if (!supportsOperation('client.aliases')) return
-  try {
-    const latest = await getJSON('/plugins/clientname')
-    const payload = normalizeAliasMap(latest)
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
-    const url = window.URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = `rtdns-aliases-${new Date().toISOString().slice(0, 10)}.json`
-    document.body.appendChild(anchor)
-    anchor.click()
-    document.body.removeChild(anchor)
-    window.URL.revokeObjectURL(url)
-  } catch (error) {
-    setError(`导出别名失败: ${error.message}`)
-  }
-}
-
 async function loadLogs(page = 1, append = false) {
   if (!supportsOperation('audit.read')) return
   loading.value = true
@@ -759,7 +584,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="actions">
           <button class="btn tiny secondary" type="button" data-open-diagnostic @click="$emit('open-diagnostic')">诊断抓取</button>
-          <CapabilityBoundary operation="client.aliases"><button class="btn secondary" @click="openAliasManager">客户端别名</button></CapabilityBoundary>
+          <CapabilityBoundary operation="client.aliases"><router-link class="btn secondary" to="/rules/clients" data-open-aliases>客户端别名</router-link></CapabilityBoundary>
         </div>
       </header>
 
@@ -1087,62 +912,6 @@ onBeforeUnmount(() => {
         </section>
       </div>
 
-      <div v-if="aliasModalOpen" class="modal-mask" @click.self="closeAliasManager">
-        <section class="panel data-view-modal alias-modal">
-          <header class="panel-header">
-            <div>
-              <h3>客户端别名管理</h3>
-              <p class="muted">保存后立即生效，搜索框可直接输入别名。</p>
-            </div>
-            <div class="actions">
-              <button class="btn secondary" @click="closeAliasManager">关闭</button>
-            </div>
-          </header>
-
-        <div class="form-grid alias-manual-grid">
-          <label>手动新增</label>
-          <div class="alias-manual-row">
-            <input v-model="manualAliasIp" placeholder="客户端 IP，例如 192.0.2.10" />
-            <input v-model="manualAliasName" placeholder="别名，例如 iPhone-15" />
-            <button class="btn secondary" type="button" @click="addManualAlias">加入列表</button>
-          </div>
-        </div>
-
-        <div class="actions" style="margin: 10px 0;">
-          <button class="btn primary" :disabled="aliasLoading || aliasSaving" @click="saveAliasesFromRows(true)">
-            {{ aliasSaving ? '保存中...' : '保存全部' }}
-          </button>
-          <button class="btn secondary" :disabled="aliasLoading || aliasSaving" @click="exportAliases">导出 JSON</button>
-          <button class="btn secondary" :disabled="aliasLoading || aliasSaving" @click="triggerImportAliases">导入 JSON</button>
-          <input ref="importAliasInput" type="file" accept=".json,application/json" style="display:none" @change="onImportAliases" />
-        </div>
-
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th style="width: 40%;">客户端 IP</th>
-                <th>别名</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-if="aliasLoading">
-                <td colspan="2" class="empty">加载中...</td>
-              </tr>
-              <tr v-else-if="aliasRows.length === 0">
-                <td colspan="2" class="empty">暂无客户端记录</td>
-              </tr>
-              <tr v-for="row in aliasRows" :key="`alias-${row.ip}`">
-                <td class="mono">{{ row.ip }}</td>
-                <td>
-                  <input v-model="row.alias" placeholder="为空表示删除该别名" />
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        </section>
-      </div>
     </Teleport>
   </section>
 </template>

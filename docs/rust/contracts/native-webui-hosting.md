@@ -302,8 +302,9 @@ renders [feature flags](native-feature-flags.md) (`flags.manage`) in the rule su
 `rules.adguard` is supported when an `adguard_rule` tagged `adguard` exists, and
 `rules.diversion` also when any `sd_set_light`/`si_set` exists; the diversion tab then
 probes the built-in provider tags (`/plugins/{tag}/config`, 404 = not configured) and
-uses the reference online-source workflow for the found ones, while `special_route_N`
-catalogs keep the native local-text workflow (see native-rule-providers.md).
+uses the reference online-source workflow for the found ones. A special group's `special_route_N`
+catalog is the same kind of online source (`sd_set_light`: URL and local file are both required) and is managed
+as the group's subscriptions (see native-rule-providers.md).
 Native identity displays the product version, without fabricated Go metrics. Audit/details, named-cache catalog/list/flush,
 eligible local rules and native managed group/upstream workflows remain available.
 The value-free `switches` capability extension (switch inventory) was removed with
@@ -320,9 +321,33 @@ Routes use `vue-router` hash history, so a reload keeps the page and unknown add
 | Module | Addresses |
 | --- | --- |
 | 概览 | `#/overview` — figures from the retained audit records (their coverage is taken from `/api/v2/audit/stats/windows`; the per-window table was dropped in the part-1 rework), cache hit (summed `mosdns_cache_hit_total` / `mosdns_cache_query_total` of the named caches), CPU (one-core % between two `process_cpu_seconds_total` samples), memory (RSS), upstream, routing, top domains/clients, slowest queries, learning summary (`/plugins/route_learner/status`) |
-| 日志 | `#/logs` — live query (client aliases stay here until part 2); `#/logs/diagnostic` — diagnostic capture as its own page, reached from a button on the live page, with a way back |
-| 规则设置 | `#/rules/{mode,upstream,routing,blocking,rewrite,learning,cache,clients,special-groups}` — part 1 mounts the existing rule pages; `mode` and `clients` are placeholders |
+| 日志 | `#/logs` — live query (the client-alias button links to `#/rules/clients`); `#/logs/diagnostic` — diagnostic capture as its own page, reached from a button on the live page, with a way back |
+| 规则设置 | `#/rules/{mode,upstream,routing,blocking,learning,cache,clients,special-groups}` — eight sub-items (part 2, below); `#/rules/rewrite` redirects to `#/rules/routing` |
 | 系统管理 | `#/system` — one page of setting rows in five sections: version and update (with system info and configuration-package state), backup (export only), audit switch and capacity, theme and auto refresh, WebUI port / restart / reset statistics; the former `#/system/<section>` addresses redirect here |
+
+### 规则设置 sub-items (UI redo part 2, 2026-10-24)
+
+Every sub-item is switches → lists/subscriptions → actions. The switches of a sub-item are the flags whose declared `section` maps to it
+(`mode`→运行模式, `upstream`→上游设置, `routing`/`rewrite`→分流规则, `blocking`→请求屏蔽, `learning`→域名学习, `cache`→缓存设置, `client`→客户端, `special_groups`→专属分流组),
+in declaration order; a click is applied at once (`POST /api/v1/flags/{key}`), the other switches of the page wait meanwhile, a 409 re-reads the flags and asks for a retry, a 503
+shows its reason, and a modified flag shows "已修改" with a restore-default (`DELETE`). Switching a flag that declares `requery_on_change` shows that the cache refresh was started
+(`requery_triggered`).
+
+| Sub-item | Content |
+| --- | --- |
+| 运行模式 | `mode` flags; the `realiplist` and `cnfakeipfilter` lists |
+| 上游设置 | `upstream` flags; the upstream list by group (identifier, protocol, address, enabled, latency; other parameters in the edit dialog; restore default per group); SOCKS5/ECS overrides; the `ddnslist`; the special groups' upstreams read-only with a link |
+| 分流规则 | `routing` flags; lists `whitelist`, `greylist`, `direct_ip`, `rewrite`; the five online sets (`geosite_cn`, `geosite_no_cn`, `geoip_cn`, `cuscn`, `cusnocn`); the special groups' lists read-only with links |
+| 请求屏蔽 | `blocking` flags; `blocklist`; AdGuard subscriptions |
+| 域名学习 | `learning` flags; the domain-generation switches (`/api/v1/domain-generation`); learned categories (counts, clearing one whole category) and entries (`/plugins/route_learner/entries`: category filter, search, sort, paging; no single-entry delete); requery state, run/cancel and timer |
+| 缓存设置 | `cache` flags; cache statistics, per-cache and all clearing, cache entry viewer |
+| 客户端 | `client` flags; the `client_ip` list; client aliases (`/plugins/clientname`: edit, add, import/export) |
+| 专属分流组 | `special_groups` flags; the group list; one group in one place (`?group=<slot>` or `?group=new`): name and port, upstreams (own or referenced), its manual list, its subscriptions, delete |
+
+All manual lists use one editor: line count, search that only filters the display, save through `/plugins/<tag>/post` with the server's error shown as it is, a re-read after
+saving (a rule the server skipped is reported), and a guard against cut-off lists: `show` is asked for 20,001 lines, and a list that reaches that is shown read-only with a notice and cannot be
+saved from the page. Leaving a page (or sub-item) with unsaved edits asks first (the router guard; the browser also asks before the tab closes). The fixed lists are always shown
+(no longer hidden when `special_groups.enabled`). The online subscription table is shared by the five sets, AdGuard and a special group's subscriptions.
 
 Theme: light / dark / follow the system (default), kept in the browser (`rtdns-theme`); every
 browser key uses the `rtdns-` prefix and older `mosdns*` keys are not read. Value colours
