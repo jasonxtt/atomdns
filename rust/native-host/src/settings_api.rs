@@ -278,6 +278,7 @@ fn flag_json(flag: &Flag) -> serde_json::Value {
         "value": flag.value,
         "modified": flag.value != flag.default,
         "source": flag.source,
+        "requery_on_change": flag.requery_on_change,
     });
     if let Some(options) = &flag.options {
         value["options"] = options
@@ -336,8 +337,9 @@ async fn flag_change(control: &RuntimeControl, method: &str, key: &str, body: &[
         return text(503, "配置更新试运行中，暂不能修改开关");
     }
     if value == flag.value {
-        return json(200, &flag_json(flag));
+        return flag_reply(flag, false);
     }
+    let requery_on_change = flag.requery_on_change;
     let mut settings = current.config.settings.clone();
     // Before the first migration the values may come from the legacy switch
     // files; the first change stores all of them.
@@ -356,10 +358,37 @@ async fn flag_change(control: &RuntimeControl, method: &str, key: &str, body: &[
         return failure(error);
     }
     let view = control.view();
+    let triggered = requery_on_change && trigger_requery(&view.config).await;
     match view.config.flags.iter().find(|flag| flag.key == key) {
-        Some(flag) => json(200, &flag_json(flag)),
+        Some(flag) => flag_reply(flag, triggered),
         None => text(500, "the flag is gone after the change"),
     }
+}
+
+/// The answer of a flag change: the flag and whether the change started a
+/// `requery` task (`requery_triggered`).
+fn flag_reply(flag: &Flag, triggered: bool) -> Reply {
+    let mut value = flag_json(flag);
+    value["requery_triggered"] = triggered.into();
+    json(200, &value)
+}
+
+/// Starts a `requery` task on the generation that was just published. False
+/// when the configuration has no `requery` plugin or the task did not start
+/// (the change itself stays applied either way).
+async fn trigger_requery(config: &CompiledConfig) -> bool {
+    let Some(requery) = config.local.requeries.first() else {
+        return false;
+    };
+    let reply = requery.runtime.handle("POST", "trigger", &[]).await;
+    if reply.status != 200 {
+        crate::diag::warn_line!(
+            "{}: the flag change did not start a task (HTTP {})",
+            requery.tag,
+            reply.status
+        );
+    }
+    reply.status == 200
 }
 
 fn effective(config: &CompiledConfig) -> Reply {

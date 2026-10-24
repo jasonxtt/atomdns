@@ -68,27 +68,34 @@ test('the effective-settings read is a plain, ungated request', () => {
   assert.equal(requestOperation('/api/v1/upstream/config', 'POST'), 'upstreams.manage')
 })
 
-test('the overrides apply at once with a restore per field, and replacement rules are only explained', async () => {
-  const source = await readFile(new URL('../src/pages/rules/RulesUpstreamPage.vue', import.meta.url), 'utf8')
-  // Saves send no replacements, never ask for a restart and can restore a field.
+test('the overrides apply at once with a restore per field, and no replacement rules are offered', async () => {
+  const source = await readFile(new URL('../src/components/rules/OverridesPanel.vue', import.meta.url), 'utf8')
+  // Saves send an empty replacements list, never ask for a restart and can restore a field.
   const save = source.slice(source.indexOf('async function saveOverrides()'), source.indexOf('onMounted('))
   assert.match(save, /replacements: \[\]/)
   assert.doesNotMatch(save, /system\/restart/)
   assert.match(source, /async function restoreOverride\(field\)/)
-  assert.match(source, /@restore-override="restoreOverride"/)
-  assert.match(source, /<CapabilityBoundary operation="system\.global_overrides">/)
-  const rewrite = await readFile(new URL('../src/pages/rules/RulesRewritePage.vue', import.meta.url), 'utf8')
-  assert.match(rewrite, /data-native-replacements-note/)
-  assert.doesNotMatch(rewrite, /replacements\.push|addReplacement/, 'no editor for replacement rules')
+  assert.match(source, /@click="restoreOverride\('socks5'\)"/)
+  assert.match(source, /@click="restoreOverride\('ecs'\)"/)
+  assert.doesNotMatch(source, /replacements\.push|addReplacement|NATIVE_REPLACEMENTS_NOTE/, 'no editor or note for replacement rules')
+  const page = await readFile(new URL('../src/pages/rules/RulesUpstreamPage.vue', import.meta.url), 'utf8')
+  assert.match(page, /<OverridesPanel \/>/)
 })
 
-test('the upstream page offers the proxy switch for every group and never a literal address on a settings-backed runtime', async () => {
-  const source = await readFile(new URL('../src/components/UpstreamManager.vue', import.meta.url), 'utf8')
-  assert.match(source, /showSocksProxyToggle = computed\(\(\) => showSocks5\.value && \(settingsProxy\.value \|\|/)
-  assert.match(source, /showSocks5Input = computed\(\(\) => !settingsProxy\.value &&/)
-  assert.match(source, /nativeProxyFlag\(protocol, form\.use_socks_proxy\)/)
-  assert.match(source, /if \(settingsProxy\.value\) form\.use_socks_proxy = false/, 'a new native entry starts without the proxy')
-  assert.match(source, /plugin_tag: group, upstreams: \[\]/, 'restore default posts an empty list')
-  // The Go path of the same page is unchanged: only foreign groups get the toggle, with a literal address.
-  assert.match(source, /\['foreign', 'foreignecs'\]\.includes\(String\(form\.group \|\| ''\)\.trim\(\)\)/)
+test('the upstream dialog offers the proxy switch only on a settings-backed runtime and never a literal address or an unsupported field', async () => {
+  const source = await readFile(new URL('../src/components/rules/UpstreamEditorModal.vue', import.meta.url), 'utf8')
+  assert.match(source, /showProxy = computed\(\(\) => props\.proxySwitch && protocolUsesProxy\(form\.protocol\)\)/)
+  assert.match(source, /nativeProxyFlag\(form\.protocol, form\.use_socks_proxy\)/)
+  for (const gone of ['idle_timeout', 'bind_to_device', 'so_mark', 'enable_pipeline', 'enable_http3', 'socks5', 'aliapi', 'account_id']) {
+    assert.doesNotMatch(source, new RegExp(gone), `${gone} is not offered`)
+  }
+  const panel = await readFile(new URL('../src/components/rules/UpstreamPanel.vue', import.meta.url), 'utf8')
+  assert.match(panel, /plugin_tag: group, upstreams: \[\]/, 'restore default posts an empty list')
+  // The table keeps identifier, protocol, address, enabled, latency and the actions.
+  const head = panel.slice(panel.indexOf('<thead>'), panel.indexOf('</thead>'))
+  assert.deepEqual([...head.matchAll(/<th[^>]*>([^<]+)<\/th>/g)].map((match) => match[1].replace(/\{\{.*?\}\}/g, '').trim()), ['标识', '协议', '地址', '启用', '延迟', '操作'])
+  // The old table's group filter, sorting and "hide disabled" (same storage key) stay.
+  assert.match(panel, /rtdns-hide-disabled-upstreams/)
+  assert.match(panel, /aria-label="按组筛选"/)
+  assert.match(panel, /onSort\('tag'\)/)
 })

@@ -49,7 +49,7 @@ fn an_update_trial_neither_writes_the_migration_nor_accepts_changes() {
     std::fs::write(
         root.join("config.yaml"),
         format!(
-            "log: {{level: error}}\napi: {{http: \"127.0.0.1:{api_port}\"}}\nplugins:\n  - tag: core_mode\n    type: feature_flag\n    args:\n      label: 核心运行模式\n      description: 测试\n      section: mode\n      kind: choice\n      options: [{{value: compat, label: 兼容}}, {{value: safe, label: 安全}}]\n      default: compat\n  - tag: fwd\n    type: forward\n    args: {{upstreams: [{{addr: \"udp://127.0.0.1:9\"}}]}}\n  - tag: entry\n    type: sequence\n    args:\n      - matches: flag core_mode=safe\n        exec: reject 3\n      - exec: reject 0\n  - tag: listener\n    type: udp_server\n    args: {{entry: entry, listen: \"127.0.0.1:{dns}\"}}\n"
+            "log: {{level: error}}\napi: {{http: \"127.0.0.1:{api_port}\"}}\nplugins:\n  - tag: core_mode\n    type: feature_flag\n    args:\n      label: 核心运行模式\n      description: 测试\n      section: mode\n      kind: choice\n      options: [{{value: compat, label: 兼容}}, {{value: safe, label: 安全}}]\n      default: compat\n      requery_on_change: true\n  - tag: requery\n    type: requery\n    args: {{file: webinfo/requeryconfig.json}}\n  - tag: fwd\n    type: forward\n    args: {{upstreams: [{{addr: \"udp://127.0.0.1:9\"}}]}}\n  - tag: entry\n    type: sequence\n    args:\n      - matches: flag core_mode=safe\n        exec: reject 3\n      - exec: reject 0\n  - tag: listener\n    type: udp_server\n    args: {{entry: entry, listen: \"127.0.0.1:{dns}\"}}\n"
         ),
     )
     .unwrap();
@@ -84,6 +84,17 @@ fn an_update_trial_neither_writes_the_migration_nor_accepts_changes() {
         )
         .await;
         assert_eq!(status, 503);
+        // A refused change starts no requery task.
+        let (status, body) = api(api_port, "GET", "/plugins/requery/status", "").await;
+        assert_eq!(status, 200, "{body}");
+        let requery: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(requery["task_state"], "idle", "{body}");
+        assert!(
+            requery["last_run_start_time"]
+                .as_str()
+                .is_none_or(|time| time.starts_with("0001-01-01")),
+            "{body}"
+        );
         shutdown.cancel();
         task.await.unwrap();
     });

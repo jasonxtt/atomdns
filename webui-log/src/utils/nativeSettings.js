@@ -44,6 +44,3 @@ export function isModified(source) {
 
 export const NATIVE_OVERRIDES_NOTE =
   '保存后立即生效，无需重启。留空或点“恢复默认”回到配置文件（YAML）里的值；默认配置包中代理为空表示不使用代理。'
-
-export const NATIVE_REPLACEMENTS_NOTE =
-  '原生运行时不支持任意字符串替换规则。代理与 ECS 请用上方覆盖设置；其它改动请直接修改 YAML 配置。'

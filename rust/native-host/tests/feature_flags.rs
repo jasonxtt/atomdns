@@ -391,6 +391,7 @@ fn invalid_declarations_are_load_errors_with_their_path() {
         (declaration("{label: a, description: b, section: mode, kind: bool, default: 'yes'}"), "expected true or false"),
         (declaration("{label: a, description: b, section: mode, kind: bool, default: true, options: []}"), "no options"),
         (declaration("{label: a, description: b, section: mode, kind: bool, default: true, value: x}"), "unsupported field"),
+        (declaration("{label: a, description: b, section: mode, kind: bool, default: true, requery_on_change: 'yes'}"), "requery_on_change"),
         (declaration("{label: a, description: b, section: mode, kind: choice, options: [{value: x, label: X}], default: x}"), "at least two"),
         (declaration("{label: a, description: b, section: mode, kind: choice, options: [{value: x, label: X}, {value: x, label: Y}], default: x}"), "duplicate option"),
         (declaration("{label: a, description: b, section: mode, kind: choice, options: [{value: x, label: X}, {value: y, label: Y}], default: z}"), "not one of the options"),
@@ -899,6 +900,138 @@ fn concurrent_changes_publish_one_state() {
 
 /// R1: every other settings save keeps the `flags` section, empty or not, so a
 /// restart never migrates the old switch files again.
+/// `config`, plus a `requery` plugin and `requery_on_change` on `core_mode`
+/// (when `with_requery`) or on `core_mode` only.
+fn config_requery(tree: &Tree, ports: &Ports, compat: &Stub, safe: &Stub, with_requery: bool) {
+    config(tree, ports, compat, safe);
+    let mut yaml = tree.text("config.yaml").replacen(
+        "      default: compat\n",
+        "      default: compat\n      requery_on_change: true\n",
+        1,
+    );
+    if with_requery {
+        yaml = yaml.replacen(
+            "  - tag: entry\n",
+            "  - tag: requery\n    type: requery\n    args: {file: webinfo/requeryconfig.json}\n  - tag: entry\n",
+            1,
+        );
+    }
+    tree.write("config.yaml", &yaml);
+}
+
+async fn requery_started(port: u16) -> bool {
+    let reply = api(port, "GET", "/plugins/requery/status", "").await;
+    assert_eq!(reply.status, 200, "{}", reply.body);
+    json(&reply.body)["last_run_start_time"]
+        .as_str()
+        .is_some_and(|time| !time.starts_with("0001-01-01"))
+}
+
+#[test]
+fn a_flagged_change_starts_a_requery_task_once_it_is_applied() {
+    let tree = Tree::new("requery-on-change");
+    let ports = ports();
+    let compat = Stub::start(1, Duration::ZERO);
+    let safe = Stub::start(2, Duration::ZERO);
+    config_requery(&tree, &ports, &compat, &safe, true);
+    let host = start(&tree);
+    host.block_on(async {
+        let (shutdown, task) = serve(&host).await;
+        let listed = json(&api(ports.api, "GET", "/api/v1/flags", "").await.body);
+        let flags = listed["flags"].as_array().unwrap();
+        assert_eq!(flags[0]["requery_on_change"], true);
+        assert_eq!(flags[1]["requery_on_change"], false);
+        assert!(!requery_started(ports.api).await);
+
+        // An unflagged flag and a value that does not change start nothing.
+        let plain = api(
+            ports.api,
+            "POST",
+            "/api/v1/flags/block_aaaa",
+            r#"{"value":true}"#,
+        )
+        .await;
+        assert_eq!(plain.status, 200, "{}", plain.body);
+        assert_eq!(json(&plain.body)["requery_triggered"], false);
+        let unchanged = api(
+            ports.api,
+            "POST",
+            "/api/v1/flags/core_mode",
+            r#"{"value":"compat"}"#,
+        )
+        .await;
+        assert_eq!(unchanged.status, 200, "{}", unchanged.body);
+        assert_eq!(json(&unchanged.body)["requery_triggered"], false);
+        let absent = api(ports.api, "DELETE", "/api/v1/flags/core_mode", "").await;
+        assert_eq!(json(&absent.body)["requery_triggered"], false);
+        assert!(!requery_started(ports.api).await);
+
+        // A rejected request starts nothing.
+        let bad = api(
+            ports.api,
+            "POST",
+            "/api/v1/flags/core_mode",
+            r#"{"value":"leaky"}"#,
+        )
+        .await;
+        assert_eq!(bad.status, 400);
+        assert!(!requery_started(ports.api).await);
+
+        // A change starts one, on the generation that was just published.
+        let changed = api(
+            ports.api,
+            "POST",
+            "/api/v1/flags/core_mode",
+            r#"{"value":"safe"}"#,
+        )
+        .await;
+        assert_eq!(changed.status, 200, "{}", changed.body);
+        let changed = json(&changed.body);
+        assert_eq!(changed["value"], "safe");
+        assert_eq!(changed["requery_triggered"], true);
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while !requery_started(ports.api).await {
+            assert!(std::time::Instant::now() < deadline, "no task started");
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+
+        // Back to the default is a change too.
+        let reset = api(ports.api, "DELETE", "/api/v1/flags/core_mode", "").await;
+        assert_eq!(reset.status, 200, "{}", reset.body);
+        assert_eq!(json(&reset.body)["value"], "compat");
+        assert!(json(&reset.body)["requery_triggered"].is_boolean());
+        shutdown.cancel();
+        task.await.unwrap();
+    });
+}
+
+#[test]
+fn a_flagged_change_without_a_requery_plugin_is_not_an_error() {
+    let tree = Tree::new("requery-absent");
+    let ports = ports();
+    let compat = Stub::start(1, Duration::ZERO);
+    let safe = Stub::start(2, Duration::ZERO);
+    config_requery(&tree, &ports, &compat, &safe, false);
+    let host = start(&tree);
+    host.block_on(async {
+        let (shutdown, task) = serve(&host).await;
+        let changed = api(
+            ports.api,
+            "POST",
+            "/api/v1/flags/core_mode",
+            r#"{"value":"safe"}"#,
+        )
+        .await;
+        assert_eq!(changed.status, 200, "{}", changed.body);
+        let changed = json(&changed.body);
+        assert_eq!(changed["value"], "safe");
+        assert_eq!(changed["requery_triggered"], false);
+        assert_eq!(marker(ports.dns, "a.example", 1).await, Some(2));
+        shutdown.cancel();
+        task.await.unwrap();
+    });
+}
+
 #[test]
 fn other_settings_saves_keep_the_flags_section() {
     for stored in [

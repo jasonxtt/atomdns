@@ -61,13 +61,6 @@ test('a disabled follow-up operation never reaches fetch',async()=>{
  let calls=0;const original=globalThis.fetch;globalThis.fetch=async()=>{calls++;return Response.json({})}
  try{await assert.rejects(()=>capabilityFetch('/plugins/requery/trigger',{method:'POST'}),e=>e.capabilityDisabled);await assert.rejects(()=>capabilityFetch('/api/v1/flags'),e=>e.capabilityDisabled);await capabilityFetch('/api/v2/audit/logs');assert.equal(calls,1)}finally{globalThis.fetch=original}
 })
-test('unmanaged native local menu retains only actual eligible standard providers and propagates IO failures',async()=>{
- const {loadNativeLocalProfiles}=await import('../src/api/nativeManagement.js')
- const profiles=[{tag:'whitelist'},{tag:'blocklist'},{tag:'direct_ip'}];const calls=[]
- const eligible=await loadNativeLocalProfiles(profiles,async url=>{calls.push(url);if(url.includes('whitelist'))throw Object.assign(new Error('missing'),{status:404});if(url.includes('direct_ip'))throw Object.assign(new Error('not a managed domain provider'),{status:400});return 'a.example'})
- assert.deepEqual(eligible,[profiles[1]]);assert.equal(calls.length,3)
- await assert.rejects(()=>loadNativeLocalProfiles(profiles,async()=>{throw Object.assign(new Error('disk failure'),{status:500})}),/disk failure/)
-})
 test('accepted mutation ACK survives discovery refresh failure and existing view stays mounted but disabled',async()=>{
  install(native(['groups.manage']))
  const original=globalThis.fetch

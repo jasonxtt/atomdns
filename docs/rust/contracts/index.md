@@ -20,7 +20,7 @@ These files are short, source-backed rules for MosDNS-T backend and Rust migrati
 | [Native UDP response](native-udp-response.md) | Client UDP/EDNS budgets, name compression, whole-RR truncation, full cache preservation and final audit |
 | [Native cache lifecycle](native-cache-lifecycle.md) | Cache publication/refresh, v2 persistence, management HTTP and Vue workflow |
 | [Native special groups](native-special-groups.md) | Opt-in managed compiler, generated routing, CNAME/audit preservation, S5 management HTTP, S6 Vue workflow, and S7 isolated whole-chain evidence; S7 and cumulative exact-source reviews passed; production cutover remains gated |
-| [Native feature flags](native-feature-flags.md) | Named `feature_flag` declarations, the `flag` matcher, values in `settings.json` with hot apply, `/api/v1/flags`, one-time migration from `rule/switchN.txt`, config schema 3 (replaces [native switch state](native-switch-state.md), removed) |
+| [Native feature flags](native-feature-flags.md) | Named `feature_flag` declarations, the `flag` matcher, values in `settings.json` with hot apply, `/api/v1/flags`, the `requery_on_change` follow-up, one-time migration from `rule/switchN.txt`, config schema 3 (replaces [native switch state](native-switch-state.md), removed) |
 
 | [Native aliapi/rewrite/webinfo](native-aliapi-rewrite-webinfo.md) | YAML-only `aliapi` with SOCKS5 for TCP-based upstreams, `rewrite` rules and API, `webinfo` document API (M1-b1); runtime overrides excluded |
 | [Native typed settings](native-settings.md) | `socks5_proxy`/`ecs_address` objects and `$tag` references, `webinfo/settings.json`, effective configuration with sources, hot apply, WebUI settings routes |
@@ -28,7 +28,7 @@ These files are short, source-backed rules for MosDNS-T backend and Rust migrati
 | [Native `domain_output`](native-domain-output.md) | Name statistics (the access ranking), reference file formats, rule publication, `/show` `/save` `/flush` API; mapper injection moved to `route_learner` |
 | [Native `route_learner`](native-route-learner.md) | Learned routing facts (remembered direct/proxy, no-V4/no-V6, special names): per-entry expiry, mapper merge, state file, hot-apply hand-over, `show`/`save`/`flush`/`entries`/`status`, config schema 2 |
 | [Native online update](native-update.md) | `vX.Y.Z` releases of `jasonxtt/rtdns`, sha256-verified program and `config_rust` package updates, guarded transaction with automatic rollback that does not depend on the service manager, configuration export (update from URL removed 2026-10-23) |
-| [Native WebUI hosting](native-webui-hosting.md) | Same-origin embedded/external UI, built-in UI structure (sidebar, hash routes, themes; appearance API removed 2026-10-23), truthful health/version, capability admission and opt-in pure native build |
+| [Native WebUI hosting](native-webui-hosting.md) | Same-origin embedded/external UI, built-in UI structure (sidebar, hash routes, themes, the eight 规则设置 sub-items and the shared list editor; appearance API removed 2026-10-23), truthful health/version, capability admission and opt-in pure native build |
 
 ## Before development
 

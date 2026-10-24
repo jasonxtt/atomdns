@@ -100,6 +100,7 @@ requery 不再清空学习名单（缓存照旧清空）；配置 schema 升到 
 1. **本地规则页隐藏固定名单**：`webui-log/src/components/ListManager.vue` 中原生模式下 `special_groups.enabled` 为真时只列专属分流组名单，
    白/黑/灰名单、rewrite、ddns 等固定名单不显示（6b 退役托管模式后的残留判断）。规则本身由后端加载生效，`/plugins/<tag>/show` 正常。
    排查其它页面同类 `special_groups.enabled` 残留。
+   **2026-10-24 已处理（UI 重做第二段）**：`ListManager.vue` 随旧页面删除；新的共用名单编辑器显示全部固定名单，不再看 `special_groups.enabled`；旧规则页的其它残留判断（`isNative`、Go 名单、`nativeLocalText`）一并删除。见 [10-24-ui-redo-p2](../validation-records/10-24-ui-redo-p2/README.md)。
 2. **`ip_set` 缺 `/plugins/<tag>/show` 与 `/post`**（后端）：`client_ip`、`direct_ip` 返回 404，Go `plugin/data_provider/ip_set/ip_set.go` 有此接口。
    名单从文件加载并生效，但无法经 API/WebUI 查看或修改；新 UI 需要此后端接口。
    **2026-10-22 已完成**：新增 show/post；post 仅允许单个独占 `.txt`、无内联 IP，复用原子写与活快照；旧热应用候选冲突返回 409。
@@ -133,3 +134,4 @@ requery 不再清空学习名单（缓存照旧清空）；配置 schema 升到 
    但 `domain_set`（如“记忆直连”）要到下一次整代热应用后才变成学习标签。应答与分流不受影响，只是审计/日志显示滞后。
    M2-1 的 H 组差分因此多出过 455 行标签差异（两边先做一次相同的设置热应用后消失），见 [10-23-feature-flags](../validation-records/10-23-feature-flags/README.md)。
    在 v0.3.0 发版前修。
+

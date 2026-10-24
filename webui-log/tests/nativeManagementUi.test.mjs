@@ -7,12 +7,9 @@ import {
   validateRuntimeCapabilities
 } from '../src/api/runtimeCapabilities.js'
 import {
-  buildNativeDiversionPayload,
-  classifyDiversionSource,
   isNativeUpstreamReadOnly,
-  loadLegacyDiversionCatalogs,
-  loadNativeOnlineCatalogs,
-  validateDiversionCatalogChange
+  loadDiversionCatalogs,
+  loadNativeOnlineCatalogs
 } from '../src/api/nativeManagement.js'
 
 const nativeCapabilities = {
@@ -48,7 +45,7 @@ test('the diversion catalog loader keeps successful catalogs when an optional ca
     ['special_50', 'diversion_50'],
     ['geoipcn', 'geoip_cn']
   ]
-  const result = await loadLegacyDiversionCatalogs(entries, async (path) => {
+  const result = await loadDiversionCatalogs(entries, async (path) => {
     if (path === '/plugins/diversion_50/config') {
       throw Object.assign(new Error('HTTP 404 Not Found'), { status: 404 })
     }
@@ -83,31 +80,6 @@ test('network and server errors are surfaced and can be retried', async () => {
 
 test('malformed capability responses fail closed', () => {
   assert.throws(() => validateRuntimeCapabilities({ runtime: 'rust' }), /capability response/i)
-})
-
-test('native source editor accepts only supported local text records', () => {
-  const supported = {
-    name: 'block.txt', type: 'special_50', enabled: true,
-    files: 'rules/block.txt', url: '', auto_update: false, enable_regexp: false
-  }
-  assert.deepEqual(classifyDiversionSource(supported, 'special_50'), { readOnly: false, reason: '' })
-  assert.match(classifyDiversionSource({ ...supported, files: 'rules/block.srs' }, 'special_50').reason, /\.txt/)
-  assert.equal(classifyDiversionSource({ ...supported, auto_update: true }, 'special_50').readOnly, true)
-  assert.equal(classifyDiversionSource({ ...supported, extra: { retained: true }, enabled: false }, 'special_50').readOnly, true)
-})
-
-test('native source payload excludes downloader and advanced-format state', () => {
-  assert.deepEqual(buildNativeDiversionPayload({
-    name: 'new-list', type: 'special_50', files: 'rules/new-list.txt', enabled: true
-  }), {
-    name: 'new-list', type: 'special_50', files: 'rules/new-list.txt', enabled: true,
-    url: '', auto_update: false, enable_regexp: false
-  })
-})
-
-test('native source edits cannot move ownership across catalogs', () => {
-  assert.throws(() => validateDiversionCatalogChange('special_route_50', 'special_route_51'), /另一个组/)
-  assert.doesNotThrow(() => validateDiversionCatalogChange('special_route_50', 'special_route_50'))
 })
 
 test('unsupported upstreams stay read-only and visible', () => {

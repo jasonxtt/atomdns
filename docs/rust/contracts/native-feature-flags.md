@@ -18,6 +18,7 @@ The superseded contract is [native-switch-state.md](native-switch-state.md).
       - {value: compat, label: 兼容模式}
       - {value: safe, label: 安全模式}
     default: compat              # choice: one option value; bool: true/false
+    requery_on_change: true      # optional bool, default false: see "Follow-up requery"
 ```
 Any other `args` key, a `bool` with `options`, a default of the wrong type or outside the options is a load error (start, `check`, hot apply) naming the YAML path.
 A flag is not executable and not a `$tag` matcher (`exec: $core_mode` / `matches: $core_mode` are errors that name the `flag` syntax).
@@ -50,9 +51,9 @@ loopback upstream) is a new admission and sees the generation current then — a
 
 | Route | Behaviour |
 |---|---|
-| `GET /api/v1/flags` | `{"settings_file":"webinfo/settings.json","migrated":bool,"flags":[…]}` in declaration order; each `{key,label,description,section,kind,default,value,modified,source}` plus `options:[{value,label}]` for `choice` |
-| `POST /api/v1/flags/{key}` | Body exactly `{"value": <bool or option string>}`. Applies through the settings hot apply and answers the flag (200). The current value again: 200, nothing applied |
-| `DELETE /api/v1/flags/{key}` | Back to the default (the key leaves `flags`), 200 with the flag |
+| `GET /api/v1/flags` | `{"settings_file":"webinfo/settings.json","migrated":bool,"flags":[…]}` in declaration order; each `{key,label,description,section,kind,default,value,modified,source,requery_on_change}` plus `options:[{value,label}]` for `choice` |
+| `POST /api/v1/flags/{key}` | Body exactly `{"value": <bool or option string>}`. Applies through the settings hot apply and answers the flag plus `requery_triggered` (200). The current value again: 200, nothing applied, `requery_triggered: false` |
+| `DELETE /api/v1/flags/{key}` | Back to the default (the key leaves `flags`), 200 with the flag and `requery_triggered` |
 
 Unknown key 404; bad JSON, extra fields, wrong type or option 400; other methods 405; a change while another is being applied or the file changed 409 (as the other
 settings routes; a client should submit one change at a time); during an online-update trial 503 `配置更新试运行中，暂不能修改开关` (also for a request that would change nothing; malformed requests still get 400/404); write failure 500.
@@ -60,6 +61,16 @@ Before the first migration (only possible during an update trial or after a fail
 The routes exist when a file-backed configuration declares a flag; capability `ui_operations["flags.manage"]`. `switches.manage` and the `switches` capability
 extension are removed. A change is a whole-generation hot apply: one compile (off the DNS thread), a short publication pause, and — accepted — a running `requery`
 task is cancelled by the retirement of the old generation, as for any settings save. No cache is flushed; follow-up actions (flush, requery) are a client's choice.
+
+## Follow-up requery (`requery_on_change`, 2026-10-24)
+
+A flag may declare `requery_on_change: true` (a bool; anything else is a load error naming `args.requery_on_change`). When a `POST` or `DELETE` **changes the value**
+and the new generation is published, the host then starts one task of the configuration's `requery` plugin on that new generation (the first declared one; the task flushes
+the caches named by its own `flush_rules` and warms them up again, see [native-requery](native-requery.md)). The answer's `requery_triggered` says whether a task was started.
+It is `false` when the value did not change (nothing is applied), the flag does not declare the parameter, the configuration has no `requery` plugin, or the task could not start
+(the change stays applied; a warning is logged). A request refused with 400/404/409/503 starts nothing — in particular during an online-update trial (503) no task runs.
+The WebUI therefore does no follow-up of its own (the former client-side "flush these caches and trigger requery" after a core-mode or DNS-mode change is gone). `config_rust`
+sets the parameter on `core_mode`, `dns_mode` and `cn_fakeip`.
 
 ## Migration from `rule/switchN.txt` (one time)
 

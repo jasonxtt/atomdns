@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { createMemoryHistory } from 'vue-router'
 
 import { NAV_MODULES, PAGES, RULE_SECTIONS } from '../src/navigation.js'
@@ -26,12 +26,12 @@ async function routerAt(path) {
   return router
 }
 
-test('the four modules carry the nine rule sub-items; logs has a diagnostic page; system is one page', () => {
+test('the four modules carry the eight rule sub-items; logs has a diagnostic page; system is one page', () => {
   assert.deepEqual(NAV_MODULES.map((module) => module.label), ['概览', '日志', '规则设置', '系统管理'])
-  assert.deepEqual(RULE_SECTIONS.map((item) => item.label), ['运行模式', '上游设置', '分流规则', '请求屏蔽', '改写规则', '域名学习', '缓存设置', '客户端', '专属分流组'])
+  assert.deepEqual(RULE_SECTIONS.map((item) => item.label), ['运行模式', '上游设置', '分流规则', '请求屏蔽', '域名学习', '缓存设置', '客户端', '专属分流组'])
   assert.deepEqual(NAV_MODULES.filter((module) => module.items.length > 0).map((module) => module.id), ['rules'])
   assert.deepEqual(PAGES.filter((page) => /^\/(logs|system)/.test(page.path)).map((page) => page.path), ['/logs', '/logs/diagnostic', '/system'])
-  assert.equal(PAGES.length, 3 + 9 + 1)
+  assert.equal(PAGES.length, 3 + 8 + 1)
   assert.equal(new Set(PAGES.map((page) => page.path)).size, PAGES.length)
 })
 
@@ -51,6 +51,8 @@ test('the root, module roots and unknown addresses redirect', async () => {
     assert.equal((await routerAt(old)).currentRoute.value.path, '/system', old)
   }
   assert.equal((await routerAt('/logs/diagnostic')).currentRoute.value.name, 'logs-diagnostic')
+  // The former 改写规则 sub-item is part of 分流规则 now.
+  assert.equal((await routerAt('/rules/rewrite')).currentRoute.value.path, '/rules/routing')
   for (const unknown of ['/nope', '/rules/nope', '/logs/nope', '/log']) {
     assert.equal((await routerAt(unknown)).currentRoute.value.path, '/overview', unknown)
   }
@@ -148,7 +150,8 @@ test('the coverage note names the span of the retained records and their count',
 })
 
 test('the shell keeps the localStorage keys under the rtdns- prefix and shows no MosDNS name', () => {
-  const sources = ['../src/App.vue', '../src/utils/theme.js', '../src/utils/autoRefresh.js', '../src/pages/system/SystemBackupSection.vue', '../src/components/UpstreamManager.vue']
+  const rules = ['components/rules', 'pages/rules'].flatMap((dir) => readdirSync(new URL(`../src/${dir}`, import.meta.url)).map((name) => `../src/${dir}/${name}`))
+  const sources = ['../src/App.vue', '../src/utils/theme.js', '../src/utils/autoRefresh.js', '../src/pages/system/SystemBackupSection.vue', ...rules]
   for (const path of sources) {
     const source = read(path)
     for (const match of source.matchAll(/(?:STORAGE_KEY|_KEY) = '([^']+)'/g)) assert.match(match[1], /^rtdns-/, `${path}: ${match[1]}`)
@@ -189,6 +192,18 @@ test('the system page stacks its five sections in setting rows', () => {
     const section = read(`../src/pages/system/System${name}Section.vue`)
     assert.match(section, new RegExp(`<SettingSection id="[a-z]+" title="${title}">`), name)
     assert.match(section, /<SettingRow /, name)
+  }
+})
+
+test('the rule pages show no internal terms or Go-era names', () => {
+  for (const dir of ['components/rules', 'pages/rules']) {
+    for (const name of readdirSync(new URL(`../src/${dir}`, import.meta.url))) {
+      const source = read(`../src/${dir}/${name}`)
+      // Visible text only: text nodes and the text attributes of the template part.
+      const template = source.slice(source.indexOf('<template>'))
+      const visible = [...template.matchAll(/>([^<>]+)</g), ...template.matchAll(/\b(?:hint|description|label|title|placeholder|aria-label)="([^"]+)"/g)].map((match) => match[1].replace(/\{\{.*?\}\}/g, '')).join('\n')
+      assert.doesNotMatch(visible, /requery|route_learner|domain_output|switch\d|MosDNS|Go 版|legacy|兼容分支|unified_matcher/, `${dir}/${name}`)
+    }
   }
 })
 
