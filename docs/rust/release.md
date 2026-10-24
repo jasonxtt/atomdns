@@ -69,28 +69,61 @@
 5. **建 Release**，一次上传三个资产：程序包、清单、`config_rust_up.zip`（文件名必须与 `config.url` 末段一致）。
    Release 建好后，用 `curl -fsSL <config.url> | sha256sum` 再核对一次与元数据一致。更新器只在 `applied_config_schema < required_config_schema` 时下载配置包。
 
-## 配置 schema 3（功能开关，M2-1，2026-10-23；随 v0.3.0 发布）
+## v0.3.0 升级须知（配置 schema 3，2026-10-24；功能开关 + UI 重做）
 
-- 新程序要求 `rust-config-schema-3` 的配置包：`switch1`–`switch17` 换成 `sub_config/flags.yaml` 里的 13 个具名开关（`feature_flag`），包删除 `sub_config/switch.yaml`。
-  旧配置里的 `switchN` 插件或匹配写法在新程序里加载失败；手动替换程序时必须同时更新配置包。
-- 开关值改存 `webinfo/settings.json` 的 `flags` 段。首次正常启动时从 `rule/switchN.txt` 迁移一次（在线更新试运行期间不写，回滚安全），旧文件保留但不再读取。
-- 旧接口 `/plugins/switchN/show|post` 已删除；开关在 WebUI 的规则设置各子项顶部（见 v0.3.0 升级须知），也可用 `GET/POST/DELETE /api/v1/flags[/{名字}]`（见 [native-feature-flags](contracts/native-feature-flags.md)）。
-- **手动降级到 v0.2.2**：先从 `webinfo/settings.json` 删掉 `flags` 键（v0.2.2 不认识它，会拒绝启动），并换回 schema 2 的配置包。
-  旧的 `rule/switchN.txt` 仍在，但取值停留在迁移那一刻，降级前若在新程序里改过开关，需要手动把对应文件改成 `A`/`B`。
+经在线更新升级时，程序与配置包（`rust-config-schema-3`）一起由 update-guard 替换，失败则程序、配置文件、包状态一起回滚。
+手动替换程序时必须同时更新配置包：新程序只认 schema 3，旧配置里的 `switchN` 插件或匹配写法在新程序里加载失败。
 
-## v0.3.0 升级须知（草稿，UI 重做，随第二段完成后发布）
+### 配置与开关
 
-- 内置 WebUI 改为侧栏布局：概览、日志、规则设置（8 个子项：运行模式、上游设置、分流规则、请求屏蔽、域名学习、缓存设置、客户端、专属分流组）、系统管理（一页），地址形如 `#/overview`、`#/rules/upstream`；刷新保持当前页；`#/rules/rewrite` 跳到 `#/rules/routing`。
-- 外观只保留浅色 / 深色 / 跟随系统（存在浏览器里）。背景图、毛玻璃、透明度、文字与按钮颜色已删除，后端 `/api/v1/appearance/*` 接口与能力 `appearance.server` 一并删除。
-  部署机上已有的 `webinfo/appearance_settings.json`、`webinfo/appearance_text_settings.json`、`webinfo/appearance_button_settings.json`、`webinfo/panel_background.bin`、
-  `webinfo/panel_background_history/` 新程序不读也不删，可手动删除。外置 UI 要背景图请放进自己的静态包。
-- "应用远程配置"已删除（前端入口与 `POST /api/v1/config/update_from_url`，旧地址返回 404）。配置包只随程序在线更新一起下发；"备份配置"保留，下载文件名 `rtdns_backup.zip`。
-- 浏览器里的旧设置（主题、自动刷新、配置目录等 `mosdns*` 键）不迁移，首次打开新界面按默认值（跟随系统、自动刷新关闭），需要时重新设置一次。
-- 概览的实时趋势图已去掉；统计口径仍是审计保留记录，页面上写明覆盖范围。
-- 功能开关按声明的 `section` 显示在各子项顶部，点一下立即生效；`core_mode`、`dns_mode`、`cn_fakeip` 切换后由程序自己触发一次 requery（清缓存再预热，见 [native-feature-flags](contracts/native-feature-flags.md)），旧 WebUI 在浏览器里做的联动不再保留。
-  自己的配置里要同样的联动，在开关的 `args` 里写 `requery_on_change: true`。
-- 客户端别名从日志页挪到 规则设置 › 客户端（日志页的按钮跳转过去）；"高级替换规则"面板已删除（原生不支持）；域名学习页新增学习明细（`/plugins/route_learner/entries`）。
-- **配置包不再附带 `ui/ilog/`**（旧日志页，用户不用）。包不管理已部署机器的 `ui/`，已有的 `ui/ilog/` 不受影响，不用时可手动删除。
+- 包把 `switch1`–`switch17` 换成 `sub_config/flags.yaml` 里的 13 个具名开关（`feature_flag`，见 [native-feature-flags](contracts/native-feature-flags.md)），
+  删除 `sub_config/switch.yaml`；`create_if_missing` 为空，`rule/switchN.txt` 是用户数据，包既不创建也不删除。
+- 开关值改存 `webinfo/settings.json` 的 `flags` 段（只存与 YAML 默认不同的值）。**首次正常启动**时从 `rule/switchN.txt` 迁移一次；
+  在线更新的试运行期间不写盘（`settings.json` 字节不变，所以自动回滚是安全的），由 update-guard 起的最终程序写入。旧的 `rule/switchN.txt` 保留但不再读取。
+- 开关可在 WebUI 规则设置各子项顶部切换，也可用 `GET/POST/DELETE /api/v1/flags[/{名字}]`。
+  `core_mode`、`dns_mode`、`cn_fakeip` 切换后由程序自己触发一次 requery（清缓存再预热）；自己的配置要同样的联动，在开关的 `args` 里写 `requery_on_change: true`。
+
+### 删除的接口（依赖它们的外置界面会失效）
+
+- `/plugins/switchN/show`、`/plugins/switchN/post`（改用 `/api/v1/flags`）；
+- `/api/v1/appearance/*` 与能力 `appearance.server`；
+- `POST /api/v1/config/update_from_url`（"应用远程配置"；旧地址返回 404，配置包只随程序在线更新下发）。
+
+调用这些接口的外置界面（旧的 `ilog`、第三方控制台、自写脚本）升级后对应功能会失效，需要改用上面的新接口或停用。"备份配置"保留，下载文件名 `rtdns_backup.zip`。
+
+### 内置 WebUI
+
+- 侧栏布局：概览、日志、规则设置（8 个子项：运行模式、上游设置、分流规则、请求屏蔽、域名学习、缓存设置、客户端、专属分流组）、系统管理（一页），
+  地址形如 `#/overview`、`#/rules/upstream`，刷新保持当前页；`#/rules/rewrite` 跳到 `#/rules/routing`。
+- 外观只保留浅色 / 深色 / 跟随系统（存在浏览器里）；背景图、毛玻璃、透明度、文字与按钮颜色已删除。外置 UI 要背景图请放进自己的静态包。
+- **浏览器里的旧设置不迁移**（主题、自动刷新、配置目录等 `mosdns*` 键），首次打开新界面按默认值（跟随系统、自动刷新关闭），需要时重新设置一次。
+- 概览的实时趋势图已去掉，统计口径仍是审计保留记录；客户端别名从日志页挪到 规则设置 › 客户端；"高级替换规则"面板已删除（原生不支持）；域名学习页新增学习明细。
+- 配置包不再附带 `ui/ilog/`；包不管理已部署机器的 `ui/`，已有的 `ui/ilog/` 不受影响。
+
+### 升级后要手动做的事
+
+`webinfo/requeryconfig.json` 是用户数据，包不会改它。新配置里 `cache_cnmihomo` 缓存也要随 requery 保存和清空，请在已有文件里手动补两行（各放在对应数组里，与相邻条目格式相同）：
+
+- `url_actions.save_rules` 加：`"http://127.0.0.1:9099/plugins/cache_cnmihomo/save",`
+- `url_actions.flush_rules` 加：`"http://127.0.0.1:9099/plugins/cache_cnmihomo/flush",`
+
+端口照抄已有条目即可：requery 把主机为 `127.0.0.1`、`localhost`、`0.0.0.0`、`::`、`::1` 的 URL 一律当作本机 API，在程序内部执行，不看 URL 里的端口
+（WebUI 端口设置改过 API 端口也不影响）。升级后可触发一次 requery，用 `GET /plugins/requery/status` 核对它正常结束。
+
+### 可删除的旧文件（升级并验证后；程序不读也不删）
+
+- `ui/ilog/`、`ui/ron/`、`ui/modify instruction`（旧页面，不用时）；
+- 外观：`webinfo/appearance_settings.json`、`appearance_text_settings.json`、`appearance_button_settings.json`、`panel_background.bin`、`panel_background_history/`；
+- Go 时代文件：`webinfo/upstream_overrides.json`、`config_overrides.json`、`domain_generation_settings.json`、`config_update_state.json`（Go 版的包状态；rtdns 用 `rust_config_update_state.json`）；
+- v0.2.2 起不再读取的旧学习名单：`gen/*list.txt`、`gen/*rule.txt`（**不含** `gen/top_domains.txt`，requery 用它；`gen/route_learner.json` 是现行学习状态，也要保留）。
+- `rule/switchN.txt` **建议保留**到确定不再需要降级为止（降级到 v0.2.2 要靠它）。
+
+### 手动降级到 v0.2.2
+
+先停服务，再从 `webinfo/settings.json` 删掉 `flags` 键（v0.2.2 不认识它，会拒绝启动），换回 v0.2.2 程序与 schema 2 的配置包。
+`rule/switchN.txt` 仍在，但取值停留在迁移那一刻：降级前若在新程序里改过开关，需要手动把对应文件改成 `A`/`B`（对应关系见 [native-feature-flags](contracts/native-feature-flags.md) 的迁移表）。
+删除 `settings.json` 或其 `flags` 键会让下一次启动重新迁移（旧的）开关文件。
+
 
 ## v0.2.2 升级说明（配置 schema 2，2026-10-23，路由学习重做）
 
