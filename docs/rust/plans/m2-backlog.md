@@ -130,8 +130,8 @@ requery 不再清空学习名单（缓存照旧清空）；配置 schema 升到 
    WebUI 里的 “MosDNS” 界面文案已在 UI 重做第一段（2026-10-23）改为 rtdns，localStorage 键改用 `rtdns-` 前缀（旧键不迁移）；`scripts/cutover/`、`tools/cutover/` 仍按旧名/`rust-v*` 编写，已不适用于新程序。
 
 **M2-1 差分发现（2026-10-23 记录，后续小项）**
-9. **新学到域名的审计标签滞后**（P2，v0.2.2 已有）：域名刚被 `route_learner` 学到后，审计的 `matched_rule_source` 立即是学习类别，
-   但 `domain_set`（如“记忆直连”）要到下一次整代热应用后才变成学习标签。应答与分流不受影响，只是审计/日志显示滞后。
-   M2-1 的 H 组差分因此多出过 455 行标签差异（两边先做一次相同的设置热应用后消失），见 [10-23-feature-flags](../validation-records/10-23-feature-flags/README.md)。
-   在 v0.3.0 发版前修。
-
+9. **新学到域名的审计标签滞后（已修）**（P2，v0.2.2 已有；2026-10-24 修复，未发布）：mapper 的实时学习标签被随后命中的应答缓存旧标签覆盖，来源字段却没有被覆盖。
+   现于同代下一条查询合并当前学习标签，过期/flush 后移除；保留缓存其它标签、显式覆盖和应答原有的 `effective_tag`，不重复查询 learner。
+   VM fmt、严格 Clippy、全工作区 **1501 passed / 0 failed**；等价 G1 的 **471 行真实滞后 → 0**，其它比较字段及学习集合零差异，
+   见 [10-24-learned-label-lag](../validation-records/10-24-learned-label-lag/README.md)。
+   M2-1 的历史 G1/H 组计数仍保留在 [10-23-feature-flags](../validation-records/10-23-feature-flags/README.md)；本次使用不同的旧快照，没有复刻原 432 行数据集。

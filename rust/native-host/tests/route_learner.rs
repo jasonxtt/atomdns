@@ -411,6 +411,251 @@ fn rules_learn_by_condition_and_the_next_query_follows_the_learned_route() {
 }
 
 #[test]
+fn a_warm_response_keeps_the_current_learned_label_in_the_same_generation() {
+    let tree = Tree::new("warm-label");
+    let ports = ports();
+    let upstream = Upstream::start();
+    config(
+        &tree,
+        &ports,
+        &upstream,
+        "  - tag: empty_mapper\n    type: domain_mapper\n    args: {rules: []}\n",
+        "",
+    );
+    let yaml = tree
+        .text("config.yaml")
+        .replace(
+            "      - matches: fast_mark 11\n        exec: reject 11\n",
+            "",
+        )
+        .replace(
+            "entry: entry, listen:",
+            "enable_audit: true, entry: entry, listen:",
+        )
+        .replace(
+            "      - exec: $unified\n",
+            "      - exec: $unified\n      - exec: $empty_mapper\n",
+        );
+    tree.write("config.yaml", &yaml);
+    let compiled = compile(&tree);
+    let mapper = compiled.domain_mappers[0].clone();
+    let host = assemble(compiled);
+    host.block_on(async {
+        let (shutdown, task) = serve(&host).await;
+        assert_eq!(a(ports.dns, "direct.static.test").await, 0);
+        assert_eq!(
+            mapper
+                .evaluate(Some("direct.static.test."))
+                .domain_set
+                .as_deref(),
+            Some("DIRECT|STATIC")
+        );
+        assert_eq!(a(ports.dns, "direct.static.test").await, 0);
+        assert_eq!(upstream.count("direct.static.test", 1), 1);
+        let audit = host.audit_snapshot();
+        let warm = audit
+            .records
+            .iter()
+            .find(|row| row.cache_status == mosdns_native_host::CacheStatus::Hit)
+            .expect("warm audit row");
+        assert_eq!(warm.matched_rule_source.as_deref(), Some("r_direct|wl"));
+        assert_eq!(warm.domain_set.as_deref(), Some("DIRECT|STATIC"));
+        assert_eq!(warm.effective_tag.as_deref(), Some("STATIC"));
+        shutdown.cancel();
+        task.await.unwrap();
+    });
+}
+
+#[test]
+fn cached_learning_labels_follow_expiry_and_flush_in_every_execution_path() {
+    for mode in ["ordinary", "branch", "direct", "nested", "empty"] {
+        let tree = Tree::new(&format!("labels-{mode}"));
+        let ports = ports();
+        let upstream = Upstream::start();
+        config(&tree, &ports, &upstream, "", "");
+        let yaml = tree.text("config.yaml");
+        let yaml = if mode == "direct" {
+            yaml.replace("label: \"DIRECT\"", "label: \" DIRECT \"")
+                .replace(
+                    "default_tag: \"UNMATCHED\"",
+                    "default_tag: \"UNMATCHED|FALLBACK\"",
+                )
+        } else if mode == "empty" {
+            yaml.replace("default_tag: \"UNMATCHED\"", "default_tag: \"\"")
+        } else {
+            yaml
+        };
+        let prefix = yaml.split("  - tag: entry\n").next().unwrap();
+        let successor =
+            "      - exec: $fwd\n      - exec: $learn_direct\n      - exec: $learn_proxy\n";
+        let (extra, entry) = match mode {
+            "ordinary" | "empty" => (String::new(), format!("      - exec: $cache\n{successor}")),
+            "nested" => (
+                "  - tag: outer\n    type: cache\n    args: {size: 16}\n".to_owned(),
+                format!("      - exec: $outer\n      - exec: $cache\n{successor}"),
+            ),
+            "branch" => (
+                format!(
+                    "  - tag: cached\n    type: sequence\n    args:\n      - exec: $cache\n{successor}  - tag: fb\n    type: fallback\n    args: {{primary: $cached, secondary: $fwd}}\n"
+                ),
+                "      - exec: $fb\n".to_owned(),
+            ),
+            _ => (
+                "  - tag: fb\n    type: fallback\n    args: {primary: $cache, secondary: $fwd}\n"
+                    .to_owned(),
+                format!("      - exec: $fb\n{successor}"),
+            ),
+        };
+        tree.write("config.yaml", &format!("{prefix}{extra}  - tag: entry\n    type: sequence\n    args:\n      - exec: $unified\n{entry}  - tag: listener\n    type: udp_server\n    args: {{enable_audit: true, entry: entry, listen: '127.0.0.1:{dns}'}}\n", dns=ports.dns));
+        let compiled = compile(&tree);
+        let learner = Rc::clone(&compiled.local.learners[0].runtime);
+        let host = assemble(compiled);
+        host.block_on(async {
+            let (shutdown, task) = serve(&host).await;
+            let default_label = if mode == "direct" {
+                Some("UNMATCHED|FALLBACK")
+            } else if mode == "empty" {
+                None
+            } else {
+                Some("UNMATCHED")
+            };
+            for (name, learned, cold, source, category, seconds) in [
+                (
+                    "direct.static.test",
+                    "DIRECT|STATIC",
+                    Some("STATIC"),
+                    Some("wl"),
+                    "my_realiplist",
+                    101,
+                ),
+                (
+                    "direct.example",
+                    "DIRECT",
+                    default_label,
+                    None,
+                    "my_realiplist",
+                    101,
+                ),
+                (
+                    "proxy.static.test",
+                    "SPECIAL|PROXY|STATIC",
+                    Some("STATIC"),
+                    Some("wl"),
+                    "my_fakeiplist",
+                    1001,
+                ),
+            ] {
+                // Cold query learns; the next query is a real warm hit.
+                assert_eq!(a(ports.dns, name).await, 0);
+                let original_effective = host
+                    .audit_snapshot()
+                    .records
+                    .last()
+                    .unwrap()
+                    .effective_tag
+                    .clone();
+                assert_eq!(a(ports.dns, name).await, 0);
+                assert_eq!(
+                    host.audit_snapshot()
+                        .records
+                        .last()
+                        .unwrap()
+                        .domain_set
+                        .as_deref(),
+                    Some(learned),
+                    "{mode} {name}"
+                );
+                let entries = json(
+                    &api(
+                        ports.api,
+                        "GET",
+                        &format!("/plugins/route_learner/entries?category={category}"),
+                        "",
+                    )
+                    .await
+                    .body,
+                );
+                let row = entries["entries"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["name"] == name)
+                    .unwrap();
+                assert_eq!(
+                    row["hits"], 1,
+                    "cache restoration must not look up the learner twice"
+                );
+                if mode == "nested" {
+                    // An outer miss around an inner hit must not persist the
+                    // query-local annotation as a new effective route.
+                    api(ports.api, "GET", "/plugins/outer/flush", "").await;
+                    assert_eq!(a(ports.dns, name).await, 0);
+                    assert_eq!(a(ports.dns, name).await, 0);
+                    assert_eq!(
+                        host.audit_snapshot().records.last().unwrap().effective_tag,
+                        original_effective
+                    );
+                }
+                // Refill the cache while the learning label is already live,
+                // so expiry must remove a label actually stored in the cache.
+                flush_label_caches(ports.api, mode == "nested").await;
+                assert_eq!(a(ports.dns, name).await, 0);
+                let cached_effective = host
+                    .audit_snapshot()
+                    .records
+                    .last()
+                    .unwrap()
+                    .effective_tag
+                    .clone();
+                let count = upstream.count(name, 1);
+                learner.advance_clock(seconds);
+                assert_eq!(a(ports.dns, name).await, 0);
+                let audit = host.audit_snapshot();
+                let expired = audit.records.last().unwrap();
+                assert_eq!(expired.domain_set.as_deref(), cold, "expired {mode} {name}");
+                assert_eq!(expired.matched_rule_source.as_deref(), source);
+                assert_eq!(expired.effective_tag, cached_effective);
+                assert_eq!(
+                    upstream.count(name, 1),
+                    count,
+                    "expiry retained the cached response"
+                );
+                // Learn again, refill with the learned prefix, then flush the
+                // category without flushing the response cache.
+                flush_label_caches(ports.api, mode == "nested").await;
+                assert_eq!(a(ports.dns, name).await, 0);
+                flush_label_caches(ports.api, mode == "nested").await;
+                assert_eq!(a(ports.dns, name).await, 0);
+                for tag in [category, "my_sv4list"] {
+                    assert_eq!(
+                        api(ports.api, "GET", &format!("/plugins/{tag}/flush"), "")
+                            .await
+                            .status,
+                        200
+                    );
+                }
+                let count = upstream.count(name, 1);
+                assert_eq!(a(ports.dns, name).await, 0);
+                let audit = host.audit_snapshot();
+                let flushed = audit.records.last().unwrap();
+                assert_eq!(flushed.domain_set.as_deref(), cold, "flushed {mode} {name}");
+                assert_eq!(flushed.matched_rule_source.as_deref(), source);
+                assert_eq!(upstream.count(name, 1), count);
+            }
+            shutdown.cancel();
+            task.await.unwrap();
+        });
+    }
+}
+
+async fn flush_label_caches(api_port: u16, nested: bool) {
+    api(api_port, "GET", "/plugins/cache/flush", "").await;
+    if nested {
+        api(api_port, "GET", "/plugins/outer/flush", "").await;
+    }
+}
+
+#[test]
 fn the_mapper_merges_learned_facts_first_and_never_applies_its_default() {
     let tree = Tree::new("merge");
     let ports = ports();
