@@ -58,6 +58,12 @@ ordinary source groups sorted by plugin tag. Ordinary upstream POST refuses
 Capabilities enable `groups.manage` and `groups.upstreams` in this standard
 profile. Effective settings/check reports include group entries and sources.
 
+UI-managed groups generate `aliapi.concurrent` from the resolved enabled
+upstream population, capped at 20, on both startup and hot application. This
+includes private entries and referenced groups/entries after deduplication;
+generated groups do not inherit a fixed concurrency of two. The inactive empty
+group placeholder keeps a valid concurrency of one.
+
 Writes compile and prebind the whole candidate before committing files. Under
 the existing management drain/input fence, derived YAML is durably replaced
 first, then authoritative group JSON (or `settings.json` for a source/settings

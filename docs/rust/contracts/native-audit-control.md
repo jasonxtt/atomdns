@@ -17,6 +17,13 @@ does not complete C08, C11, the full Overview/System pages, or `/metrics`.
 - The file-backed host owns `<config-base>/webinfo/audit_settings.json`.
   Included plugin source directories cannot supply this root.
 
+`GET /api/v2/audit/rank/domain?limit=...` retains its existing JSON array,
+raw-name bucket counts and ordering, and adds `X-Audit-Distinct-Domains`.
+The decimal integer is the exact number of distinct question names across
+the whole retained snapshot, before rank truncation. DNS ASCII case and a
+terminal dot do not distinguish names; A/AAAA and repeated queries count once.
+Zero is returned for an empty ring. This is not a lifetime or cache statistic.
+
 ## 3. Contracts
 
 - Listener `enable_audit` is a static eligibility gate. For eligible requests,
@@ -39,6 +46,12 @@ does not complete C08, C11, the full Overview/System pages, or `/metrics`.
   omitted for an empty ring. `complete` means only that time is at/before the
   cutoff, not uninterrupted capture. Logs are newest first and expose only
   real `query_time`, `query_name`, `query_type`, `client_ip`, `duration_ms`.
+- The domain-card count is carried on the same snapshot response as its rank
+  rows, irrespective of the requested rank limit (1..500). It follows actual
+  retention/eviction, capture, clear and capacity behavior. Domain aggregation
+  groups canonical-name variants while preserving raw-name equality for the
+  original rank body. Borrowed keys and the existing bounded worker are reused;
+  no persistent distinct-domain map or extra full-name clone is introduced.
 - The detailed ring remains capped at 400000 records and retains complete
   answer payloads; do not introduce byte eviction or silently lower capacity.
   A recoverable detailed-retention allocation failure may omit only that

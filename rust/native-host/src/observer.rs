@@ -1266,7 +1266,6 @@ struct ObserverState {
     audit_records: VecDeque<Arc<RetainedAuditRecord>>,
     slowest_records: Vec<Arc<RetainedAuditRecord>>,
     retention: AuditRetention,
-    audit_timings: VecDeque<AuditTimingSnapshot>,
     audit_elapsed_micros: u128,
     audit_capacity: usize,
     capturing: bool,
@@ -1393,11 +1392,6 @@ impl QueryObserver {
                 },
                 audit_records,
                 slowest_records: Vec::new(),
-                audit_timings: VecDeque::with_capacity(if audit_enabled {
-                    audit_capacity.min(INITIAL_AUDIT_RECORD_CAPACITY)
-                } else {
-                    0
-                }),
                 audit_elapsed_micros: 0,
                 audit_capacity,
                 capturing: audit_enabled,
@@ -1441,9 +1435,7 @@ impl QueryObserver {
             } else {
                 let ring_ready = state.audit_records.len() == state.audit_capacity
                     || state.audit_records.try_reserve(1).is_ok();
-                let timing_ready = state.audit_timings.len() == state.audit_capacity
-                    || state.audit_timings.try_reserve(1).is_ok();
-                ring_ready && timing_ready && state.slowest_records.try_reserve(1).is_ok()
+                ring_ready && state.slowest_records.try_reserve(1).is_ok()
             };
             if !can_retain {
                 // Retention is best-effort at the configured fallible
@@ -1485,21 +1477,16 @@ impl QueryObserver {
             });
             state.slowest_records.truncate(300);
             if state.audit_records.len() == state.audit_capacity {
-                state.audit_records.pop_front();
-                if let Some(timing) = state.audit_timings.pop_front() {
+                if let Some(evicted) = state.audit_records.pop_front() {
                     state.audit_elapsed_micros = state
                         .audit_elapsed_micros
-                        .saturating_sub(timing.elapsed.as_micros());
+                        .saturating_sub(evicted.elapsed.as_micros());
                 }
                 state.evicted_total = state.evicted_total.saturating_add(1);
             }
             state.audit_elapsed_micros = state
                 .audit_elapsed_micros
                 .saturating_add(record.elapsed.as_micros());
-            state.audit_timings.push_back(AuditTimingSnapshot {
-                timestamp: record.timestamp,
-                elapsed: record.elapsed,
-            });
             state.audit_records.push_back(record);
         } else {
             let mut state = self.lock();
@@ -1537,7 +1524,6 @@ impl QueryObserver {
         let mut state = self.lock();
         state.audit_records.clear();
         state.slowest_records.clear();
-        state.audit_timings.clear();
         state.retention = AuditRetention::default();
         state.audit_elapsed_micros = 0;
         state.evicted_total = 0;
@@ -1548,7 +1534,6 @@ impl QueryObserver {
         state.audit_capacity = capacity;
         state.audit_records.clear();
         state.slowest_records.clear();
-        state.audit_timings.clear();
         state.retention = AuditRetention::default();
         state.audit_elapsed_micros = 0;
         state.evicted_total = 0;
@@ -1753,7 +1738,16 @@ impl QueryObserver {
     }
 
     pub(crate) fn audit_timing_snapshot(&self) -> Vec<AuditTimingSnapshot> {
-        self.lock().audit_timings.iter().copied().collect()
+        // One coherent ring generation. Timings are a read-side projection,
+        // rather than a second permanently retained copy of every row.
+        self.lock()
+            .audit_records
+            .iter()
+            .map(|record| AuditTimingSnapshot {
+                timestamp: record.timestamp,
+                elapsed: record.elapsed,
+            })
+            .collect()
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, ObserverState> {
@@ -2125,6 +2119,40 @@ mod tests {
         assert!(payload.upgrade().is_some());
         drop(snapshot);
         assert!(payload.upgrade().is_none());
+    }
+
+    #[test]
+    fn timing_projection_tracks_eviction_and_survives_clear_as_a_snapshot() {
+        let observer = observer(true, 2);
+        for (stamp, micros) in [(30, 11), (10, 22), (20, 33)] {
+            observer.admit_query();
+            observer.record_terminal(observation(Duration::from_micros(micros)), |event| {
+                let mut record = audit_record(event, "time.example.");
+                record.timestamp = SystemTime::UNIX_EPOCH + Duration::from_secs(stamp);
+                record
+            });
+        }
+        let snapshot = observer.audit_timing_snapshot();
+        assert_eq!(snapshot.len(), 2);
+        for (row, (stamp, micros)) in snapshot.iter().zip([(10, 22), (20, 33)]) {
+            assert_eq!(
+                row.timestamp,
+                SystemTime::UNIX_EPOCH + Duration::from_secs(stamp)
+            );
+            assert_eq!(row.elapsed, Duration::from_micros(micros));
+        }
+        assert_eq!(observer.audit_stats_snapshot().elapsed_micros, 55);
+        observer.clear_audit();
+        assert!(observer.audit_timing_snapshot().is_empty());
+        assert_eq!(observer.audit_stats_snapshot().elapsed_micros, 0);
+        assert_eq!(snapshot[0].elapsed, Duration::from_micros(22));
+        observer.set_audit_capacity(0);
+        observer.admit_query();
+        observer.record_terminal(observation(Duration::from_micros(44)), |event| {
+            audit_record(event, "ignored.example.")
+        });
+        assert!(observer.audit_timing_snapshot().is_empty());
+        assert_eq!(observer.metrics_snapshot().completed_total, 4);
     }
 
     #[test]

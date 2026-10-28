@@ -125,37 +125,6 @@ impl UpstreamEntry {
         }
     }
 
-    /// The fields that decide behavior, in a comparable form (used to drop a
-    /// stored list that equals what the YAML says).
-    #[allow(clippy::type_complexity)]
-    pub(crate) fn canonical(
-        &self,
-    ) -> (
-        String,
-        bool,
-        String,
-        String,
-        String,
-        i64,
-        bool,
-        String,
-        i64,
-        bool,
-    ) {
-        (
-            self.tag.clone(),
-            self.enabled,
-            self.protocol_name(),
-            self.runtime_addr(),
-            self.dial_addr.clone(),
-            self.upstream_query_timeout,
-            self.insecure_skip_verify,
-            self.bootstrap.clone(),
-            self.bootstrap_version,
-            self.proxy_switch(),
-        )
-    }
-
     /// The effective proxy switch.
     pub(crate) fn proxy_switch(&self) -> bool {
         self.use_proxy.or(self.use_socks_proxy).unwrap_or(false)
@@ -237,7 +206,7 @@ impl UpstreamEntry {
     }
 }
 
-/// The parsed `webinfo/settings.json`; only differences from the YAML.
+/// The parsed `webinfo/settings.json`: value overrides and managed upstream lists.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Settings {
@@ -340,7 +309,8 @@ pub struct EffectiveItem {
 }
 
 /// The values the YAML itself gives, before any settings: what a stored
-/// setting is compared with, so only real differences are kept.
+/// setting is compared with. Upstream lists also retain explicit management
+/// intent when their entries equal these defaults.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct YamlDefaults {
     pub(crate) proxies: BTreeMap<String, String>,
@@ -826,6 +796,14 @@ fn aliapi(
             .map(upstream_to_raw)
             .collect();
         (summary, _) = resolve_items(&mut items, &proxies, true, &upstreams_path)?;
+        // A stored list is managed by the UI/API; YAML-only groups retain
+        // their explicit concurrency. Use the resolved enabled population.
+        let concurrent = items.len().min(super::aliapi::MAX_CONCURRENT);
+        set_arg(
+            args,
+            "concurrent",
+            RawValue::Number(super::RawNumber::Unsigned(concurrent as u64)),
+        );
         set_arg(args, "upstreams", RawValue::Sequence(items));
     }
     effective.insert(

@@ -1278,7 +1278,53 @@ fn a_literal_proxy_cannot_mix_with_proxy_references_or_settings() {
 }
 
 #[test]
-fn only_differences_are_stored() {
+fn managed_upstreams_derive_concurrency_but_yaml_keeps_its_limit() {
+    let tree = Tree::new("managed-concurrent");
+    let ports = ports();
+    let stub = Stub::start(1, Duration::ZERO);
+    let extra = objects("127.0.0.1:9", &udp_entries(&stub)).replace(
+        "      proxy: $main_proxy",
+        "      concurrent: 2\n      proxy: $main_proxy",
+    );
+    config(&tree, &ports, &extra);
+    let concurrent = || {
+        mosdns_native_host::load_and_compile(&tree.path("config.yaml"))
+            .unwrap()
+            .forward_definitions
+            .iter()
+            .find(|group| group.tag == "foreign")
+            .unwrap()
+            .concurrent
+    };
+    assert_eq!(concurrent(), 2, "unmanaged YAML must retain concurrent");
+    for (count, disabled) in [(3, 0), (4, 1), (21, 0), (1, 0)] {
+        let entries = (0..count)
+            .map(|i| {
+                serde_json::json!({
+                    "tag": format!("u{i}"), "enabled": i >= disabled,
+                    "protocol": "udp", "addr": format!("127.0.0.1:{}", 19000 + i)
+                })
+            })
+            .collect::<Vec<_>>();
+        tree.write(
+            "webinfo/settings.json",
+            &serde_json::json!({
+                "version": 1, "upstreams": {"foreign": entries}
+            })
+            .to_string(),
+        );
+        assert_eq!(
+            concurrent(),
+            (count - disabled).min(20),
+            "{count}/{disabled}"
+        );
+    }
+    tree.write("webinfo/settings.json", r#"{"version":1}"#);
+    assert_eq!(concurrent(), 2, "restoring YAML restores its concurrent");
+}
+
+#[test]
+fn upstream_saves_retain_management_and_empty_lists_restore_yaml() {
     let tree = Tree::new("differences");
     let ports = ports();
     let first = Stub::start(1, Duration::ZERO);
@@ -1301,17 +1347,22 @@ fn only_differences_are_stored() {
             200
         );
         assert!(json(&tree.text("webinfo/settings.json")).get("upstreams").is_some());
-        // Saving what the YAML says drops the stored list.
+        // Saving the YAML list still explicitly manages this group through settings.
         let yaml_list = json(&original)["foreign"].clone();
         let restore = serde_json::json!({"plugin_tag": "foreign", "upstreams": yaml_list});
         let reply = api(ports.api, "POST", "/api/v1/upstream/config", &restore.to_string()).await;
         assert_eq!(reply.status, 200, "{}", reply.body);
         assert!(
-            json(&tree.text("webinfo/settings.json")).get("upstreams").is_none(),
+            json(&tree.text("webinfo/settings.json"))["upstreams"]["foreign"].is_array(),
             "{}",
             tree.text("webinfo/settings.json")
         );
         assert_eq!(marker(ports.dns, "back.example").await, Some(1));
+
+        let restore = serde_json::json!({"plugin_tag": "foreign", "upstreams": []});
+        let reply = api(ports.api, "POST", "/api/v1/upstream/config", &restore.to_string()).await;
+        assert_eq!(reply.status, 200, "{}", reply.body);
+        assert!(json(&tree.text("webinfo/settings.json")).get("upstreams").is_none());
 
         // The same for the global overrides.
         api(ports.api, "POST", "/api/v1/overrides", r#"{"socks5":"127.0.0.1:10","ecs":"192.0.2.78"}"#).await;
@@ -1320,6 +1371,82 @@ fn only_differences_are_stored() {
         api(ports.api, "POST", "/api/v1/overrides", r#"{"socks5":"127.0.0.1:9","ecs":"192.0.2.77"}"#).await;
         let file = json(&tree.text("webinfo/settings.json"));
         assert!(file.get("proxies").is_none() && file.get("ecs").is_none(), "{file}");
+        shutdown.cancel();
+        task.await.unwrap();
+    });
+}
+
+#[test]
+fn managed_upstreams_hot_apply_all_enabled_peers_and_survive_restart() {
+    let tree = Tree::new("managed-fanout");
+    let ports = ports();
+    let peers = (1..=3)
+        .map(|i| Stub::start(i, Duration::from_millis(30)))
+        .collect::<Vec<_>>();
+    let upstreams = peers
+        .iter()
+        .enumerate()
+        .map(|(i, peer)| udp_entries(peer).replace("tag: a", &format!("tag: peer{i}")) + "\n")
+        .collect::<String>();
+    config(&tree, &ports, &objects("127.0.0.1:9", &upstreams));
+    let live = host(&tree);
+    live.block_on(async {
+        let (shutdown, task) = serve(&live).await;
+        let original = api(ports.api, "GET", "/api/v1/upstream/config", "").await;
+        let mut entries = json(&original.body)["foreign"].clone();
+        let save = serde_json::json!({"plugin_tag": "foreign", "upstreams": entries});
+        assert_eq!(
+            api(
+                ports.api,
+                "POST",
+                "/api/v1/upstream/config",
+                &save.to_string()
+            )
+            .await
+            .status,
+            200
+        );
+        assert!(marker(ports.dns, "all.example").await.is_some());
+        assert_eq!(peers.iter().map(Stub::count).collect::<Vec<_>>(), [1, 1, 1]);
+        entries[1]["enabled"] = serde_json::json!(false);
+        let save = serde_json::json!({"plugin_tag": "foreign", "upstreams": entries});
+        assert_eq!(
+            api(
+                ports.api,
+                "POST",
+                "/api/v1/upstream/config",
+                &save.to_string()
+            )
+            .await
+            .status,
+            200
+        );
+        assert!(marker(ports.dns, "two.example").await.is_some());
+        assert_eq!(peers.iter().map(Stub::count).collect::<Vec<_>>(), [2, 1, 2]);
+        shutdown.cancel();
+        task.await.unwrap();
+    });
+    drop(live);
+    let restarted = host(&tree);
+    restarted.block_on(async {
+        let (shutdown, task) = serve(&restarted).await;
+        assert!(marker(ports.dns, "restart.example").await.is_some());
+        assert_eq!(peers.iter().map(Stub::count).collect::<Vec<_>>(), [3, 1, 3]);
+        let before = peers.iter().map(Stub::count).sum::<usize>();
+        let restore = serde_json::json!({"plugin_tag": "foreign", "upstreams": []});
+        assert_eq!(
+            api(
+                ports.api,
+                "POST",
+                "/api/v1/upstream/config",
+                &restore.to_string()
+            )
+            .await
+            .status,
+            200
+        );
+        assert!(marker(ports.dns, "yaml-limit.example").await.is_some());
+        assert_eq!(peers.iter().map(Stub::count).sum::<usize>(), before + 1);
         shutdown.cancel();
         task.await.unwrap();
     });

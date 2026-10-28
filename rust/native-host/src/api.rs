@@ -2146,11 +2146,11 @@ fn text_matches(value: &str, query: &str, exact: bool) -> bool {
     }
 }
 
-fn projected_query_name(record: &RetainedAuditRecord) -> String {
+fn projected_query_name(record: &RetainedAuditRecord) -> &str {
     if record.qname.as_ref() == "." {
-        ".".to_owned()
+        "."
     } else {
-        record.qname.trim_end_matches('.').to_owned()
+        record.qname.trim_end_matches('.')
     }
 }
 
@@ -2158,23 +2158,27 @@ fn audit_record_matches(record: &RetainedAuditRecord, filter: &AuditFilter) -> b
     let query_match = filter.q.as_ref().is_none_or(|query| {
         let exact = filter.exact;
         let ip_query = normalized_ip(query);
-        let mut values = vec![
+        let client = canonical_ip(record.client_addr.ip()).to_string();
+        let trace_id = record.trace_id.to_string();
+        let common = record.common();
+        let mut values = [
             projected_query_name(record),
-            canonical_ip(record.client_addr.ip()).to_string(),
-            record.trace_id.to_string(),
-        ];
-        values.extend(record.common().domain_set.clone());
-        values.extend(record.common().effective_tag.clone());
-        values.extend(record.common().matched_rule_source.clone());
-        values.extend(record.common().selected_upstream.clone());
-        values.extend(
+            client.as_str(),
+            trace_id.as_str(),
+        ]
+        .into_iter()
+        .chain(common.domain_set.as_deref())
+        .chain(common.effective_tag.as_deref())
+        .chain(common.matched_rule_source.as_deref())
+        .chain(common.selected_upstream.as_deref())
+        .chain(
             record
                 .response_details
                 .answers
                 .iter()
-                .map(|answer| answer.data.clone()),
+                .map(|answer| answer.data.as_str()),
         );
-        values.iter().any(|value| {
+        values.any(|value| {
             let ip_matches = ip_query
                 .as_deref()
                 .is_some_and(|ip| normalized_ip(value).as_deref() == Some(ip));
@@ -2297,9 +2301,10 @@ enum AuditReadFailure {
     Allocation,
 }
 
-fn rank_items(
-    records: &[Arc<RetainedAuditRecord>],
-    key: impl Fn(&RetainedAuditRecord) -> Option<String>,
+fn rank_items<'a, K: Ord>(
+    records: &'a [Arc<RetainedAuditRecord>],
+    key: impl Fn(&'a RetainedAuditRecord) -> Option<K>,
+    mut display: impl FnMut(K) -> String,
     shutdown: &TransportCancellation,
 ) -> Result<Vec<AuditRankItem>, AuditReadFailure> {
     let mut keys = Vec::new();
@@ -2325,7 +2330,10 @@ fn rank_items(
             let _ = keys.next();
             count += 1;
         }
-        items.push(AuditRankItem { key, count });
+        items.push(AuditRankItem {
+            key: display(key),
+            count,
+        });
     }
     items.sort_by(|left, right| {
         right
@@ -2347,6 +2355,61 @@ fn take_rank_items<T>(items: Vec<T>, limit: usize) -> Result<Vec<T>, AuditReadFa
         .map_err(|_| AuditReadFailure::Allocation)?;
     selected.extend(items.into_iter().take(limit));
     Ok(selected)
+}
+
+// Keep raw-name equality/rank labels, but place ASCII-case variants next to
+// each other so canonical domain cardinality can be counted in the same pass.
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct DomainRankKey<'a>(&'a str);
+
+impl Ord for DomainRankKey<'_> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        if self.0 == other.0 {
+            return std::cmp::Ordering::Equal;
+        }
+        self.0
+            .bytes()
+            .map(|b| b.to_ascii_lowercase())
+            .cmp(other.0.bytes().map(|b| b.to_ascii_lowercase()))
+            .then_with(|| self.0.cmp(other.0))
+    }
+}
+
+impl PartialOrd for DomainRankKey<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn domain_rank_response(
+    records: &[Arc<RetainedAuditRecord>],
+    limit: usize,
+    shutdown: &TransportCancellation,
+) -> Result<Response, AuditReadFailure> {
+    let mut previous: Option<&str> = None;
+    let mut distinct = 0_usize;
+    let items = rank_items(
+        records,
+        |record| Some(DomainRankKey(projected_query_name(record))),
+        |key| {
+            if previous.is_none_or(|name| !name.eq_ignore_ascii_case(key.0)) {
+                distinct += 1;
+            }
+            previous = Some(key.0);
+            key.0.to_owned()
+        },
+        shutdown,
+    )?;
+    let mut response = Response::try_json_compact(&take_rank_items(items, limit)?)
+        .map_err(|_| AuditReadFailure::Allocation)?;
+    response
+        .headers
+        .try_reserve(1)
+        .map_err(|_| AuditReadFailure::Allocation)?;
+    response
+        .headers
+        .push(("X-Audit-Distinct-Domains", distinct.to_string()));
+    Ok(response)
 }
 
 fn rank_response(
@@ -2376,19 +2439,12 @@ fn rank_response(
     };
     match kind {
         AuditReadKind::Logs { .. } => unreachable!("logs use their own projection"),
-        AuditReadKind::RankDomain => Response::try_json_compact(&take_rank_items(
-            rank_items(
-                &records,
-                |record| Some(projected_query_name(record)),
-                shutdown,
-            )?,
-            limit,
-        )?)
-        .map_err(|_| AuditReadFailure::Allocation),
+        AuditReadKind::RankDomain => domain_rank_response(&records, limit, shutdown),
         AuditReadKind::RankClient => Response::try_json_compact(&take_rank_items(
             rank_items(
                 &records,
-                |record| Some(canonical_ip(record.client_addr.ip()).to_string()),
+                |record| Some(canonical_ip(record.client_addr.ip())),
+                |ip| ip.to_string(),
                 shutdown,
             )?,
             limit,
@@ -2397,7 +2453,8 @@ fn rank_response(
         AuditReadKind::RankDomainSet => Response::try_json_compact(&take_rank_items(
             rank_items(
                 &records,
-                |record| record.common().domain_set.clone(),
+                |record| record.common().domain_set.as_deref(),
+                str::to_owned,
                 shutdown,
             )?,
             limit,
@@ -2406,7 +2463,8 @@ fn rank_response(
         AuditReadKind::RankEffective => Response::try_json_compact(&take_rank_items(
             rank_items(
                 &records,
-                |record| record.common().effective_tag.clone(),
+                |record| record.common().effective_tag.as_deref(),
+                str::to_owned,
                 shutdown,
             )?,
             limit,
@@ -3726,6 +3784,67 @@ mod tests {
                 .expect("rank signed-64 overflow uses default"),
             20
         );
+    }
+
+    #[test]
+    fn ranks_aggregate_borrowed_names_and_canonical_clients_before_formatting() {
+        let observer = Arc::new(QueryObserver::new(true, [], 10));
+        for (label, client) in [
+            (b'b', "192.0.2.2:53001"),
+            (b'a', "192.0.2.10:53002"),
+            (b'b', "[::ffff:192.0.2.2]:53003"),
+        ] {
+            drop(observer.admit(
+                client.parse().unwrap(),
+                crate::observer::QueryTransport::Udp,
+                &mosdns_dns_core::QuestionInfo {
+                    qname_wire: vec![1, label, 0],
+                    qtype: 1,
+                    qclass: 1,
+                },
+                TransportCancellation::new(),
+            ));
+        }
+        let snapshot = observer.audit_read_snapshot().unwrap();
+        let names = super::rank_items(
+            &snapshot.records,
+            |r| Some(super::projected_query_name(r)),
+            str::to_owned,
+            &TransportCancellation::new(),
+        )
+        .unwrap_or_else(|_| panic!("rank projection failed"));
+        assert_eq!(
+            names
+                .iter()
+                .map(|v| (v.key.as_str(), v.count))
+                .collect::<Vec<_>>(),
+            [("b", 2), ("a", 1)]
+        );
+        let clients = super::rank_items(
+            &snapshot.records,
+            |r| Some(super::canonical_ip(r.client_addr.ip())),
+            |ip| ip.to_string(),
+            &TransportCancellation::new(),
+        )
+        .unwrap_or_else(|_| panic!("rank projection failed"));
+        assert_eq!(
+            clients
+                .iter()
+                .map(|v| (v.key.as_str(), v.count))
+                .collect::<Vec<_>>(),
+            [("192.0.2.2", 2), ("192.0.2.10", 1)]
+        );
+        let canceled = TransportCancellation::new();
+        canceled.cancel();
+        assert!(matches!(
+            super::rank_items(
+                &snapshot.records,
+                |r| Some(super::projected_query_name(r)),
+                str::to_owned,
+                &canceled
+            ),
+            Err(super::AuditReadFailure::Canceled)
+        ));
     }
 
     #[test]

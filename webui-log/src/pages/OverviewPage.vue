@@ -1,7 +1,7 @@
 <script setup>
 import { capabilityState, operationReason, supportsOperation } from '../api/runtimeCapabilities'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { getJSON, getText } from '../api/http'
+import { getJSON, getJSONWithHeaders, getText } from '../api/http'
 import { setError, setSuccess } from '../utils/notice'
 import { formatDateTime } from '../utils/time'
 import {
@@ -12,7 +12,8 @@ import {
   cpuTone,
   latencyTone,
   memoryTone,
-  parseProcessMetrics
+  parseProcessMetrics,
+  parseDistinctDomainCount
 } from '../utils/overviewMetrics'
 import {
   loadUpstreamGroups,
@@ -23,7 +24,7 @@ import {
   upstreamGroupDisplay
 } from '../utils/upstreamStats'
 
-// Ranks return at most 500 keys: the distinct-count cards show "500+" at the limit.
+// Client ranks return at most 500 keys; domains use exact response metadata.
 const RANK_SCAN_LIMIT = 500
 const TOP_ROWS = 20
 // The CPU figure needs two samples; the first refresh takes a second one after this delay.
@@ -272,7 +273,7 @@ const statCards = computed(() => {
     { key: 'latency', title: '平均响应', value: rankingErrors.stats ? '--' : `${stats.averageDurationMs.toFixed(1)} ms`, note: coverage, tone: rankingErrors.stats ? '' : latencyTone(stats.averageDurationMs) },
     { key: 'cache', title: '缓存命中', value: cacheHit.value === null ? '--' : `${cacheHit.value.toFixed(1)}%`, note: '全部命名缓存的累计计数', tone: cacheHitTone(cacheHit.value) },
     { key: 'clients', title: '客户端数量', value: distinctCountText(clientCount.value), note: coverage, tone: '' },
-    { key: 'domains', title: '域名统计', value: distinctCountText(domainCount.value), note: `不同域名 · ${coverage}`, tone: '' },
+    { key: 'domains', title: '域名统计', value: domainCount.value === null ? '--' : domainCount.value.toLocaleString('zh-CN'), note: `不同域名 · ${coverage}`, tone: '' },
     { key: 'cpu', title: 'CPU 占用', value: process.cpuPercent === null ? '--' : `${process.cpuPercent.toFixed(1)}%`, note: processReason || '单核百分比 · 两次刷新之间', tone: cpuTone(process.cpuPercent) },
     { key: 'memory', title: '内存占用', value: memoryMiB === null ? '--' : `${memoryMiB.toFixed(1)} MiB`, note: processReason || '常驻内存 (RSS)', tone: memoryTone(process.residentBytes) }
   ]
@@ -725,7 +726,7 @@ async function reloadOverview(showMessage = false) {
       // Audit ranks use a two-slot, no-queue backend gate: one refresh asks them one
       // after another so it cannot manufacture its own 503s.
       return {
-        domain: await auditPanel(getJSON(`/api/v2/audit/rank/domain?limit=${RANK_SCAN_LIMIT}`)),
+        domain: await auditPanel(getJSONWithHeaders(`/api/v2/audit/rank/domain?limit=${TOP_ROWS}`)),
         client: await auditPanel(getJSON(`/api/v2/audit/rank/client?limit=${RANK_SCAN_LIMIT}`)),
         slowest: await auditPanel(getJSON(`/api/v2/audit/rank/slowest?limit=${TOP_ROWS}`)),
         rules: await auditPanel(getJSON(`/api/v2/audit/rank/effective?limit=${TOP_ROWS}`))
@@ -770,11 +771,11 @@ async function reloadOverview(showMessage = false) {
     const windows = windowsRes.error ? null : windowsRes.data
     stats.coverage = windows ? coverageText(windows.items?.[0]?.coverage_start, windows.generated_at, stats.totalQueries) : ''
 
-    const domains = Array.isArray(rankRes.domain.data) ? rankRes.domain.data : []
+    const domains = Array.isArray(rankRes.domain.data?.data) ? rankRes.domain.data.data : []
     const clients = Array.isArray(rankRes.client.data) ? rankRes.client.data : []
     topDomains.value = domains.slice(0, TOP_ROWS)
     topClients.value = clients.slice(0, TOP_ROWS)
-    domainCount.value = rankRes.domain.error || !supportsOperation('query.rank') ? null : domains.length
+    domainCount.value = rankRes.domain.error || !supportsOperation('query.rank') ? null : parseDistinctDomainCount(rankRes.domain.data?.headers?.get('X-Audit-Distinct-Domains'))
     clientCount.value = rankRes.client.error || !supportsOperation('query.rank') ? null : clients.length
     slowestQueries.value = Array.isArray(rankRes.slowest.data) ? rankRes.slowest.data : []
     domainSetRank.value = Array.isArray(rankRes.rules.data) ? rankRes.rules.data : []

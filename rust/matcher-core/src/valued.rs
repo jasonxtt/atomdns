@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use regex::Regex;
 
-use crate::DomainSuffixMatcher;
+use crate::compact::{CompactIndex, suffix_key};
 use crate::normalize::{NonAsciiRule, normalize};
 use crate::regex::compile_go_compatible;
 
@@ -129,8 +129,9 @@ enum OverlapRule {
 
 /// Immutable valued domain matcher used by the later Go mapper adapter.
 pub struct ValuedDomainMatcher {
-    full: HashMap<String, Arc<ValuedMatchResult>>,
-    domain: DomainSuffixMatcher<Arc<ValuedMatchResult>>,
+    full: CompactIndex,
+    domain: CompactIndex,
+    results: Vec<Arc<ValuedMatchResult>>,
     overlaps: Vec<OverlapRule>,
     rule_count: usize,
     pooled_result_count: usize,
@@ -196,8 +197,9 @@ impl ValuedDomainMatcher {
             }
         }
 
-        let mut pool: HashMap<ValuedMatchResult, Arc<ValuedMatchResult>> = HashMap::new();
-        let mut full: HashMap<String, Arc<ValuedMatchResult>> = HashMap::new();
+        let mut pool = HashMap::new();
+        let mut results = Vec::new();
+        let mut full = Vec::new();
         // `full:` rules that differ only in ASCII case are one rule (approved
         // deviation: they match the same names). Each variant first inherits
         // exactly as in the reference (from its own spelling); the variants'
@@ -231,28 +233,28 @@ impl ValuedDomainMatcher {
             }
             // A rule that differs only by the trailing dot replaces the
             // earlier one, as in the reference's map.
-            full.insert(
+            full.push((
                 full_key(&lowered),
-                intern_result(&mut pool, merged.into_result()),
-            );
+                intern_result(&mut pool, &mut results, merged.into_result()),
+            ));
         }
         drop(index);
 
         let unique_rules = entries.len();
-        let mut domain = DomainSuffixMatcher::new();
+        let mut domain = Vec::new();
         let mut overlaps = Vec::new();
         for (key, effective) in entries {
             let (kind, pattern) = parse_rule(key)?;
             if kind == RuleKind::Full {
                 continue;
             }
-            let result = intern_result(&mut pool, effective.into_result());
+            let result = intern_result(&mut pool, &mut results, effective.into_result());
             match kind {
                 RuleKind::Full => unreachable!("handled above"),
-                RuleKind::Domain => domain.add(pattern, result),
+                RuleKind::Domain => domain.push((suffix_key(&normalize(pattern)), result)),
                 RuleKind::Keyword => overlaps.push(OverlapRule::Keyword {
                     pattern: normalize(pattern),
-                    result,
+                    result: Arc::clone(&results[result]),
                 }),
                 RuleKind::Regexp => {
                     let matcher = compile_go_compatible(pattern).map_err(|error| match error {
@@ -267,17 +269,39 @@ impl ValuedDomainMatcher {
                             error: other.to_string(),
                         },
                     })?;
-                    overlaps.push(OverlapRule::Regexp { matcher, result });
+                    overlaps.push(OverlapRule::Regexp {
+                        matcher,
+                        result: Arc::clone(&results[result]),
+                    });
                 }
             }
         }
 
+        let pooled_result_count = pool.len();
+        drop(pool);
+        // Normalized aliases still replace earlier rules. Do not let the ID
+        // table retain payloads that the old Arc-valued trie would release.
+        // Overlap rules keep their own Arc; only key-index payloads need IDs.
+        CompactIndex::sort_dedup(&mut full);
+        CompactIndex::sort_dedup(&mut domain);
+        let mut remap = HashMap::new();
+        let mut live_results = Vec::new();
+        for (_, id) in full.iter_mut().chain(&mut domain) {
+            *id = *remap.entry(*id).or_insert_with(|| {
+                let next = live_results.len();
+                live_results.push(Arc::clone(&results[*id]));
+                next
+            });
+        }
+        drop(results);
+
         Ok(Self {
-            full,
-            domain,
+            full: CompactIndex::build(full),
+            domain: CompactIndex::build(domain),
+            results: live_results,
             overlaps,
             rule_count: unique_rules - full_rules + full_group_count,
-            pooled_result_count: pool.len(),
+            pooled_result_count,
         })
     }
 
@@ -308,11 +332,11 @@ impl ValuedDomainMatcher {
         let normalized = normalize(name);
         let mut merged = self
             .full
-            .get(&full_key(name))
-            .map(|result| result.as_ref().clone());
+            .get(full_key(name).as_bytes())
+            .map(|id| self.results[id].as_ref().clone());
 
-        if let Some(result) = self.domain.match_normalized(&normalized) {
-            merged = Some(merge_results(merged, result));
+        if let Some(id) = self.domain.suffix(&suffix_key(&normalized)) {
+            merged = Some(merge_results(merged, &self.results[id]));
         }
 
         for overlap in &self.overlaps {
@@ -389,37 +413,32 @@ fn pair_mut<'v, T>(entries: &'v mut [(&str, T)], ancestor: usize, at: usize) -> 
 /// root): a rule with a huge number of labels must not recurse. Labels are
 /// borrowed from the rule strings.
 struct DomainIndex<'a> {
-    nodes: Vec<IndexNode<'a>>,
-}
-
-#[derive(Default)]
-struct IndexNode<'a> {
-    children: HashMap<&'a str, usize>,
-    /// The entry of a rule (`domain:<labels>`) that ends here.
-    entry: Option<usize>,
+    children: HashMap<(usize, &'a str), usize>,
+    entries: Vec<Option<usize>>,
 }
 
 impl<'a> DomainIndex<'a> {
     fn new<T>(entries: &[(&'a str, T)]) -> Self {
-        let mut nodes = vec![IndexNode::default()];
+        // One edge table avoids a HashMap header and tiny allocation per node.
+        // Parent IDs keep identical labels in different branches distinct.
+        let mut children = HashMap::new();
+        let mut node_entries = vec![None];
         for (at, (key, _)) in entries.iter().enumerate() {
             if let Some(pattern) = key.strip_prefix("domain:") {
                 let mut node = 0;
                 for label in pattern.rsplit('.') {
-                    node = match nodes[node].children.get(label) {
-                        Some(&child) => child,
-                        None => {
-                            nodes.push(IndexNode::default());
-                            let child = nodes.len() - 1;
-                            nodes[node].children.insert(label, child);
-                            child
-                        }
-                    };
+                    node = *children.entry((node, label)).or_insert_with(|| {
+                        node_entries.push(None);
+                        node_entries.len() - 1
+                    });
                 }
-                nodes[node].entry = Some(at);
+                node_entries[node] = Some(at);
             }
         }
-        Self { nodes }
+        Self {
+            children,
+            entries: node_entries,
+        }
     }
 
     /// The longest `domain:` rule among those a pattern inherits from (its
@@ -429,12 +448,12 @@ impl<'a> DomainIndex<'a> {
         let mut nearest = None;
         let mut node = 0;
         for (consumed, label) in pattern.rsplit('.').enumerate() {
-            let Some(&child) = self.nodes[node].children.get(label) else {
+            let Some(&child) = self.children.get(&(node, label)) else {
                 break;
             };
             node = child;
             let tail_start = labels - 1 - consumed;
-            if let Some(entry) = self.nodes[node].entry
+            if let Some(entry) = self.entries[node]
                 && (tail_start >= 1 || include_whole)
             {
                 nearest = Some(entry);
@@ -445,15 +464,17 @@ impl<'a> DomainIndex<'a> {
 }
 
 fn intern_result(
-    pool: &mut HashMap<ValuedMatchResult, Arc<ValuedMatchResult>>,
+    pool: &mut HashMap<ValuedMatchResult, usize>,
+    results: &mut Vec<Arc<ValuedMatchResult>>,
     result: ValuedMatchResult,
-) -> Arc<ValuedMatchResult> {
-    if let Some(existing) = pool.get(&result) {
-        return Arc::clone(existing);
+) -> usize {
+    if let Some(&existing) = pool.get(&result) {
+        return existing;
     }
-    let shared = Arc::new(result.clone());
-    pool.insert(result, Arc::clone(&shared));
-    shared
+    let id = results.len();
+    results.push(Arc::new(result.clone()));
+    pool.insert(result, id);
+    id
 }
 
 fn merge_results(
@@ -499,6 +520,25 @@ fn append_joined_value(joined: &mut String, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::{ValuedBuildError, ValuedDomainMatcher, ValuedRule};
+
+    #[test]
+    fn overwritten_normalized_aliases_do_not_keep_dead_payloads() {
+        let matcher = ValuedDomainMatcher::build(&[
+            ValuedRule::new("domain:EXAMPLE.com", 1, [], "old", "old"),
+            ValuedRule::new("domain:example.com", 2, [], "new", "new"),
+            ValuedRule::new("keyword:other", 4, [], "overlap", "overlap"),
+        ])
+        .unwrap();
+        assert_eq!(matcher.results.len(), 1);
+        assert_eq!(
+            matcher.r#match("child.example.com").unwrap().joined_tags,
+            "new"
+        );
+        assert_eq!(
+            matcher.r#match("other.test").unwrap().joined_tags,
+            "overlap"
+        );
+    }
 
     #[test]
     fn full_rules_that_differ_only_in_case_merge_instead_of_overwriting() {
@@ -588,6 +628,48 @@ mod tests {
             .expect("match");
         // Every rule on the chain contributes (the deepest inherits them all).
         assert_eq!(result.joined_tags.split('|').count(), 7);
+    }
+
+    #[test]
+    fn ancestor_edges_preserve_raw_case_and_empty_labels() {
+        let entries = [
+            "domain:",
+            "domain:.",
+            "domain:a",
+            "domain:A",
+            "domain:.a",
+            "domain:a.",
+            "domain:a..b",
+        ]
+        .map(|key| (key, ()));
+        let index = super::DomainIndex::new(&entries);
+        for pattern in [
+            "", ".", "..", "a", "A", "x.a", "x..a", "a.", "x.a.", "x.a..b",
+        ] {
+            for include in [false, true] {
+                let mut tail = if include {
+                    Some(pattern)
+                } else {
+                    pattern.split_once('.').map(|(_, tail)| tail)
+                };
+                let mut expected = None;
+                while let Some(value) = tail {
+                    if let Some(at) = entries
+                        .iter()
+                        .position(|(rule, ())| rule.strip_prefix("domain:") == Some(value))
+                    {
+                        expected = Some(at);
+                        break;
+                    }
+                    tail = value.split_once('.').map(|(_, tail)| tail);
+                }
+                assert_eq!(
+                    index.nearest_ancestor(include, pattern),
+                    expected,
+                    "{pattern:?}/{include}"
+                );
+            }
+        }
     }
 
     #[test]

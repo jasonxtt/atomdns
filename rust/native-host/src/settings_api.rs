@@ -220,20 +220,10 @@ pub(crate) async fn post_upstream(control: &RuntimeControl, body: &[u8]) -> Repl
         entry.use_proxy = Some(entry.proxy_switch());
         entry.use_socks_proxy = None;
     }
-    // Only differences are stored: an empty list, or one that says what the
-    // YAML says, removes the stored list.
-    let canonical = |list: &[UpstreamEntry]| {
-        list.iter()
-            .map(UpstreamEntry::canonical)
-            .collect::<Vec<_>>()
-    };
-    let same_as_yaml = current
-        .config
-        .yaml_defaults
-        .upstreams
-        .get(&tag)
-        .is_some_and(|yaml| canonical(yaml) == canonical(&entries));
-    if entries.is_empty() || same_as_yaml {
+    // Presence records UI/API management, including when the list equals
+    // YAML: managed groups derive concurrency from their enabled entries.
+    // Only an explicit empty list restores YAML list/concurrency semantics.
+    if entries.is_empty() {
         settings.upstreams.remove(&tag);
     } else {
         settings.upstreams.insert(tag, entries);

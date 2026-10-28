@@ -19,6 +19,8 @@ delays the schedule. Python standard library only.
 import argparse
 import bisect
 import json
+import gzip
+import multiprocessing
 import os
 import pathlib
 import random
@@ -202,11 +204,51 @@ def proc_snapshot(event):
     return result
 
 
+def sample_in_process(pids, stop, ready, output, cpu=None):
+    """Read proc outside the sending loop; all processes share monotonic time."""
+    samples = []
+    if cpu is not None:os.sched_setaffinity(0,{cpu})
+    nice = os.nice(10)
+    pathlib.Path(output).with_name('sampler.json').write_text(json.dumps(dict(sampler_pid=os.getpid(), sender_pid=pids['sender'], sampler_nice=nice,affinity=sorted(os.sched_getaffinity(0)))))
+    pids = dict(pids, sampler=os.getpid())
+    next_connections = 0.0
+    try:
+        while not stop.is_set():
+            began = time.monotonic()
+            taken = dict(sample(pids))
+            if began >= next_connections:
+                taken['connections'] = read_connections(pids['sut'])
+                taken['udp'] = read_udp_counters(pids['sut'])
+                next_connections = began + 2
+            samples.append(taken)
+            ready.set()
+            stop.wait(max(0, began + .5 - time.monotonic()))
+        samples.append(dict(sample(pids)))
+    finally:
+        pathlib.Path(output).write_text(json.dumps(samples))
+
+
 def measure(spec):
     out = pathlib.Path(spec['output'])
     out.mkdir(parents=True, exist_ok=True)
     rows = json.loads(pathlib.Path(spec['corpus']).read_text())
-    oracle = json.loads(pathlib.Path(spec['oracle']).read_text())
+    observation = spec.get('observation_only', False)
+    precise = spec.get('precise_timer', False)
+    separate = spec.get('sampling_process', False)
+    sampler_cpu = spec.get('sampler_cpu')
+    extra_pids = spec.get('extra_pids', {})
+    retain_wire = spec.get('retain_wire', False)
+    if (extra_pids or retain_wire) and not observation:raise ValueError('extra resources/wire retention require observation mode')
+    if separate and not observation:raise ValueError('separate sampler is currently restricted to observations')
+    if sampler_cpu is not None and (not separate or type(sampler_cpu) is not int or sampler_cpu < 0):raise ValueError('sampler_cpu requires a separate sampler and nonnegative CPU')
+    if not isinstance(extra_pids,dict) or any(k in {'sut','mock','sender','sampler'} or type(v) is not int or v <= 0 for k,v in extra_pids.items()):raise ValueError('invalid extra resource PID')
+    if precise and (not observation or not hasattr(os, 'timerfd_create')):
+        raise ValueError('precise timer requires Linux timerfd and observation mode')
+    oracle = [] if observation else json.loads(pathlib.Path(spec['oracle']).read_text())
+    if observation:
+        sys.path.insert(0,str(HERE.parent/'memory-validation'))
+        from real_metrics import observed_status
+    raw_replies = gzip.open(out/'responses.jsonl.gz','wt') if observation else None
     expected = {r['index']: r['semantic'] for r in oracle}
     alternatives = {r['index']: tuple(r.get('alt', ())) for r in oracle}
     rate, duration, deadline = spec['rate'], spec['duration'], spec['deadline_s']
@@ -238,7 +280,18 @@ def measure(spec):
         sock.setblocking(False)
         selector.register(sock, selectors.EVENT_READ, i)
         sockets.append(sock)
-    pids = dict(sut=spec['pid'], mock=spec['mock_pid'], sender=os.getpid())
+    pids = dict(sut=spec['pid'], mock=spec['mock_pid'], sender=os.getpid(), **extra_pids)
+    sampler = sampler_stop = None
+    if separate:
+        context = multiprocessing.get_context('spawn')
+        sampler_stop, sampler_ready = context.Event(), context.Event()
+        sampler = context.Process(target=sample_in_process,
+                                  args=(pids, sampler_stop, sampler_ready, str(out/'resources.json'),sampler_cpu))
+        sampler.daemon = True
+        sampler.start()
+        if not sampler_ready.wait(10):
+            sampler_stop.set(); sampler.terminate(); sampler.join()
+            raise RuntimeError('resource sampler not ready')
     samples, active, events, orphan = [], {}, [], 0
     start = time.monotonic() + 1
     for row in data:
@@ -247,22 +300,28 @@ def measure(spec):
         pathlib.Path(spec['start_file']).write_text(json.dumps(dict(start=start)))
     thread = threading.Thread(target=run_events, args=(spec, start, pathlib.Path(spec['root']), spec['api_port'], events), daemon=True)
     thread.start()
-    samples.append(dict(sample(pids), connections=read_connections(spec['pid']), udp=read_udp_counters(spec['pid'])))
+    if not separate:
+        samples.append(dict(sample(pids), connections=read_connections(spec['pid']), udp=read_udp_counters(spec['pid'])))
     next_sample = next_connections = 0.0
     cursor = 0
     end = start + duration
     stop = end + deadline + 0.5
+    send_timer = None
     try:
+        if precise:
+            send_timer = os.timerfd_create(time.CLOCK_MONOTONIC, flags=os.TFD_NONBLOCK | os.TFD_CLOEXEC)
+            selector.register(send_timer, selectors.EVENT_READ, 'schedule')
         while time.monotonic() < stop:
             now = time.monotonic()
             if now >= next_sample:
                 # The connection table of a busy host is expensive to read: every 2 s only.
-                taken = dict(sample(pids))
-                if now >= next_connections:
-                    taken['connections'] = read_connections(spec['pid'])
-                    taken['udp'] = read_udp_counters(spec['pid'])
-                    next_connections = now + 2
-                samples.append(taken)
+                if not separate:
+                    taken = dict(sample(pids))
+                    if now >= next_connections:
+                        taken['connections'] = read_connections(spec['pid'])
+                        taken['udp'] = read_udp_counters(spec['pid'])
+                        next_connections = now + 2
+                    samples.append(taken)
                 next_sample = now + .5
                 # A pending row older than the client deadline is a timeout (kept in the denominator).
                 for key, row in list(active.items()):
@@ -285,7 +344,16 @@ def measure(spec):
                 cursor += 1
                 now = time.monotonic()
             wait_until = data[cursor]['planned'] if cursor < len(data) else end + deadline
-            for event, _ in selector.select(max(0, min(.005, wait_until - time.monotonic()))):
+            if send_timer is not None:
+                os.timerfd_settime(send_timer, flags=os.TFD_TIMER_ABSTIME, initial=wait_until if cursor < len(data) else 0)
+            timeout = .005 if precise else max(0, min(.005, wait_until - time.monotonic()))
+            for event, _ in selector.select(timeout):
+                if event.data == 'schedule':
+                    try:
+                        os.read(send_timer, 8)
+                    except BlockingIOError:
+                        pass
+                    continue
                 for _ in range(32):
                     try:
                         wire = event.fileobj.recv(65535)
@@ -305,23 +373,46 @@ def measure(spec):
                         continue
                     row['finished'] = finished
                     row['rcode'] = value['rcode']
-                    row['status'] = classify(value, expected[row['index']], alternatives[row['index']])
+                    if observation:
+                        item=rows[row['index']]
+                        row['status']=observed_status(value,item['name'],item['type'])
+                        raw_replies.write(json.dumps(dict(seq=row['seq'],index=row['index'],finished=finished,dns=value,**({'wire_hex':wire.hex()} if retain_wire else {})))+'\n')
+                    else:
+                        row['status'] = classify(value, expected[row['index']], alternatives[row['index']])
                     if row['status'] == 'wrong':
                         row['answer'] = [value['rcode'], value['questions'], value['answers'][:4]]
         for row in active.values():
             row['status'] = 'timeout'
-        samples.append(dict(sample(pids), connections=read_connections(spec['pid']), udp=read_udp_counters(spec['pid'])))
+        if not separate:
+            samples.append(dict(sample(pids), connections=read_connections(spec['pid']), udp=read_udp_counters(spec['pid'])))
     finally:
         for sock in sockets:
             sock.close()
         selector.close()
+        if send_timer is not None:
+            os.close(send_timer)
+        if raw_replies is not None:
+            raw_replies.close()
+        if sampler is not None:
+            sampler_stop.set()
+            sampler.join(timeout=10)
+            if sampler.is_alive():
+                sampler.terminate(); sampler.join()
+                raise RuntimeError('resource sampler did not stop')
+            if sampler.exitcode != 0:
+                raise RuntimeError('resource sampler failed')
+            samples = json.loads((out/'resources.json').read_text())
     thread.join(timeout=5)
     # Unmatched packets (wrong ID, unknown key, late after timeout) are counted, not hidden.
-    (out / 'requests.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in data))
+    if observation:
+        with gzip.open(out/'requests.jsonl.gz','wt') as target:
+            for row in data:target.write(json.dumps(row)+'\n')
+    else:
+        (out / 'requests.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in data))
     (out / 'resources.json').write_text(json.dumps(samples))
     (out / 'events.json').write_text(json.dumps(events))
     (out / 'summary.json').write_text(json.dumps(dict(start=start, duration=duration, rate=rate, deadline_s=deadline,
-                                                      rows=len(data), orphan_packets=orphan, events=len(events))))
+                                                      rows=len(data), orphan_packets=orphan, events=len(events), correctness_checked=not observation, sampling_process=separate, precise_timer=precise,retain_wire=retain_wire)))
 
 
 if __name__ == '__main__':

@@ -1,7 +1,7 @@
 # Native typed settings (M1-f1)
 
 Scope: the values the WebUI adjusts at run time — proxy address, ECS address, `aliapi` upstream lists, the `domain_output` generation switches, the `feature_flag` values ([native-feature-flags](native-feature-flags.md)) — as named
-configuration objects referenced with `$tag`, a versioned `webinfo/settings.json` that stores only differences from the YAML, one function that combines
+configuration objects referenced with `$tag`, a versioned `webinfo/settings.json` that stores overrides and managed upstream lists, one function that combines
 both, and hot apply of a change. The reference host's `upstream_overrides.json`, `config_overrides.json`, global `replacements` and
 `domain_generation_settings.json` are **not read**. Evidence: `docs/rust/validation-records/10-08-m1-f1/`. Design notes: the task's `research/design.md`.
 
@@ -32,9 +32,9 @@ Both are non-executable (`exec: $main_proxy` is an error). References are `$tag`
  "upstreams":{"foreign":[{"tag":"cf","enabled":true,"protocol":"tcp","addr":"1.1.1.1","use_proxy":true}]},
  "domain_generation":{"enabled":false,"plugins":{"my_realiplist":{"enabled":false}}}}
 ```
-Only differences are stored: a value equal to what the YAML says (an address, an upstream list, a switch) is removed from the file by the API (sections omitted when empty; keys sorted; two-space indent; trailing newline).
+Addresses and switches store only differences from YAML. A non-empty upstream-list save always retains `upstreams.<tag>`, even when the entries equal YAML: its presence records UI/API management. Only an explicit empty-list save removes that group override and restores the YAML list and concurrency (sections omitted when empty; keys sorted; two-space indent; trailing newline).
 `flags` (`{"<key>": true|false|"<option>"}`) is the one section kept when empty: its presence records the one-time migration of the schema-2 switch files, and every save (any route, the migration) keeps it unchanged unless it is the flag route itself. `upstreams.<tag>` replaces that `aliapi`'s whole YAML list (only `enabled`
-entries compile; `concurrent` stays the YAML value; all entries disabled is an error). Entry fields are the WebUI's: `tag`, `enabled`, `protocol`
+entries compile; `concurrent = min(enabled count, 20)` for settings-managed lists; all entries disabled is an error). Groups without a stored list retain their YAML `concurrent`, bounded by the existing 1..20 limit and available upstream count. This applies identically on startup and hot apply, including settings-generated special groups. Entry fields are the WebUI's: `tag`, `enabled`, `protocol`
 (`udp|tcp|tls|https`, aliases `dot|doh`), `addr` (a scheme-less address gets the protocol's scheme), `dial_addr`, `upstream_query_timeout` (ms), `insecure_skip_verify`, `bootstrap`,
 `bootstrap_version`, `use_proxy` (the reference's `use_socks_proxy` is accepted on input). Refused with a reason: `protocol: aliapi` / signed-API fields, a literal `socks5`,
 `so_mark`, `bind_to_device`, `enable_pipeline`, `enable_http3`, positive `idle_timeout`, `quic`, unknown fields.
@@ -96,7 +96,7 @@ old generation still run on the DNS thread and can delay answers briefly; UDP qu
 ## Migration from the reference override files (M1-f2)
 
 `mosdns-settings-migrate --from <reference dir> [-d <root>] -c <config> --out <dir>` reads `config_overrides.json`, `upstream_overrides.json` and `domain_generation_settings.json`
-(in `webinfo/`, `state/` or the directory itself), compiles the native configuration to get the YAML defaults, and writes `settings.json` (differences only) and `migration-report.txt` to `--out`.
+(in `webinfo/`, `state/` or the directory itself), compiles the native configuration to get the YAML defaults, and writes `settings.json` (address/switch differences plus managed upstream lists) and `migration-report.txt` to `--out`. Mapped upstream lists remain stored even when equal to YAML so their enabled-count concurrency survives migration.
 It never changes its inputs or the native root. Exit code 0: everything mapped; 1: the report lists items that need a person (enabled signed-API entries, `so_mark`/`bind_to_device`/pipeline/HTTP3/QUIC/idle-timeout entries,
 an entry's own `socks5` that differs from the global one, `replacements`, tags the configuration does not have, an enabled entry without a tag); 2: usage, I/O, parse or the migrated settings do not load.
 The reference's rules are reproduced: `use_socks_proxy` unset means "TCP-class protocol and (own address or a `foreign`/`foreignecs` group)"; only those two groups fall back to the global address; UDP never uses a proxy.
@@ -107,5 +107,5 @@ The GET entries of the settings-backed upstream page carry the reference field `
 
 ## Known differences from the reference
 
-No `replacements`; no global override of every `socks5`/`ecs` string (explicit references instead); no implicit proxy for `foreign`/`foreignecs`; `concurrent` is not recomputed from the enabled count;
+No `replacements`; no global override of every `socks5`/`ecs` string (explicit references instead); no implicit proxy for `foreign`/`foreignecs`; unmanaged YAML groups retain explicit `concurrent`, while managed groups derive it from enabled count (up to 20);
 changes apply immediately (the reference asks for a restart on the overrides page); settings are per object tag.
