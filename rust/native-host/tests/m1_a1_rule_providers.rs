@@ -179,6 +179,9 @@ fn providers_and_mapper_give_the_reference_answers() {
         ("re12.srs.example.", &[2], &[77], "sub", "srs_main"),
         // adguard_rule: block rules only, `@@` lines are not exported.
         ("ads.guard.example.", &[5], &[], "ads", "adguard"),
+        // A hosts line that points at 127.0.0.1 blocks its name (changed from the
+        // reference, which ignores such lines).
+        ("hosts.guard.example.", &[5], &[], "ads", "adguard"),
         ("x.wild.guard.example.", &[5], &[], "ads", "adguard"),
         ("trkabc.guard.example.", &[5], &[], "ads", "adguard"),
         ("pat7.guard.example.", &[5], &[], "ads", "adguard"),
@@ -210,7 +213,6 @@ fn providers_and_mapper_give_the_reference_answers() {
         "nocolon.example.",
         "type.example.",
         "sub.plain.guard.example.",
-        "hosts.guard.example.",
         "disabled.guard.example.",
         "re12.srs.example.test.",
         "x.digits.example.",
@@ -303,7 +305,7 @@ fn a_real_query_routes_through_the_mapper_marks() {
             ("ads.guard.example.", 1),
             ("x.wild.guard.example.", 1),
             ("allowed.guard.example.", 5),
-            ("hosts.guard.example.", 0),
+            ("hosts.guard.example.", 1),
             ("7.dig.guard.example.", 1),
             // The direct matcher sees the reference presentation-form name.
             ("_http._tcp.ads.guard.example.", 1),

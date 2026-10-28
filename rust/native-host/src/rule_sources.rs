@@ -18,7 +18,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use mosdns_matcher_core::{IpPrefixList, ValuedDomainMatcher, decode_domain_srs, decode_ip_srs};
+use mosdns_matcher_core::{
+    IpPrefixList, ValuedDomainMatcher, decode_domain_srs, decode_domain_srs_plain, decode_ip_srs,
+};
 use mosdns_upstream_core::TransportCancellation;
 use serde::Serialize;
 
@@ -27,6 +29,7 @@ use crate::config::providers::{
 };
 use crate::managed::PersistGate;
 use crate::policy::IpListHandle;
+use crate::rule_formats::{self, Format, Skipped};
 
 /// A value read whole at each use and replaced whole on publication. A reader
 /// holding the previous `Rc` keeps using that generation until it drops it.
@@ -807,8 +810,12 @@ impl RuleSources {
 
     async fn put_source(&self, provider: &Rc<Provider>, name: String, body: &[u8]) -> Reply {
         let schema = provider.owner().spec.schema;
-        let Ok(request) = providers::parse_source_object(body, schema) else {
-            return Reply::json_error(400, "invalid request body");
+        let request = match providers::parse_source_object(body, schema) {
+            Ok(request) => request,
+            Err(error) if error.contains("unknown format") => {
+                return Reply::json_error(400, &error);
+            }
+            Err(_) => return Reply::json_error(400, "invalid request body"),
         };
         if provider.kind == Kind::Sd
             && (request.files.trim().is_empty() || request.url.trim().is_empty())
@@ -842,6 +849,7 @@ impl RuleSources {
                 existing.kind = request.kind;
                 existing.files = request.files;
                 existing.url = request.url;
+                existing.format = request.format;
                 existing.enabled = request.enabled;
                 if provider.kind == Kind::Sd {
                     existing.enable_regexp = request.enable_regexp;
@@ -943,8 +951,12 @@ impl RuleSources {
     }
 
     fn adguard_request(body: &[u8]) -> Result<SourceEntry, Reply> {
-        let Ok(mut request) = providers::parse_source_object(body, Schema::Adguard) else {
-            return Err(Reply::json_error(400, "Invalid request body"));
+        let mut request = match providers::parse_source_object(body, Schema::Adguard) {
+            Ok(request) => request,
+            Err(error) if error.contains("unknown format") => {
+                return Err(Reply::json_error(400, &error));
+            }
+            Err(_) => return Err(Reply::json_error(400, "Invalid request body")),
         };
         request.name = request.name.trim().to_owned();
         request.url = request.url.trim().to_owned();
@@ -1003,6 +1015,7 @@ impl RuleSources {
         };
         rule.name = request.name;
         rule.url = request.url;
+        rule.format = request.format;
         rule.enabled = request.enabled;
         rule.auto_update = request.auto_update;
         rule.update_interval_hours = request.update_interval_hours;
@@ -1065,6 +1078,8 @@ struct SourceView<'a> {
     kind: &'a str,
     files: &'a str,
     url: &'a str,
+    #[serde(skip_serializing_if = "Format::is_auto")]
+    format: Format,
     enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     enable_regexp: Option<bool>,
@@ -1080,6 +1095,7 @@ fn source_view(entry: &SourceEntry, kind: Kind) -> SourceView<'_> {
         kind: &entry.kind,
         files: &entry.files,
         url: &entry.url,
+        format: entry.format,
         enabled: entry.enabled,
         // `omitempty` in `sd_set_light`; `si_set` has no such field.
         enable_regexp: (kind == Kind::Sd && entry.enable_regexp).then_some(true),
@@ -1095,6 +1111,8 @@ struct RuleView<'a> {
     id: &'a str,
     name: &'a str,
     url: &'a str,
+    #[serde(skip_serializing_if = "Format::is_auto")]
+    format: Format,
     enabled: bool,
     auto_update: bool,
     update_interval_hours: i64,
@@ -1114,6 +1132,7 @@ fn rule_view(entry: &SourceEntry, print_zero: bool) -> RuleView<'_> {
         id: &entry.id,
         name: &entry.name,
         url: &entry.url,
+        format: entry.format,
         enabled: entry.enabled,
         auto_update: entry.auto_update,
         update_interval_hours: entry.update_interval_hours,
@@ -1306,10 +1325,12 @@ async fn attempt(ctx: &Ctx, provider: &Provider, key: &str) -> Result<(), String
         return Err("source changed during the download; result discarded".to_owned());
     }
     let (kind, tag, regexp) = (provider.kind, provider.tag.clone(), current.enable_regexp);
+    let (format, url) = (current.format, current.url.clone());
     crate::diag::debug_line!("{tag}: '{key}' downloaded {} bytes", bytes.len());
-    let count = on_build_thread(move || store_download(kind, &tag, &bytes, &file, regexp))
-        .await
-        .map_err(|error| error.to_string())??;
+    let count =
+        on_build_thread(move || store_download(kind, &tag, &bytes, &file, regexp, format, &url))
+            .await
+            .map_err(|error| error.to_string())??;
     let mut sources = owner.sources.borrow().clone();
     if let Some(entry) = sources.iter_mut().find(|e| provider.key(e) == key) {
         if let Some(count) = count {
@@ -1325,50 +1346,183 @@ async fn attempt(ctx: &Ctx, provider: &Provider, key: &str) -> Result<(), String
     Ok(())
 }
 
-/// Validates downloaded content and replaces the rule file. Returns the
-/// reference rule count for SRS sources.
+/// What a download turns into: the bytes to store (`None` stores the download
+/// as it is), the reference rule count, and what was not used.
+struct Stored {
+    content: Option<Vec<u8>>,
+    count: Option<i64>,
+    usable: usize,
+    skipped: Skipped,
+}
+
+/// Validates downloaded content, converts it when it is not in the format the
+/// provider reads, and replaces the rule file. Returns the reference rule
+/// count for `sd_set_light` and `si_set`.
 fn store_download(
     kind: Kind,
     tag: &str,
     bytes: &[u8],
     file: &Path,
     enable_regexp: bool,
+    format: Format,
+    url: &str,
 ) -> Result<Option<i64>, String> {
-    let count = match kind {
-        Kind::Sd => {
-            let srs = decode_domain_srs(bytes, enable_regexp)
-                .map_err(|error| format!("invalid SRS data: {error}"))?;
-            if let Some(reason) = srs
-                .rules
-                .iter()
-                .find_map(|rule| providers::rule_refusal(tag, rule))
-            {
-                return Err(format!("content refused: {reason}"));
-            }
-            Some(srs.rules.len() as i64)
-        }
-        Kind::Si => {
-            let srs =
-                decode_ip_srs(bytes).map_err(|error| format!("not a valid SRS file: {error}"))?;
-            Some(srs.prefixes.len() as i64)
-        }
-        Kind::Adguard => {
-            let (mut allow, mut deny) = (Vec::new(), Vec::<RuleEntry>::new());
-            providers::parse_adguard_list(tag, "download", bytes, &mut allow, &mut deny);
-            if let Some(reason) = allow
-                .iter()
-                .map(String::as_str)
-                .chain(deny.iter().map(|e| e.rule.as_str()))
-                .find_map(|rule| providers::rule_refusal(tag, rule))
-            {
-                return Err(format!("content refused: {reason}"));
-            }
-            None
-        }
+    let format = rule_formats::resolve(format, bytes, url);
+    let stored = match kind {
+        Kind::Sd => stored_domains(tag, bytes, enable_regexp, format, url)?,
+        Kind::Si => stored_ips(bytes, format, url)?,
+        Kind::Adguard => stored_adguard(tag, bytes, format, url)?,
         Kind::Light => return Err("not a downloadable provider".to_owned()),
     };
-    write_atomically(file, bytes).map_err(|error| format!("write {}: {error}", file.display()))?;
-    Ok(count)
+    let content = stored.content.as_deref().unwrap_or(bytes);
+    write_atomically(file, content)
+        .map_err(|error| format!("write {}: {error}", file.display()))?;
+    let skipped = if stored.skipped.total() > 0 {
+        format!(" ({})", stored.skipped.summary())
+    } else {
+        String::new()
+    };
+    crate::diag::info_line!(
+        "{tag}: stored a {} download: {} usable rules, {} skipped{skipped}",
+        format.as_str(),
+        stored.usable,
+        stored.skipped.total()
+    );
+    Ok(stored.count)
+}
+
+fn refused(tag: &str, rules: &[String]) -> Result<(), String> {
+    match rules
+        .iter()
+        .find_map(|rule| providers::rule_refusal(tag, rule))
+    {
+        Some(reason) => Err(format!("content refused: {reason}")),
+        None => Ok(()),
+    }
+}
+
+fn no_rules(skipped: &Skipped) -> String {
+    format!(
+        "no usable rules in the download (skipped: {})",
+        skipped.summary()
+    )
+}
+
+fn stored_domains(
+    tag: &str,
+    bytes: &[u8],
+    enable_regexp: bool,
+    format: Format,
+    url: &str,
+) -> Result<Stored, String> {
+    if format == Format::Srs {
+        let srs = decode_domain_srs(bytes, enable_regexp)
+            .map_err(|error| format!("invalid SRS data: {error}"))?;
+        refused(tag, &srs.rules)?;
+        return Ok(Stored {
+            content: None,
+            count: Some(srs.rules.len() as i64),
+            usable: srs.rules.len(),
+            skipped: Skipped::default(),
+        });
+    }
+    let mut parsed = rule_formats::parse(bytes, format, enable_regexp)
+        .map_err(|error| format!("invalid {} data: {error}", format.as_str()))?;
+    parsed
+        .skipped
+        .add_many("ip rule in a domain set", parsed.ips.len() as u64);
+    refused(tag, &parsed.domains)?;
+    if parsed.domains.is_empty() {
+        return Err(no_rules(&parsed.skipped));
+    }
+    Ok(Stored {
+        content: Some(rule_formats::domain_file(&parsed.domains, format, url)),
+        count: Some(parsed.domains.len() as i64),
+        usable: parsed.domains.len(),
+        skipped: parsed.skipped,
+    })
+}
+
+fn stored_ips(bytes: &[u8], format: Format, url: &str) -> Result<Stored, String> {
+    if format == Format::Srs {
+        let srs = decode_ip_srs(bytes).map_err(|error| format!("not a valid SRS file: {error}"))?;
+        return Ok(Stored {
+            content: None,
+            count: Some(srs.prefixes.len() as i64),
+            usable: srs.prefixes.len(),
+            skipped: Skipped::default(),
+        });
+    }
+    let mut parsed = rule_formats::parse(bytes, format, false)
+        .map_err(|error| format!("invalid {} data: {error}", format.as_str()))?;
+    parsed
+        .skipped
+        .add_many("domain rule in an IP set", parsed.domains.len() as u64);
+    if parsed.ips.is_empty() {
+        return Err(no_rules(&parsed.skipped));
+    }
+    Ok(Stored {
+        content: Some(rule_formats::ip_file(&parsed.ips, format, url)),
+        count: Some(parsed.ips.len() as i64),
+        usable: parsed.ips.len(),
+        skipped: parsed.skipped,
+    })
+}
+
+fn stored_adguard(tag: &str, bytes: &[u8], format: Format, url: &str) -> Result<Stored, String> {
+    if format == Format::Text {
+        // AdGuard and hosts text is stored as it is (exceptions included).
+        let (mut allow, mut deny) = (Vec::new(), Vec::<RuleEntry>::new());
+        let usable = providers::parse_adguard_list(tag, "download", bytes, &mut allow, &mut deny);
+        if allow.len() + deny.len() >= rule_formats::MAX_RULES {
+            return Err(format!(
+                "more than {} rules in one file",
+                rule_formats::MAX_RULES
+            ));
+        }
+        if usable > 0 && rule_formats::is_adguard_text(bytes) {
+            let rules: Vec<String> = allow
+                .into_iter()
+                .chain(deny.into_iter().map(|entry| entry.rule))
+                .collect();
+            refused(tag, &rules)?;
+            return Ok(Stored {
+                content: None,
+                count: None,
+                usable: usable as usize,
+                skipped: Skipped::default(),
+            });
+        }
+    }
+    let (domains, mut skipped) = if format == Format::Srs {
+        // A block list must not match more than the file says.
+        let srs = decode_domain_srs_plain(bytes, true)
+            .map_err(|error| format!("invalid SRS data: {error}"))?;
+        let mut skipped = Skipped::default();
+        skipped.add_many("logical or conditional rule", srs.skipped);
+        if !srs.complete {
+            skipped.add_many("stopped before the end of the file", 1);
+        }
+        (srs.rules, skipped)
+    } else {
+        let mut parsed = rule_formats::parse(bytes, format, true)
+            .map_err(|error| format!("invalid {} data: {error}", format.as_str()))?;
+        parsed
+            .skipped
+            .add_many("ip rule in a block list", parsed.ips.len() as u64);
+        (parsed.domains, parsed.skipped)
+    };
+    refused(tag, &domains)?;
+    let (content, written) = rule_formats::adguard_file(&domains, &mut skipped, format, url);
+    if written == 0 {
+        return Err(no_rules(&skipped));
+    }
+    Ok(Stored {
+        content: Some(content),
+        count: None,
+        usable: written,
+        skipped,
+    })
 }
 
 // ----- rebuilds --------------------------------------------------------------
@@ -1976,6 +2130,345 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
             .collect();
         assert!(leftovers.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ----- subscription formats ------------------------------------------------
+
+    fn scratch(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("rule-formats-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn spec(schema: Schema, root: &Path) -> ManifestSpec {
+        ManifestSpec {
+            tag: "t".into(),
+            schema,
+            manifest: root.join("manifest.json"),
+            dir: root.to_path_buf(),
+            root_dir: root.to_path_buf(),
+            socks5: String::new(),
+        }
+    }
+
+    fn source(id: &str, files: &str, regexp: bool) -> SourceEntry {
+        SourceEntry {
+            id: id.into(),
+            name: id.into(),
+            files: files.into(),
+            enabled: true,
+            enable_regexp: regexp,
+            ..SourceEntry::default()
+        }
+    }
+
+    #[test]
+    fn a_text_download_is_stored_converted_and_loaded_back() {
+        let root = scratch("sd");
+        let file = root.join("rules.txt");
+        let list =
+            b"# list\nDOMAIN-SUFFIX,suffix.example.com\nfull:www.example.org\n*.wild.example.net\n\
+                     192.0.2.0/24\nPROCESS-NAME,x\n";
+        for regexp in [false, true] {
+            let count = store_download(
+                Kind::Sd,
+                "t",
+                list,
+                &file,
+                regexp,
+                Format::Auto,
+                "https://example.com/list.conf",
+            )
+            .unwrap();
+            let text = std::fs::read_to_string(&file).unwrap();
+            assert!(
+                text.starts_with("# rtdns: converted from text https://example.com/list.conf\n")
+            );
+            let spec = spec(Schema::Sd, &root);
+            let entry = source("a", file.to_str().unwrap(), regexp);
+            let (rules, counts) = providers::load_sd(&spec, &[entry], None);
+            let rules: Vec<&str> = rules.iter().map(|r| r.rule.as_str()).collect();
+            let mut expected = vec!["domain:suffix.example.com", "full:www.example.org"];
+            if regexp {
+                expected.push("regexp:^[^.]+\\.wild\\.example\\.net$");
+            }
+            assert_eq!(rules, expected);
+            assert_eq!(count, Some(expected.len() as i64));
+            assert_eq!(counts, [("a".to_owned(), expected.len() as i64)]);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_failed_conversion_keeps_the_old_file() {
+        let root = scratch("keep");
+        let file = root.join("rules.txt");
+        std::fs::write(&file, b"domain:old.example.com\n").unwrap();
+        let url = "https://example.com/x";
+        for (kind, bytes) in [
+            (Kind::Sd, &b"<html>Not Found</html>"[..]),
+            (Kind::Sd, b"192.0.2.0/24\n"),
+            (Kind::Si, b"example.com\n"),
+            (Kind::Adguard, b"192.0.2.0/24\n"),
+            (Kind::Sd, b"payload:\n  - '*'\n"),
+        ] {
+            let result = store_download(kind, "t", bytes, &file, true, Format::Auto, url);
+            assert!(result.is_err(), "{kind:?} {bytes:?}");
+        }
+        assert_eq!(std::fs::read(&file).unwrap(), b"domain:old.example.com\n");
+        let refused = store_download(
+            Kind::Sd,
+            "t",
+            b"regexp:\\p{L}+\n",
+            &file,
+            true,
+            Format::Text,
+            url,
+        );
+        assert!(refused.unwrap_err().contains("content refused"));
+        assert_eq!(std::fs::read(&file).unwrap(), b"domain:old.example.com\n");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_ip_download_is_stored_converted_and_loaded_back() {
+        let root = scratch("si");
+        let file = root.join("ip.txt");
+        let count = store_download(
+            Kind::Si,
+            "t",
+            b"{\"version\":2,\"rules\":[{\"ip_cidr\":[\"192.0.2.0/24\",\"2001:db8::/32\"]},{\"domain\":[\"a.example.com\"]}]}",
+            &file,
+            false,
+            Format::Auto,
+            "https://example.com/ip.json",
+        )
+        .unwrap();
+        assert_eq!(count, Some(2));
+        let (list, counts) = providers::load_si(
+            &spec(Schema::Si, &root),
+            &[source("ip", file.to_str().unwrap(), false)],
+            None,
+        );
+        assert_eq!(counts, [("ip".to_owned(), 2)]);
+        assert!(list.contains("192.0.2.9".parse().unwrap()));
+        assert!(list.contains("2001:db8::7".parse().unwrap()));
+        assert!(!list.contains("198.51.100.1".parse().unwrap()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn adguard_text_is_kept_and_other_formats_are_converted() {
+        let root = scratch("adguard");
+        let file = root.join("1.rules");
+        let url = "https://example.com/list";
+        let adguard = b"! title\n||ads.example.com^\n@@||ok.example.com^\n0.0.0.0 hosts.example.org\n127.0.0.1 localhost\n";
+        assert_eq!(
+            store_download(Kind::Adguard, "t", adguard, &file, false, Format::Auto, url).unwrap(),
+            None
+        );
+        assert_eq!(std::fs::read(&file).unwrap(), adguard);
+        let load = |entry: &SourceEntry| {
+            let (rules, counts) = providers::load_adguard(
+                &spec(Schema::Adguard, &root),
+                std::slice::from_ref(entry),
+                false,
+                None,
+            );
+            let deny: Vec<String> = rules.deny.iter().map(|e| e.rule.clone()).collect();
+            (rules.allow, deny, counts)
+        };
+        let entry = source("1", "", false);
+        let (allow, deny, counts) = load(&entry);
+        assert_eq!(allow, ["domain:ok.example.com"]);
+        assert_eq!(deny, ["domain:ads.example.com", "full:hosts.example.org"]);
+        assert_eq!(counts, [("1".to_owned(), 3)]);
+
+        let clash = b"payload:\n  - '+.suffix.example.com'\n  - 'www.example.org'\n  - DOMAIN-KEYWORD,track\n";
+        store_download(
+            Kind::Adguard,
+            "t",
+            clash,
+            &file,
+            false,
+            Format::Auto,
+            "https://example.com/c.yaml",
+        )
+        .unwrap();
+        let (allow, deny, _) = load(&entry);
+        assert!(allow.is_empty());
+        assert_eq!(
+            deny,
+            [
+                "domain:suffix.example.com",
+                "full:www.example.org",
+                "regexp:track"
+            ]
+        );
+
+        let classic = b"DOMAIN-SUFFIX,a.example.com\nDOMAIN,b.example.com\n";
+        store_download(
+            Kind::Adguard,
+            "t",
+            classic,
+            &file,
+            false,
+            Format::Auto,
+            "https://example.com/c.list",
+        )
+        .unwrap();
+        assert_eq!(
+            load(&entry).1,
+            ["domain:a.example.com", "full:b.example.com"]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_format_field_is_written_only_when_set() {
+        let mut sources = vec![SourceEntry {
+            name: "a".into(),
+            url: "https://example.com/a.yaml".into(),
+            format: Format::Yaml,
+            ..SourceEntry::default()
+        }];
+        let sd = String::from_utf8(manifest_bytes(Kind::Sd, &mut sources.clone())).unwrap();
+        assert!(sd.contains(
+            "\"url\": \"https://example.com/a.yaml\",\n    \"format\": \"yaml\",\n    \"enabled\""
+        ));
+        let back =
+            providers::parse_source_object(br#"{"name":"a","format":"YAML"}"#, Schema::Sd).unwrap();
+        assert_eq!(back.format, Format::Yaml);
+        sources[0].format = Format::Auto;
+        let plain = String::from_utf8(manifest_bytes(Kind::Sd, &mut sources.clone())).unwrap();
+        assert!(!plain.contains("format"));
+        let mut rules = vec![SourceEntry {
+            id: "1".into(),
+            format: Format::Json,
+            ..SourceEntry::default()
+        }];
+        let adguard = String::from_utf8(manifest_bytes(Kind::Adguard, &mut rules)).unwrap();
+        assert!(adguard.contains("\"format\": \"json\""));
+        rules[0].format = Format::Auto;
+        assert!(
+            !String::from_utf8(manifest_bytes(Kind::Adguard, &mut rules))
+                .unwrap()
+                .contains("format")
+        );
+        let view = serde_json::to_string(&source_view(&sources[0], Kind::Sd)).unwrap();
+        assert!(!view.contains("format"));
+    }
+
+    #[test]
+    fn a_mixed_text_file_is_converted_not_kept_as_adguard_text() {
+        let root = scratch("mixed");
+        let file = root.join("1.rules");
+        let url = "https://example.com/mixed.txt";
+        let mixed = b"DOMAIN-SUFFIX,ads.example.com\ntracker.example.net\n";
+        store_download(Kind::Adguard, "t", mixed, &file, false, Format::Auto, url).unwrap();
+        let (rules, _) = providers::load_adguard(
+            &spec(Schema::Adguard, &root),
+            &[source("1", "", false)],
+            false,
+            None,
+        );
+        let deny: Vec<&str> = rules.deny.iter().map(|e| e.rule.as_str()).collect();
+        assert_eq!(
+            deny,
+            ["domain:ads.example.com", "domain:tracker.example.net"]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_block_list_from_srs_leaves_out_logical_rules() {
+        use std::io::Write as _;
+        // keyword ad | logical(keyword xy), inverted | keyword zz
+        let kw = |word: &[u8]| {
+            let mut item = vec![3, 1, word.len() as u8];
+            item.extend(word);
+            item
+        };
+        let mut body = vec![3, 0];
+        body.extend(kw(b"ad"));
+        body.push(0xff);
+        body.extend([1, 0, 1, 0]);
+        body.extend(kw(b"xy"));
+        body.extend([0xff, 1, 0]);
+        body.extend(kw(b"zz"));
+        body.push(0xff);
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&body).unwrap();
+        let mut file_bytes = b"SRS\x03".to_vec();
+        file_bytes.extend(encoder.finish().unwrap());
+        let root = scratch("srs-block");
+        let file = root.join("1.rules");
+        store_download(
+            Kind::Adguard,
+            "t",
+            &file_bytes,
+            &file,
+            false,
+            Format::Auto,
+            "https://example.com/ads.srs",
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(
+            text.contains("/ad/") && text.contains("/zz/") && !text.contains("xy"),
+            "{text}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_hosts_list_cannot_expand_past_the_rule_limit() {
+        let root = scratch("cap");
+        let file = root.join("1.rules");
+        std::fs::write(&file, b"keep\n").unwrap();
+        let mut list = String::new();
+        for _ in 0..1_100 {
+            list.push_str("0.0.0.0");
+            list.push_str(&" a.a".repeat(2_000));
+            list.push('\n');
+        }
+        let error = store_download(
+            Kind::Adguard,
+            "t",
+            list.as_bytes(),
+            &file,
+            false,
+            Format::Auto,
+            "https://example.com/hosts",
+        )
+        .unwrap_err();
+        assert!(error.contains("more than"), "{error}");
+        assert_eq!(std::fs::read(&file).unwrap(), b"keep\n");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_srs_address_that_returns_a_page_fails_and_keeps_the_file() {
+        let root = scratch("srs-page");
+        let file = root.join("rules.srs");
+        std::fs::write(&file, b"old").unwrap();
+        let page = b"<html>Not Found</html>\ndomain:page.example.com\n";
+        for kind in [Kind::Sd, Kind::Si, Kind::Adguard] {
+            let result = store_download(
+                kind,
+                "t",
+                page,
+                &file,
+                true,
+                Format::Auto,
+                "https://example.com/geo.srs",
+            );
+            assert!(result.is_err(), "{kind:?}");
+            assert_eq!(std::fs::read(&file).unwrap(), b"old", "{kind:?}");
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 }

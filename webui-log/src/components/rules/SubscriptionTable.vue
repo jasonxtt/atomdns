@@ -5,7 +5,7 @@ import { loadNativeOnlineCatalogs } from '../../api/nativeManagement'
 import { operationReason, supportsOperation } from '../../api/runtimeCapabilities'
 import { openConfirm } from '../../utils/confirm'
 import { clearTopNotice, setError, setSuccess } from '../../utils/notice'
-import { inferFromUrl, isDownloaded, ruleFields, sortRules } from '../../utils/subscription'
+import { SUBSCRIPTION_FORMATS, inferFromUrl, isDownloaded, ruleFields, sortRules, withFormat } from '../../utils/subscription'
 import { formatDateTime } from '../../utils/time'
 
 // The one table for online subscriptions and AdGuard rules: name, address, enabled,
@@ -42,6 +42,7 @@ const editor = reactive({
   name: '',
   url: '',
   files: '',
+  format: 'auto',
   enabled: true,
   auto_update: true,
   enable_regexp: false,
@@ -96,7 +97,7 @@ function reloadSoon() {
 function resetEditor() {
   Object.assign(editor, {
     open: true, saving: false, editing: false, readOnlyType: false, id: '', oldName: '', type: props.catalogs[0]?.type || '',
-    name: '', url: '', files: '', enabled: true, auto_update: true, enable_regexp: false, update_interval_hours: 24
+    name: '', url: '', files: '', format: 'auto', enabled: true, auto_update: true, enable_regexp: false, update_interval_hours: 24
   })
   touched.name = false
   touched.files = false
@@ -121,6 +122,7 @@ function beginEdit(rule) {
     name: String(rule.name || ''),
     url: String(rule.url || ''),
     files: String(rule.files || ''),
+    format: String(rule.format || 'auto'),
     enabled: Boolean(rule.enabled),
     auto_update: Boolean(rule.auto_update),
     enable_regexp: Boolean(rule.enable_regexp),
@@ -170,8 +172,8 @@ async function save() {
   try {
     if (adguard.value) {
       const payload = adguardPayload()
-      if (editor.id) await putJSON(`/plugins/adguard/rules/${encodeURIComponent(editor.id)}`, { ...ruleFields(raw), ...payload })
-      else await postJSON('/plugins/adguard/rules', payload)
+      if (editor.id) await putJSON(`/plugins/adguard/rules/${encodeURIComponent(editor.id)}`, withFormat(ruleFields(raw), payload, editor.format))
+      else await postJSON('/plugins/adguard/rules', withFormat({}, payload, editor.format))
       setSuccess(editor.id ? 'AdGuard 规则已更新' : 'AdGuard 规则已新增')
       editor.open = false
       await load()
@@ -180,7 +182,7 @@ async function save() {
     const payload = diversionPayload()
     const tag = tagOf(editor.type)
     if (!tag) throw new Error(`无效的类型: ${editor.type}`)
-    await putJSON(itemPath(tag, payload.name), { ...ruleFields(raw), ...payload })
+    await putJSON(itemPath(tag, payload.name), withFormat(ruleFields(raw), payload, editor.format))
     // A renamed record is a new record: the old one goes.
     if (editor.oldName && editor.oldName !== payload.name) await deleteRequest(itemPath(tag, editor.oldName))
     setSuccess(editor.editing ? '订阅已更新' : '订阅已新增')
@@ -343,6 +345,10 @@ onBeforeUnmount(() => {
               <label>本地文件</label>
               <input v-model="editor.files" placeholder="例如 srs/example.srs" @input="touched.files = true" />
             </template>
+            <label>格式</label>
+            <select v-model="editor.format" aria-label="订阅格式">
+              <option v-for="item in SUBSCRIPTION_FORMATS" :key="item.value" :value="item.value">{{ item.label }}</option>
+            </select>
             <label>更新间隔（小时）</label>
             <input v-model.number="editor.update_interval_hours" type="number" min="1" />
             <label>启用</label>

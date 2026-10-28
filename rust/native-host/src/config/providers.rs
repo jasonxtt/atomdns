@@ -9,6 +9,7 @@
 //! this module writes.
 
 use std::io::Read;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -25,6 +26,7 @@ use super::{
     ConfigError, RawPlugin, RawValue, expect_integer, expect_map, expect_sequence, expect_string,
     policy_strings, resolve_relative,
 };
+use crate::rule_formats::{self, Format};
 use crate::special_groups::CandidateInputSet;
 
 /// The largest provider file read into memory.
@@ -210,6 +212,8 @@ pub(crate) struct SourceEntry {
     pub(crate) auto_update: bool,
     pub(crate) update_interval_hours: i64,
     pub(crate) rule_count: i64,
+    /// How the download is read; `auto` is not written to the manifest.
+    pub(crate) format: Format,
     /// The RFC 3339 text exactly as read (or written); `None` is the zero time.
     pub(crate) last_updated: Option<String>,
 }
@@ -235,6 +239,7 @@ impl Schema {
             | "auto_update"
             | "update_interval_hours"
             | "rule_count"
+            | "format"
             | "last_updated" => true,
             "id" => self == Self::Adguard,
             "type" | "files" => self != Self::Adguard,
@@ -340,7 +345,7 @@ impl<'de> serde::de::DeserializeSeed<'de> for Schema {
                 mut seq: A,
             ) -> Result<Self::Value, A::Error> {
                 let mut out = Vec::new();
-                while let Some(entry) = seq.next_element_seed(EntrySeed(self.0))? {
+                while let Some(entry) = seq.next_element_seed(EntrySeed(self.0, false))? {
                     out.push(entry);
                 }
                 Ok(out)
@@ -350,7 +355,9 @@ impl<'de> serde::de::DeserializeSeed<'de> for Schema {
     }
 }
 
-struct EntrySeed(Schema);
+/// One source object; `strict` (API bodies) refuses a `format` value this host
+/// does not know, a manifest keeps the source and reads it as `auto`.
+struct EntrySeed(Schema, bool);
 
 impl<'de> serde::de::DeserializeSeed<'de> for EntrySeed {
     type Value = SourceEntry;
@@ -359,7 +366,7 @@ impl<'de> serde::de::DeserializeSeed<'de> for EntrySeed {
         self,
         deserializer: D,
     ) -> Result<Self::Value, D::Error> {
-        struct Object(Schema);
+        struct Object(Schema, bool);
         impl<'de> serde::de::Visitor<'de> for Object {
             type Value = SourceEntry;
 
@@ -440,13 +447,27 @@ impl<'de> serde::de::DeserializeSeed<'de> for EntrySeed {
                         ("enabled", Value::Bool(flag)) => entry.enabled = flag,
                         ("enable_regexp", Value::Bool(flag)) => entry.enable_regexp = flag,
                         ("auto_update", Value::Bool(flag)) => entry.auto_update = flag,
+                        ("format", Value::String(text)) => match Format::parse(&text) {
+                            Some(format) => entry.format = format,
+                            None if self.1 => {
+                                return Err(A::Error::custom(format!("unknown format {text:?}")));
+                            }
+                            None => crate::diag::warn_line!(
+                                "rule source '{}': unknown format {text:?}, using auto",
+                                entry.name
+                            ),
+                        },
+                        ("format", _) if !self.1 => crate::diag::warn_line!(
+                            "rule source '{}': format is not a string, using auto",
+                            entry.name
+                        ),
                         _ => return Err(wrong()),
                     }
                 }
                 Ok(entry)
             }
         }
-        deserializer.deserialize_map(Object(self.0))
+        deserializer.deserialize_map(Object(self.0, self.1))
     }
 }
 
@@ -512,7 +533,7 @@ pub(crate) fn parse_source_object(bytes: &[u8], schema: Schema) -> Result<Source
     if text.trim_start().starts_with("null") {
         return Ok(SourceEntry::default());
     }
-    EntrySeed(schema)
+    EntrySeed(schema, true)
         .deserialize(&mut deserializer)
         .map_err(|e| e.to_string())
 }
@@ -719,26 +740,70 @@ pub(crate) fn load_sd(
             }
         };
         let name: Arc<str> = Arc::from(source.name.as_str());
-        match decode_domain_srs(&bytes, source.enable_regexp) {
-            Ok(srs) => {
-                if !srs.complete {
-                    crate::diag::warn_line!(
-                        "{tag}: source '{}' ended early; using the rules read so far",
-                        source.name
-                    );
+        let rules = if rule_formats::is_srs(&bytes) {
+            match decode_domain_srs(&bytes, source.enable_regexp) {
+                Ok(srs) => {
+                    if !srs.complete {
+                        crate::diag::warn_line!(
+                            "{tag}: source '{}' ended early; using the rules read so far",
+                            source.name
+                        );
+                    }
+                    Some(srs.rules)
                 }
-                counts.push((source.name.clone(), srs.rules.len() as i64));
-                out.extend(srs.rules.into_iter().map(|rule| RuleEntry {
-                    rule,
-                    source: Some(Arc::clone(&name)),
-                }));
+                Err(error) => {
+                    crate::diag::warn_line!("{tag}: source '{}': {error}", source.name);
+                    None
+                }
             }
-            Err(error) => {
-                crate::diag::warn_line!("{tag}: source '{}': {error}", source.name);
-            }
+        } else {
+            read_text_domains(tag, source, &bytes)
+        };
+        if let Some(rules) = rules {
+            counts.push((source.name.clone(), rules.len() as i64));
+            out.extend(rules.into_iter().map(|rule| RuleEntry {
+                rule,
+                source: Some(Arc::clone(&name)),
+            }));
         }
     }
     (out, counts)
+}
+
+/// The domain rules of a source file that is not SRS: the text a download was
+/// converted to, or a file placed by hand.
+fn read_text_domains(tag: &str, source: &SourceEntry, bytes: &[u8]) -> Option<Vec<String>> {
+    match rule_formats::parse_text_lines(bytes, source.enable_regexp) {
+        Ok(parsed) if parsed.domains.is_empty() => {
+            crate::diag::warn_line!("{tag}: source '{}' has no usable rules", source.name);
+            None
+        }
+        Ok(parsed) => {
+            if parsed.skipped.total() > 0 {
+                crate::diag::warn_line!(
+                    "{tag}: source '{}': {} lines not used ({})",
+                    source.name,
+                    parsed.skipped.total(),
+                    parsed.skipped.summary()
+                );
+            }
+            Some(parsed.domains)
+        }
+        Err(error) => {
+            crate::diag::warn_line!("{tag}: source '{}': {error}", source.name);
+            None
+        }
+    }
+}
+
+/// The prefixes of an `si_set` source file: SRS, or CIDR text.
+fn read_prefixes(bytes: &[u8]) -> Result<Vec<(IpAddr, u8)>, String> {
+    if rule_formats::is_srs(bytes) {
+        return decode_ip_srs(bytes)
+            .map(|srs| srs.prefixes)
+            .map_err(|error| error.to_string());
+    }
+    rule_formats::parse_text_lines(bytes, false).map(|parsed| parsed.ips)
 }
 
 /// `si_set`: the CIDRs of every enabled source's `.srs` file. A missing or
@@ -767,12 +832,12 @@ pub(crate) fn load_si(
         match read_file(&file, &mut inputs) {
             // A missing file is "not there yet", not an error.
             Ok(None) => {}
-            Ok(Some(bytes)) => match decode_ip_srs(&bytes) {
-                Ok(srs) => {
+            Ok(Some(bytes)) => match read_prefixes(&bytes) {
+                Ok(prefixes) => {
                     // Prefixes read before a decode problem stay, as in the
                     // reference loader.
-                    count = srs.prefixes.len() as i64;
-                    for (address, bits) in srs.prefixes {
+                    count = prefixes.len() as i64;
+                    for (address, bits) in prefixes {
                         list.append(address, bits);
                     }
                 }
@@ -861,6 +926,7 @@ pub(crate) fn parse_adguard_list(
     deny: &mut Vec<RuleEntry>,
 ) -> i64 {
     let mut count = 0;
+    let start = allow.len() + deny.len();
     for line in bytes.split(|byte| *byte == b'\n') {
         if line.len() >= MAX_LINE_BYTES {
             crate::diag::warn_line!(
@@ -869,19 +935,26 @@ pub(crate) fn parse_adguard_list(
             break;
         }
         let line = String::from_utf8_lossy(line);
-        let Some((is_allow, rule)) = adguard_line(&line) else {
-            continue;
-        };
-        let invalid = rule.strip_prefix("regexp:").is_some_and(|pattern| {
-            mosdns_matcher_core::check_go_regexp(pattern).is_err_and(|e| e.is_invalid_in_go())
-        });
-        if !invalid {
-            count += 1;
-        }
-        if is_allow {
-            allow.push(rule);
-        } else {
-            deny.push(RuleEntry { rule, source: None });
+        for (is_allow, rule) in adguard_rules(&line) {
+            // A hosts line can name thousands of hosts; bound what one list yields.
+            if allow.len() + deny.len() - start >= rule_formats::MAX_RULES {
+                crate::diag::warn_line!(
+                    "{tag}: rule list '{name}' has more than {} rules; the rest is ignored",
+                    rule_formats::MAX_RULES
+                );
+                return count;
+            }
+            let invalid = rule.strip_prefix("regexp:").is_some_and(|pattern| {
+                mosdns_matcher_core::check_go_regexp(pattern).is_err_and(|e| e.is_invalid_in_go())
+            });
+            if !invalid {
+                count += 1;
+            }
+            if is_allow {
+                allow.push(rule);
+            } else {
+                deny.push(RuleEntry { rule, source: None });
+            }
         }
     }
     count
@@ -953,6 +1026,26 @@ fn is_block_body(text: &str) -> bool {
 /// `[\w.\-]+`
 fn is_host_body(text: &str) -> bool {
     !text.is_empty() && text.bytes().all(|b| is_word(b) || matches!(b, b'.' | b'-'))
+}
+
+/// The rules of one filter-list line: those of [`adguard_line`], or one
+/// `full:` block rule per name of a hosts line that points at `0.0.0.0`,
+/// `127.0.0.1`, `::` or `::1` (local names such as `localhost` are left out).
+pub(crate) fn adguard_rules(raw: &str) -> Vec<(bool, String)> {
+    let mut tokens = raw.split_whitespace();
+    if matches!(tokens.next(), Some("0.0.0.0" | "127.0.0.1" | "::" | "::1")) {
+        let names: Vec<&str> = tokens.take_while(|token| !token.starts_with('#')).collect();
+        if !names.is_empty() {
+            return names
+                .into_iter()
+                .filter(|name| {
+                    is_host_body(name) && name.contains('.') && !rule_formats::is_local_name(name)
+                })
+                .map(|name| (false, format!("full:{}", name.to_ascii_lowercase())))
+                .collect();
+        }
+    }
+    adguard_line(raw).into_iter().collect()
 }
 
 /// One filter-list line to the rule it contributes, if any: `(true, rule)` for
@@ -1761,5 +1854,81 @@ mod tests {
             adguard_line("0.0.0.0"),
             Some((false, "full:0.0.0.0".to_owned()))
         );
+    }
+
+    #[test]
+    fn hosts_lines_block_their_names() {
+        let rules = |line: &str| -> Vec<(bool, String)> { adguard_rules(line) };
+        assert_eq!(
+            rules("0.0.0.0 Ad.Example.com"),
+            [(false, "full:ad.example.com".to_owned())]
+        );
+        assert_eq!(
+            rules("127.0.0.1\ta.example.com b.example.org # note"),
+            [
+                (false, "full:a.example.com".to_owned()),
+                (false, "full:b.example.org".to_owned())
+            ]
+        );
+        assert_eq!(
+            rules(":: v6.example.com"),
+            [(false, "full:v6.example.com".to_owned())]
+        );
+        assert_eq!(
+            rules("::1 v6b.example.com"),
+            [(false, "full:v6b.example.com".to_owned())]
+        );
+        for line in [
+            "127.0.0.1 localhost",
+            "::1 localhost ip6-localhost",
+            "0.0.0.0 0.0.0.0",
+            "127.0.0.1 nodot",
+            "192.0.2.1 other.example.com",
+            "# 0.0.0.0 commented.example.com",
+        ] {
+            assert!(rules(line).is_empty(), "{line}");
+        }
+        // Other lines are read as before.
+        assert_eq!(
+            rules("||ads.example.com^"),
+            [(false, "domain:ads.example.com".to_owned())]
+        );
+        let mut deny = Vec::new();
+        let count = parse_adguard_list(
+            "t",
+            "n",
+            b"0.0.0.0 a.example.com b.example.com\n@@||c.example.com^\n",
+            &mut Vec::new(),
+            &mut deny,
+        );
+        assert_eq!((count, deny.len()), (3, 2));
+    }
+
+    #[test]
+    fn the_format_field_of_a_manifest_is_read_leniently_and_of_the_api_strictly() {
+        let manifest = br#"[{"name":"a","format":"json"},{"name":"b","format":"nope"},
+                           {"name":"c","format":5},{"name":"d","format":null},{"name":"e"}]"#;
+        let entries = parse_manifest(manifest, Schema::Sd).unwrap();
+        let formats: Vec<Format> = entries.iter().map(|e| e.format).collect();
+        assert_eq!(
+            formats,
+            [
+                Format::Json,
+                Format::Auto,
+                Format::Auto,
+                Format::Auto,
+                Format::Auto
+            ]
+        );
+        assert_eq!(parse_manifest(manifest, Schema::Adguard).unwrap().len(), 5);
+        let strict = |body: &str| parse_source_object(body.as_bytes(), Schema::Si);
+        assert_eq!(strict(r#"{"format":"text"}"#).unwrap().format, Format::Text);
+        assert!(
+            strict(r#"{"format":"dat"}"#)
+                .unwrap_err()
+                .contains("unknown format")
+        );
+        assert!(strict(r#"{"format":1}"#).is_err());
+        assert_eq!(strict(r#"{"format":null}"#).unwrap().format, Format::Auto);
     }
 }
