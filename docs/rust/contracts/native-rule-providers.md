@@ -16,9 +16,9 @@ the configuration root (`-d`).
 | Type | Arguments | Source of rules |
 | --- | --- | --- |
 | `domain_set_light` | `exps`, `files`, `sets` (ignored) | `exps`, then each file: SRS or text. A missing file is an empty source. |
-| `sd_set_light` | `local_config` (required), `socks5` (downloads) | JSON manifest; enabled sources with a `files` path; each `.srs` file. `enable_regexp` gates regexp items. |
-| `si_set` | `local_config` (required), `socks5` (downloads) | same manifest shape; CIDRs of enabled `.srs` files; usable in `resp_ip $tag`. |
-| `adguard_rule` | `dir` (required), `socks5` | `<dir>/config.json` + `<dir>/<id>.rules` of enabled lists. Only block rules are exported; `@@` lines never reach the mapper. Lists that are not on disk are skipped at compile time and downloaded in the background once the host serves. |
+| `sd_set_light` | `local_config` (required), `socks5` (downloads) | JSON manifest; enabled sources with a `files` path; each file is SRS or rule text (see "Subscription formats"). `enable_regexp` gates regexp items. |
+| `si_set` | `local_config` (required), `socks5` (downloads) | same manifest shape; CIDRs of enabled SRS or CIDR-text files; usable in `resp_ip $tag`. |
+| `adguard_rule` | `dir` (required), `socks5` | `<dir>/config.json` + `<dir>/<id>.rules` of enabled lists (AdGuard / hosts text; other download formats are converted to it). Only block rules are exported; `@@` lines never reach the mapper. Lists that are not on disk are skipped at compile time and downloaded in the background once the host serves. |
 
 A missing, empty or unparsable manifest is an empty source list (diagnostic only); a manifest with a string the reference repairs (lone UTF-16 surrogate escape, invalid UTF-8) is refused instead, because Go would keep its sources. Manifests decode like Go's `encoding/json` into each plugin's own struct (case-insensitive keys applied in document order, `null` = zero value, wrong-typed known fields and non-RFC 3339 `last_updated` fail the whole file; `tools/m1a1-oracle/manifest_parity.py`); an enabled
 source whose file is missing, unreadable or not a valid SRS is skipped with a diagnostic.
@@ -75,6 +75,84 @@ Quick matcher and executor over **context** marks (`mark N [N…]`, base-10 `u32
 - Memory: the mapper's matcher is not yet compact (about 150 bytes per `domain:` rule; Mem-2). See the
   resource notes in the M1-a2 and Mem-1 validation records.
 
+## Subscription formats
+
+`sd_set_light`, `si_set` and `adguard_rule` sources accept more than SRS. The content of a download is converted
+once, when it is downloaded; start-up and hot reloads read only the stored file.
+
+**`format` field.** Optional in the manifest (and in the `PUT /config/{name}`, `POST|PUT /rules` bodies and their
+JSON views): `auto` (default), `srs`, `text`, `yaml`, `json`. `auto` is never written, so a manifest without the
+field is written back byte for byte as before. The value is read without regard to case. A manifest with an
+unknown or non-string value reads it as `auto` (diagnostic, the manifest stays usable); the API answers 400.
+
+**Detection (`auto`)**, in order: the SRS magic (`SRS` and a version byte 0..=3) is `srs`; the extension of the
+download address path (`.srs` is `srs` too, so a `.srs` address that returns a page fails as it always did; `.yaml` `.yml` is `yaml`, `.json` is `json`, `.txt` `.list` `.conf` is `text`); the content
+(first non-blank character `{` is `json`, a line starting with `payload:` is `yaml`); otherwise `text`.
+
+**Storage.** An SRS download is stored as it is for `sd_set_light` and `si_set`. Every other download is converted
+to rule text and stored at the `files` path: a first line `# rtdns: converted from <format> <url>`, then one rule per
+line (`domain:`, `full:`, `keyword:`, `regexp:` for a domain set; `address/bits` for an IP set). A domain set takes
+only domain rules and an IP set only IP rules; the other kind is counted as skipped. Loading reads SRS if the file
+has the SRS magic and rule text otherwise, with the same line reader, so a text file placed by hand works too.
+`adguard_rule` stores AdGuard / hosts text as it is when it holds at least one usable rule (`@@` lines included) and
+every line that would give a domain rule as rule text is also read by the AdGuard reader; anything else (SRS, YAML,
+JSON, Clash-style text, dnsmasq text, or a text file that mixes such lines into an AdGuard list, whose bare names then
+become `domain:` rules) is converted to AdGuard text: `domain:x` becomes
+`||x^`, `full:x` a plain `x` line, `regexp:r` becomes `/r/`, `keyword:k` becomes `/k/` with the dots escaped (AdGuard
+text has no keyword rule). Each converted line is read back with the AdGuard reader and kept only if it yields the same
+rule; the others are skipped. A block list takes only domain rules. An SRS block list is read strictly: a logical
+rule is left out, and a rule with conditions besides domain items is left out and ends the reading (rules before it
+are kept), both counted as skipped, because the block list must not match more than the file says (the routing sets
+keep reading SRS as before). An AdGuard/hosts list is read at most up to 2,000,000 rules; more is a failed download.
+
+**Line rules** (`text`, and each item of a YAML `payload`): blank lines, comments (`#` `!` `//` `;`, and a trailing
+` #` comment) and `[...]` section headers are ignored.
+
+| Line | Rule |
+| --- | --- |
+| `domain:x` `full:x` `keyword:x` `regexp:x` | as written (a trailing `@attribute` is dropped; names are lowercased; a keyword keeps its dots) |
+| `DOMAIN` `HOST` | `full:` |
+| `DOMAIN-SUFFIX` `HOST-SUFFIX` | `domain:` |
+| `DOMAIN-KEYWORD` `HOST-KEYWORD` | `keyword:` |
+| `DOMAIN-REGEX` | `regexp:` (skipped if the value contains a comma) |
+| `IP-CIDR` `IP-CIDR6` `IP6-CIDR` | IP prefix (options after the value, such as `no-resolve` or a policy, are ignored) |
+| other `TYPE,value` lines | skipped (`unsupported rule type`) |
+| `+.x`, `.x` | `domain:x` (approximation: `.x` also matches `x` itself) |
+| `*.x` and other `*` wildcards | an anchored `regexp:` in which a whole `*` label is exactly one label and `*` inside a label is any run within it |
+| `server=/a/b/…` `address=/…` `ipset=/…` `nftset=/…` `local=/…` | `domain:` for each domain, the last segment is the target |
+| `<ip> name [name…]` | `full:` for each name; `localhost` and the other local names are skipped |
+| `\|\|x^` | `domain:x`; every other adblock form is skipped |
+| address or CIDR | IP prefix (a bare address is /32 or /128) |
+| bare `name.example` | `domain:` in `text`; `full:` in YAML `payload` (mihomo semantics) |
+
+Names are ASCII with at least one dot where the form needs one; other lines are skipped. In an AdGuard
+subscription (text kept as it is) a bare name is `full:` as before.
+
+**YAML.** Only the top-level `payload:` list of scalars is read (plain, single- or double-quoted); the rest of the
+document is ignored and no YAML feature (anchors, aliases, tags, flow lists) is interpreted, so a download cannot
+expand. A document without `payload:` or with a flow-style list is refused.
+
+**JSON** (sing-box source rule set, `{"version": n, "rules": [...]}`): headless rules with `domain` (`full:`),
+`domain_suffix` (`domain:`; a leading dot is an approximation), `domain_keyword`, `domain_regex` and `ip_cidr`
+(string or list). A rule with any other condition (port, process, `network`, …), `invert: true` or `type: logical`
+is skipped whole, because it is narrower than the conditions kept; so is a rule that has both a domain condition and
+`ip_cidr` (all conditions of one rule must match, which two separate sets cannot express).
+
+**Switches and limits.** `regexp:` rules (also those made from `*` wildcards) are used only when the source has
+`enable_regexp` (`sd_set_light`); `adguard_rule` has no such switch and `/regex/` lines already apply there. Every
+rule goes through the existing refusal check (valid-Go regexps outside the gate, Unicode-lowercase rules refuse the
+whole download). Limits: the 64 MiB download limit, lines of 64 KiB or more are skipped, at most 2,000,000 rules per
+file (more is a failed download, not a truncation). A download that cannot be read or yields no usable rule fails and
+leaves the stored file and the rule count unchanged. Each successful download logs its format, the number of usable
+rules and the number of skipped ones by reason.
+
+**hosts lines in block lists (behavior change).** An `adguard_rule` line `0.0.0.0 name`, `127.0.0.1 name`,
+`:: name` or `::1 name` (several names and a trailing comment allowed) now blocks each name as `full:name`;
+`localhost` and the other local names are skipped. The reference and earlier versions of this host ignored such
+lines. Hosts lines with any other address are still ignored.
+
+Not supported (planned separately): `.dat` (geosite/geoip) and `.mrs`; `.mmdb` and `db` are not planned.
+
 ## Management (M1-a2)
 
 The reference API is served under `/plugins/{tag}` for each provider tag; methods, paths, status
@@ -82,7 +160,8 @@ codes, content types and JSON bodies follow the reference handlers (task researc
 `go-semantics.md`):
 
 - `sd_set_light`/`si_set`: `GET /config`, `PUT|DELETE /config/{name}`, `POST /update/{name}` (202,
-  background). `PUT` with non-blank `files` and `url` downloads, then reloads.
+  background). `PUT` with non-blank `files` and `url` downloads, then reloads. A source (and an AdGuard rule) has an optional
+  `format` field, see "Subscription formats".
 - `adguard_rule`: `GET|POST /rules`, `PUT|DELETE /rules/{id}`, `POST /update`, `POST /update/{id}`.
   The WebUI addresses the fixed tag `adguard`.
 - `domain_set_light`: `GET /show` (`q`, `limit` default 100, `offset`), `GET /save`, `POST /post`
@@ -94,7 +173,7 @@ a rename, and only then adopted in memory; a failed write changes nothing (500).
 by either implementation are read by the other (round-trip evidence in the record). Downloads:
 HTTP/HTTPS with system roots, at most 10 redirects, optional SOCKS5 (no authentication, remote
 name resolution), 60 s (`sd_set_light`/`si_set`) or 30 s (AdGuard) overall, 64 MiB body limit;
-validated (SRS decode) before the rule file is replaced by rename. Downloads of one source never
+validated (SRS decode, or conversion of the other formats) before the rule file is replaced by rename. Downloads of one source never
 overlap: a request during a download makes it run once more. Auto-update uses the reference
 cadence (first check 1 min after start; sources every 10 min, AdGuard every minute) and predicate.
 Errors are logged, as in the reference.
@@ -115,7 +194,8 @@ Deliberate differences (data safety or not configuration):
   a restart reads (the reference drops `exps` from memory until restart).
 - Downloaded content and posted values that this host would refuse at start (valid-Go regexps
   outside the gate, Unicode-lowercase rules) are rejected, so a change can never make the next start
-  fail. AdGuard downloads are otherwise unvalidated text, as in the reference.
+  fail. AdGuard text downloads are otherwise stored as they are, as in the reference; a download that
+  yields no usable rule at all is refused (the reference stores it).
 - `DELETE` keeps a rule file that another source of a configured provider still reads, however its
   path is spelled or linked (the reference deletes it and the other source loses its rules).
 - A download whose source was removed or repointed meanwhile is discarded; files are always

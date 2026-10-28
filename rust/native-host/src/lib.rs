@@ -32,6 +32,7 @@ mod restart;
 mod rewrite;
 mod route_learner;
 mod rule_download;
+mod rule_formats;
 mod rule_sources;
 mod runtime_snapshot;
 mod settings_api;

@@ -8,7 +8,7 @@ import { RULE_SECTIONS } from '../src/navigation.js'
 import { createAppRouter } from '../src/router.js'
 import { aliasMapFromRows, aliasRowsFrom, aliasesChanged, normalizeAliasMap } from '../src/utils/clientAliases.js'
 import { LIST_LINE_CAP, canSaveList, canonicalRules, filterLines, readList, sameRules, showUrl } from '../src/utils/ruleList.js'
-import { ROUTING_SUBSCRIPTIONS, inferFromUrl, isDownloaded, ruleFields, sortRules } from '../src/utils/subscription.js'
+import { ROUTING_SUBSCRIPTIONS, SUBSCRIPTION_FORMATS, inferFromUrl, isDownloaded, ruleFields, sortRules, withFormat } from '../src/utils/subscription.js'
 import { clearDirty, hasUnsaved, resetUnsaved, setDirty } from '../src/utils/unsaved.js'
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8')
@@ -196,6 +196,27 @@ test('a new subscription takes its name and file from the address', () => {
   assert.deepEqual(inferFromUrl('https://example.com/rules/geosite-cn.srs?x=1'), { name: 'geosite-cn', files: 'srs/geosite-cn.srs' })
   assert.equal(inferFromUrl(''), null)
   assert.equal(inferFromUrl('https://example.com/'), null)
+})
+
+test('only an .srs address keeps its file name; other formats are stored as converted text', () => {
+  assert.deepEqual(inferFromUrl('https://example.com/a/ads.yaml'), { name: 'ads', files: 'srs/ads.txt' })
+  assert.deepEqual(inferFromUrl('https://example.com/a/list.json?x=1'), { name: 'list', files: 'srs/list.txt' })
+  assert.deepEqual(inferFromUrl('https://example.com/hosts.txt'), { name: 'hosts', files: 'srs/hosts.txt' })
+  assert.deepEqual(inferFromUrl('https://example.com/rules'), { name: 'rules', files: 'srs/rules.txt' })
+  assert.deepEqual(inferFromUrl('https://example.com/GEO.SRS'), { name: 'GEO', files: 'srs/GEO.SRS' })
+})
+
+test('the format of a subscription is saved only when it is not auto', () => {
+  assert.deepEqual(SUBSCRIPTION_FORMATS.map((item) => item.value), ['auto', 'srs', 'text', 'yaml', 'json'])
+  const payload = { name: 'a', url: 'https://example.com/a.yaml' }
+  assert.deepEqual(withFormat({}, payload, 'auto'), payload, 'auto sends no field')
+  assert.deepEqual(withFormat({}, payload, undefined), payload)
+  assert.deepEqual(withFormat({}, payload, 'yaml'), { ...payload, format: 'yaml' })
+  assert.deepEqual(withFormat({ name: 'old', format: 'json', rule_count: 3 }, payload, 'text'), { ...payload, rule_count: 3, format: 'text' })
+  assert.equal('format' in withFormat({ format: 'json' }, payload, 'auto'), false, 'switching back to auto clears the stored format')
+  const source = readFileSync(new URL('../src/components/rules/SubscriptionTable.vue', import.meta.url), 'utf8')
+  assert.match(source, /v-model="editor\.format"/)
+  assert.match(source, /format: String\(rule\.format \|\| 'auto'\)/, 'the stored format is shown when editing')
 })
 
 test('a subscription counts as downloaded with a rule count or an update time', () => {

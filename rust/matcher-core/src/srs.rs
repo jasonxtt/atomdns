@@ -228,6 +228,130 @@ pub fn decode_domain_srs(bytes: &[u8], enable_regexp: bool) -> Result<DomainSrs,
     Ok(out)
 }
 
+/// Domain rules of an SRS file that are plain domain rules, see
+/// [`decode_domain_srs_plain`].
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PlainDomainSrs {
+    pub rules: Vec<String>,
+    /// `false` when decoding stopped before the declared rules were read.
+    pub complete: bool,
+    /// Rules left out (logical rules, or a rule that has conditions besides
+    /// domain items). A rule of the second kind ends the decoding.
+    pub skipped: u64,
+}
+
+enum Plain {
+    Kept,
+    Skipped,
+    /// A rule with other conditions: the rest of its items are not read, so
+    /// nothing after it can be trusted.
+    Lost,
+}
+
+/// Decodes the domain items of an SRS file for a use that must not match more
+/// than the file says: a rule counts only when all its items are domain items.
+/// A logical rule is read through and left out; a rule with other conditions
+/// (ports, IP ranges, …) is left out and stops the decoding with what was
+/// read before it.
+///
+/// # Errors
+///
+/// Returns [`SrsError`] when the header is not a supported SRS stream.
+pub fn decode_domain_srs_plain(
+    bytes: &[u8],
+    enable_regexp: bool,
+) -> Result<PlainDomainSrs, SrsError> {
+    let (mut body, count) = open(bytes)?;
+    let mut out = PlainDomainSrs::default();
+    for _ in 0..count {
+        match read_plain_rule(&mut body, enable_regexp, &mut out.rules) {
+            Ok(Plain::Kept) => {}
+            Ok(Plain::Skipped) => out.skipped += 1,
+            Ok(Plain::Lost) => {
+                out.skipped += 1;
+                return Ok(out);
+            }
+            Err(_) => return Ok(out),
+        }
+    }
+    out.complete = true;
+    Ok(out)
+}
+
+fn read_plain_rule<R: BufRead>(
+    body: &mut Body<R>,
+    enable_regexp: bool,
+    rules: &mut Vec<String>,
+) -> io::Result<Plain> {
+    match body.byte()? {
+        0 => {
+            let mut local = Vec::new();
+            loop {
+                let id = body.byte()?;
+                if id == ITEM_FINAL {
+                    rules.append(&mut local);
+                    return Ok(Plain::Kept);
+                }
+                if matches!(
+                    domain_item(id, body, enable_regexp, &mut local)?,
+                    Next::EndRule
+                ) {
+                    return Ok(Plain::Lost);
+                }
+            }
+        }
+        1 => {
+            let mut clean = true;
+            let _mode = body.byte()?;
+            let n = body.uvarint()?;
+            for _ in 0..n {
+                clean &= skip_logical_sub(body, enable_regexp, 1)?;
+            }
+            let _invert = body.byte()?;
+            Ok(if clean { Plain::Skipped } else { Plain::Lost })
+        }
+        _ => Ok(Plain::Lost),
+    }
+}
+
+/// Reads a sub-rule of a logical rule that is being left out. `false` when it
+/// ended early on an item that is not a domain item or had an unknown shape:
+/// its remaining payload was not consumed, so nothing after it can be trusted.
+fn skip_logical_sub<R: BufRead>(
+    body: &mut Body<R>,
+    enable_regexp: bool,
+    depth: u32,
+) -> io::Result<bool> {
+    match body.byte()? {
+        0 => loop {
+            let id = body.byte()?;
+            if id == ITEM_FINAL {
+                return Ok(true);
+            }
+            if matches!(
+                domain_item(id, body, enable_regexp, &mut Vec::new())?,
+                Next::EndRule
+            ) {
+                return Ok(false);
+            }
+        },
+        1 => {
+            if depth >= 16 {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "rule nesting"));
+            }
+            let mut clean = true;
+            let _mode = body.byte()?;
+            let n = body.uvarint()?;
+            for _ in 0..n {
+                clean &= skip_logical_sub(body, enable_regexp, depth + 1)?;
+            }
+            let _invert = body.byte()?;
+            Ok(clean)
+        }
+        _ => Ok(false),
+    }
+}
+
 /// Decodes the IP-CIDR items of an SRS file.
 ///
 /// # Errors
@@ -634,6 +758,56 @@ mod tests {
         assert!(with.complete);
         let without = decode_domain_srs(&file, false).unwrap();
         assert_eq!(without.rules, ["keyword:ad"]);
+    }
+
+    #[test]
+    fn plain_decoding_leaves_out_logical_rules_and_stops_at_conditions() {
+        let kw = |word: &[u8]| {
+            let mut item = vec![ITEM_KEYWORD, 1, word.len() as u8];
+            item.extend(word);
+            item
+        };
+        // keyword ad | logical(keyword xy) inverted | keyword zz
+        let mut body = vec![3, 0];
+        body.extend(kw(b"ad"));
+        body.push(ITEM_FINAL);
+        body.extend([1, 0, 1, 0]);
+        body.extend(kw(b"xy"));
+        body.extend([ITEM_FINAL, 1, 0]);
+        body.extend(kw(b"zz"));
+        body.push(ITEM_FINAL);
+        let got = decode_domain_srs_plain(&srs(&body), true).unwrap();
+        assert_eq!(got.rules, ["keyword:ad", "keyword:zz"]);
+        assert_eq!((got.skipped, got.complete), (1, true));
+        // The relaxed decoder keeps the logical rule's keyword.
+        assert!(
+            decode_domain_srs(&srs(&body), true)
+                .unwrap()
+                .rules
+                .contains(&"keyword:xy".to_owned())
+        );
+        // keyword ad | keyword qq + an IP range item | keyword zz
+        let mut body = vec![3, 0];
+        body.extend(kw(b"ad"));
+        body.push(ITEM_FINAL);
+        body.push(0);
+        body.extend(kw(b"qq"));
+        body.extend([ITEM_IPCIDR, 1]);
+        body.extend(kw(b"zz"));
+        let got = decode_domain_srs_plain(&srs(&body), true).unwrap();
+        assert_eq!(got.rules, ["keyword:ad"]);
+        assert_eq!((got.skipped, got.complete), (1, false));
+        // logical(sub-rule with an IP range item whose payload is unread) |
+        // what would read as a keyword rule if decoding went on
+        let mut body = vec![2, 1, 0, 1, 0, ITEM_IPCIDR, 0];
+        body.extend(kw(b"ads"));
+        body.push(ITEM_FINAL);
+        body.extend([1, 0]);
+        body.extend(kw(b"zz"));
+        body.push(ITEM_FINAL);
+        let got = decode_domain_srs_plain(&srs(&body), true).unwrap();
+        assert!(got.rules.is_empty(), "{:?}", got.rules);
+        assert_eq!((got.skipped, got.complete), (1, false));
     }
 
     #[test]

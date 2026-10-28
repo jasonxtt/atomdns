@@ -11,7 +11,26 @@ export const ROUTING_SUBSCRIPTIONS = Object.freeze([
   { type: 'cusnocn', tag: 'cusnocn', label: '代理补充 (cusnocn)' }
 ])
 
-// Name and local file proposed for a new subscription from its address.
+// The formats a subscription can be downloaded in; `auto` is not sent (the host detects it).
+export const SUBSCRIPTION_FORMATS = Object.freeze([
+  { value: 'auto', label: '自动' },
+  { value: 'srs', label: 'SRS' },
+  { value: 'text', label: '文本 (.txt .list .conf)' },
+  { value: 'yaml', label: 'YAML' },
+  { value: 'json', label: 'JSON' }
+])
+
+// The record to save: the stored record's fields under the edited ones. `auto` leaves the
+// field out, which also clears a format the record had before.
+export function withFormat(base, payload, format) {
+  const merged = { ...base, ...payload }
+  if (!format || format === 'auto') delete merged.format
+  else merged.format = format
+  return merged
+}
+
+// Name and local file proposed for a new subscription from its address. Only an `.srs` file
+// is kept as it is; any other download is stored converted, as text.
 export function inferFromUrl(url) {
   const raw = String(url || '').trim()
   if (!raw) return null
@@ -28,7 +47,8 @@ export function inferFromUrl(url) {
   }
   fileName = fileName.trim()
   if (!fileName) return null
-  return { name: fileName.replace(/\.[^.]+$/, '') || fileName, files: `srs/${fileName}` }
+  const name = fileName.replace(/\.[^.]+$/, '') || fileName
+  return { name, files: /\.srs$/i.test(fileName) ? `srs/${fileName}` : `srs/${name}.txt` }
 }
 
 function isZero(value) {
