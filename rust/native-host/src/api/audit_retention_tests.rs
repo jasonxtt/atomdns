@@ -201,7 +201,7 @@ fn retained_audit_api_response_bytes_equal_base_fixture() {
             ("GET", "/api/v2/audit/stats/windows", ""),
             ("GET", "/api/v2/audit/logs", ""),
         ] {
-            let response = dispatch(
+            let mut response = dispatch(
                 None,
                 None,
                 host.config(),
@@ -220,6 +220,15 @@ fn retained_audit_api_response_bytes_equal_base_fixture() {
                 },
             )
             .await;
+            if target == "/api/v2/audit/rank/domain?limit=3" {
+                // This approved additive header is checked explicitly; every
+                // original header and JSON body still match the untouched BASE fixture.
+                assert_eq!(
+                    response.headers,
+                    [("X-Audit-Distinct-Domains", "4".to_owned())]
+                );
+                response.headers.clear();
+            }
             serde_json::to_writer(
                 &mut actual,
                 &(

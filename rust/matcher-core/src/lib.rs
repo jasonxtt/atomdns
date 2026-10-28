@@ -7,6 +7,7 @@
 
 #![allow(clippy::pedantic)]
 
+mod compact;
 mod full;
 mod ipnet;
 mod keyword;

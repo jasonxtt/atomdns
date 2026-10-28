@@ -1,6 +1,5 @@
 <script setup>
 import FlagSwitches from '../../components/rules/FlagSwitches.vue'
-import ListEditor from '../../components/rules/ListEditor.vue'
 import OverridesPanel from '../../components/rules/OverridesPanel.vue'
 import UpstreamPanel from '../../components/rules/UpstreamPanel.vue'
 </script>
@@ -10,7 +9,5 @@ import UpstreamPanel from '../../components/rules/UpstreamPanel.vue'
     <FlagSwitches page="upstream" />
     <UpstreamPanel />
     <OverridesPanel />
-    <ListEditor tag="ddnslist" title="DDNS 域名" hint="名单里的域名按动态域名处理，适合经常变 IP 的域名；是否优先用国外上游解析，由「运行模式 › DDNS 优先国外解析」开关决定。" />
-    <p class="muted rt-list-hint"><router-link to="/rules/mode">前往 运行模式</router-link></p>
   </div>
 </template>

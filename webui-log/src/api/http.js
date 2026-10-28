@@ -30,6 +30,11 @@ export async function getJSON(url) {
   return response.json()
 }
 
+export async function getJSONWithHeaders(url) {
+  const response = await request(url)
+  return { data: await response.json(), headers: response.headers }
+}
+
 export async function getText(url) {
   const response = await request(url)
   return response.text()

@@ -1,0 +1,569 @@
+{
+  "schema_version": 1,
+  "scope": "later post-restart production observation; not immediate startup measurement or paired regression test",
+  "captured_at_taipei": "2026-10-28T15:27:53+08:00",
+  "ended_at_taipei": "2026-10-28T15:28:18+08:00",
+  "duration_seconds": 25.231974601745605,
+  "source": {
+    "version": "v0.4.0-patch-3687d269",
+    "commit": "3687d269b1699b7061a3b48c5e4a9f51745bc625",
+    "binary_sha256": "324381eeba26a595192407407e6538c6804e4b2769981d0d45397b4ebd63b67a",
+    "build_inputs_verified": 247,
+    "source_manifest_sha256": "f75e833f36906e2f31a42650033c86413f32aeba088e6256fe2b01be7907db33",
+    "deployment_receipt": "release/distinct-prodtrial-3687d269/deployment-receipt.json"
+  },
+  "environment": {
+    "kernel": "7.2.7-x64v3-xanmod1",
+    "machine": "x86_64",
+    "libc": [
+      "glibc",
+      "2.41"
+    ],
+    "page_bytes": 4096,
+    "clock_ticks_per_second": 100,
+    "cpu_count": 1,
+    "cpu_affinity": [
+      0
+    ],
+    "meminfo": {
+      "MemTotal": 980236,
+      "MemAvailable": 588320,
+      "SwapTotal": 0,
+      "SwapFree": 0
+    }
+  },
+  "process": {
+    "pid": 2854529,
+    "start_ticks": "298455986",
+    "uptime_seconds_at_start": 144190.93000000017,
+    "service": {
+      "MainPID": "2854529",
+      "NRestarts": "0",
+      "ExecMainStartTimestamp": "Mon 2026-10-26 23:24:42 CST",
+      "ActiveState": "active"
+    },
+    "same_process_before_after": true,
+    "pid_age_seconds_at_start": 144190.93000000017,
+    "uptime_scope": "kernel PID lifetime across execve; does not measure current program image age; NRestarts excludes in-place application restarts",
+    "restart_epoch_evidence": {
+      "source": "read-only journalctl rtdns in-place restart markers, cross-checked against rust/native-host/src/restart.rs and main.rs",
+      "last_marker_before_capture": {
+        "unix": 1793172283.50198,
+        "at_taipei": "2026-10-28T15:24:43.501980+08:00",
+        "pid": 2854529,
+        "event": "in_place_restart_marker"
+      },
+      "seconds_since_marker_at_capture_approximate": 189.90786981582642,
+      "marker_is_not_exact_ready_time": true,
+      "markers_in_capture_interval": [],
+      "pid_can_remain_unchanged": true
+    }
+  },
+  "memory": {
+    "units": "KiB for /proc memory fields; MiB=KiB/1024",
+    "rss_before_reads": {
+      "min": 65204,
+      "median": 65204.0,
+      "p95": 65204,
+      "max": 65204,
+      "mean": 65204
+    },
+    "rss_after_reads": {
+      "min": 65516,
+      "median": 65516.0,
+      "p95": 65516,
+      "max": 65516,
+      "mean": 65516
+    },
+    "sampled_max_rss_kib": 65516,
+    "samples": 101,
+    "sample_interval_seconds": 0.25,
+    "final": {
+      "VmSize": 343728,
+      "VmHWM": 87704,
+      "VmRSS": 65516,
+      "RssAnon": 52928,
+      "RssFile": 12588,
+      "RssShmem": 0,
+      "VmSwap": 0,
+      "Threads": 3
+    },
+    "smaps_before": {
+      "Rss": 65204,
+      "Pss": 63575,
+      "Pss_Dirty": 52616,
+      "Pss_Anon": 52616,
+      "Pss_File": 10959,
+      "Pss_Shmem": 0,
+      "Shared_Clean": 1760,
+      "Shared_Dirty": 0,
+      "Private_Clean": 10828,
+      "Private_Dirty": 52616,
+      "Referenced": 65204,
+      "Anonymous": 52616,
+      "KSM": 0,
+      "LazyFree": 0,
+      "AnonHugePages": 0,
+      "ShmemPmdMapped": 0,
+      "FilePmdMapped": 0,
+      "Shared_Hugetlb": 0,
+      "Private_Hugetlb": 0,
+      "Swap": 0,
+      "SwapPss": 0,
+      "Locked": 0
+    },
+    "smaps_after": {
+      "Rss": 65516,
+      "Pss": 63887,
+      "Pss_Dirty": 52928,
+      "Pss_Anon": 52928,
+      "Pss_File": 10959,
+      "Pss_Shmem": 0,
+      "Shared_Clean": 1760,
+      "Shared_Dirty": 0,
+      "Private_Clean": 10828,
+      "Private_Dirty": 52928,
+      "Referenced": 65516,
+      "Anonymous": 52928,
+      "KSM": 0,
+      "LazyFree": 0,
+      "AnonHugePages": 0,
+      "ShmemPmdMapped": 0,
+      "FilePmdMapped": 0,
+      "Shared_Hugetlb": 0,
+      "Private_Hugetlb": 0,
+      "Swap": 0,
+      "SwapPss": 0,
+      "Locked": 0
+    },
+    "hwm_scope": "current program image HWM; execve can reset it while PID/start ticks remain unchanged; this capture never resets it and sampling can miss short peaks"
+  },
+  "audit": {
+    "capacity": 100000,
+    "capturing": true,
+    "retained_before": 472,
+    "retained_after": 472,
+    "distinct_domains": 45,
+    "distinct_domain_header": "X-Audit-Distinct-Domains",
+    "distinct_scope": "whole retained ring at domain-rank snapshot; ASCII case/terminal-dot normalized, not lifetime/cache count",
+    "domain_rank_limit": 1,
+    "domain_rank_captured_at_taipei": "2026-10-28T15:28:03+08:00",
+    "window_response": {
+      "generated_at": "2026-10-28T07:28:03Z",
+      "items": [
+        {
+          "key": "1h",
+          "label": "1小时内",
+          "window_seconds": 3600,
+          "request_count": 472,
+          "average_duration_ms": 0.08138644491525422,
+          "complete": false,
+          "coverage_start": "2026-10-28T07:24:45Z"
+        },
+        {
+          "key": "6h",
+          "label": "最近6小时",
+          "window_seconds": 21600,
+          "request_count": 472,
+          "average_duration_ms": 0.08138644491525422,
+          "complete": false,
+          "coverage_start": "2026-10-28T07:24:45Z"
+        },
+        {
+          "key": "24h",
+          "label": "24小时内",
+          "window_seconds": 86400,
+          "request_count": 472,
+          "average_duration_ms": 0.08138644491525422,
+          "complete": false,
+          "coverage_start": "2026-10-28T07:24:45Z"
+        },
+        {
+          "key": "3d",
+          "label": "最近3天",
+          "window_seconds": 259200,
+          "request_count": 472,
+          "average_duration_ms": 0.08138644491525422,
+          "complete": false,
+          "coverage_start": "2026-10-28T07:24:45Z"
+        },
+        {
+          "key": "7d",
+          "label": "最近7天",
+          "window_seconds": 604800,
+          "request_count": 472,
+          "average_duration_ms": 0.08138644491525422,
+          "complete": false,
+          "coverage_start": "2026-10-28T07:24:45Z"
+        }
+      ]
+    }
+  },
+  "cache": {
+    "counting_unit": "live cache entries, sums can double-count names/types/layers/ECS; not distinct domains",
+    "entries_before": {
+      "cache_all": 0,
+      "cache_all_noleak": 33005,
+      "cache_cn": 14289,
+      "cache_google": 1055,
+      "cache_google_node": 2208,
+      "cache_node": 0,
+      "cache_cnmihomo": 0
+    },
+    "entries_after": {
+      "cache_all": 0,
+      "cache_all_noleak": 33005,
+      "cache_cn": 14289,
+      "cache_google": 1055,
+      "cache_google_node": 2208,
+      "cache_node": 0,
+      "cache_cnmihomo": 0
+    },
+    "total_before": 50557,
+    "total_after": 50557,
+    "settings": [
+      {
+        "tag": "cache_all",
+        "size": 20000000,
+        "lazy_cache_ttl": 259200000,
+        "dump_interval": 36000
+      },
+      {
+        "tag": "cache_all_noleak",
+        "size": 20000000,
+        "lazy_cache_ttl": 259200000,
+        "dump_interval": 36000
+      },
+      {
+        "tag": "cache_cn",
+        "size": 20000000,
+        "lazy_cache_ttl": 259200000,
+        "dump_interval": 36000
+      },
+      {
+        "tag": "cache_google",
+        "size": 20000000,
+        "lazy_cache_ttl": 259200000,
+        "dump_interval": 36000
+      },
+      {
+        "tag": "cache_google_node",
+        "size": 20000000,
+        "lazy_cache_ttl": 259200000,
+        "dump_interval": 36000
+      },
+      {
+        "tag": "cache_node",
+        "size": 20000000,
+        "lazy_cache_ttl": 259200000,
+        "dump_interval": 36000
+      },
+      {
+        "tag": "cache_cnmihomo",
+        "size": 20000000,
+        "lazy_cache_ttl": 259200000,
+        "dump_interval": 36000
+      }
+    ],
+    "payload_bytes_available": false
+  },
+  "learner": {
+    "counting_unit": "retained category rows including held expired entries; names can repeat across categories",
+    "categories": [
+      {
+        "index": 0,
+        "entries": 2,
+        "max_entries": 20000,
+        "ttl_seconds": 691200,
+        "enabled": true
+      },
+      {
+        "index": 1,
+        "entries": 6248,
+        "max_entries": 20000,
+        "ttl_seconds": 604800,
+        "enabled": true
+      },
+      {
+        "index": 2,
+        "entries": 10442,
+        "max_entries": 20000,
+        "ttl_seconds": 604800,
+        "enabled": true
+      },
+      {
+        "index": 3,
+        "entries": 4573,
+        "max_entries": 20000,
+        "ttl_seconds": 86400,
+        "enabled": true
+      },
+      {
+        "index": 4,
+        "entries": 1756,
+        "max_entries": 20000,
+        "ttl_seconds": 691200,
+        "enabled": true
+      }
+    ],
+    "total_category_rows": 23021
+  },
+  "domain_output_disk": {
+    "nonempty_lines": 17779,
+    "bytes": 758264,
+    "scope": "persisted file, not proof of current live in-memory cardinality"
+  },
+  "log_sample": {
+    "scope": "up to500 latest unfiltered rows; this capture returns472 rows covering its own472-row snapshot, not the earlier100000-row ring or a heap measurement",
+    "pagination": {
+      "total_items": 472,
+      "total_pages": 1,
+      "current_page": 1,
+      "items_per_page": 500
+    },
+    "rows": 472,
+    "distinct_domains_in_sample": 45,
+    "query_name_utf8_bytes": {
+      "min": 9,
+      "median": 18.0,
+      "p95": 28,
+      "max": 34,
+      "mean": 18.052966101694917
+    },
+    "answers_per_row": {
+      "min": 0,
+      "median": 0.0,
+      "p95": 1,
+      "max": 8,
+      "mean": 0.4216101694915254
+    },
+    "answer_data_utf8_bytes_per_row": {
+      "min": 0,
+      "median": 0.0,
+      "p95": 11,
+      "max": 116,
+      "mean": 4.610169491525424
+    },
+    "query_types": {
+      "AAAA": 221,
+      "A": 208,
+      "HTTPS": 37,
+      "SVCB": 2,
+      "PTR": 4
+    },
+    "response_codes": {
+      "NOERROR": 470,
+      "NXDOMAIN": 2
+    },
+    "answer_record_types": {
+      "A": 193,
+      "AAAA": 6
+    },
+    "exact_response_projections_including_ttl": 46,
+    "upstream_attempts_per_row": {
+      "min": 0,
+      "median": 0.0,
+      "p95": 0,
+      "max": 0,
+      "mean": 0
+    },
+    "http_response_bytes": 337733
+  },
+  "inputs": {
+    "selected_files": 84,
+    "selected_bytes": 4357717,
+    "groups": {
+      "config_custom.yaml": {
+        "files": 1,
+        "bytes": 15175,
+        "content_manifest_sha256": "02f2a20fc70ebff5f5e12ad0003b0bee9f81a7ab1c20745681cbbd8d46cc7546"
+      },
+      "sub_config": {
+        "files": 18,
+        "bytes": 78459,
+        "content_manifest_sha256": "de940e045018e5bd4642a2e807d63a32a8bde8c82f3d1a8c62e985919181069b"
+      },
+      "rule": {
+        "files": 39,
+        "bytes": 1255824,
+        "content_manifest_sha256": "a467cc1b8e08f2bd0ef6c82c9299c881bab9dbb9e964af203dd5b2b5f3093bb0"
+      },
+      "srs": {
+        "files": 13,
+        "bytes": 677200,
+        "content_manifest_sha256": "191d04d101904f2997cac690cd66822d200573a013eb42d7c55191ace4c7c800"
+      },
+      "adguard": {
+        "files": 4,
+        "bytes": 4526,
+        "content_manifest_sha256": "0056a7ac2d73798d83e5f3e04fa16aa6677dc0284b4777c1d4a2ecc166c4dce9"
+      },
+      "gen": {
+        "files": 2,
+        "bytes": 2322107,
+        "content_manifest_sha256": "7655eb17305f9fd67520453fe9c74ccb8d42cc300a57394b959268b5d89f4f74"
+      },
+      "webinfo": {
+        "files": 7,
+        "bytes": 4426,
+        "content_manifest_sha256": "47fae9a7deebbed50a8b80c005674333b0c437455aff9425a4ef8755249ce87e"
+      }
+    },
+    "before_after_and_archive_content_equal": true,
+    "archive_sha256": "59155af609f7993f4e7404e3dddb8b504f04c9cb2eb0dca3a159187208359831",
+    "scope": "selected disk config/rules/persisted state; excludes live cache, heap, full audit, UI and external system inputs; not atomic process checkpoint"
+  },
+  "http_receipts": [
+    {
+      "path": "/api/v1/system/health",
+      "began_unix": 1793172483.4630418,
+      "ended_unix": 1793172483.4748867,
+      "status": 200,
+      "bytes": 789,
+      "sha256": "472bf52608559b70fa1d4219dc59ed8f38036fb4dc76e6b45712e9451b738082"
+    },
+    {
+      "path": "/api/v1/audit/status",
+      "began_unix": 1793172483.4751282,
+      "ended_unix": 1793172483.47562,
+      "status": 200,
+      "bytes": 19,
+      "sha256": "a2fcba2c421f031d46d7a6adca2a593e26792ba0038b6b754e544b6eee08c666"
+    },
+    {
+      "path": "/api/v2/audit/stats",
+      "began_unix": 1793172483.4758093,
+      "ended_unix": 1793172483.476332,
+      "status": 200,
+      "bytes": 62,
+      "sha256": "debfff0641e8491e2cb6519f219cc377c114f816279a4e86904baac227b02ca7"
+    },
+    {
+      "path": "/api/v1/cache/inventory",
+      "began_unix": 1793172483.47651,
+      "ended_unix": 1793172483.476906,
+      "status": 200,
+      "bytes": 195,
+      "sha256": "d25da9f2c0ef024251f98d004a10a1a1543355fe14acedc050b4f4ea07181fad"
+    },
+    {
+      "path": "/metrics",
+      "began_unix": 1793172483.4770849,
+      "ended_unix": 1793172483.5428655,
+      "status": 200,
+      "bytes": 19769,
+      "sha256": "a79232234ae098ace03fd753e51640861f7cd92be6c9b0605886cfb725e1f0f7"
+    },
+    {
+      "path": "/api/v2/audit/stats/windows",
+      "began_unix": 1793172483.5431411,
+      "ended_unix": 1793172483.5437586,
+      "status": 200,
+      "bytes": 935,
+      "sha256": "cbb94d9d714a1f0a350b66647008afa7e436b8398198fe935b16b7c40caa098a"
+    },
+    {
+      "path": "/api/v2/audit/rank/domain?limit=1",
+      "began_unix": 1793172483.5439944,
+      "ended_unix": 1793172483.5446017,
+      "status": 200,
+      "bytes": 47,
+      "sha256": "d19c66763bba2b7d7ef24b0ebec43053c32c3be63ce09dc5c05a7c41edd57573"
+    },
+    {
+      "path": "/api/v2/audit/logs?page=1&limit=500",
+      "began_unix": 1793172483.544794,
+      "ended_unix": 1793172483.548299,
+      "status": 200,
+      "bytes": 337733,
+      "sha256": "406596c02a6653fd8eeb033375251bbb4ca0cd97e2d23d768e9bcda0ca524733"
+    },
+    {
+      "path": "/plugins/route_learner/status",
+      "began_unix": 1793172483.555823,
+      "ended_unix": 1793172483.55637,
+      "status": 200,
+      "bytes": 810,
+      "sha256": "934f8bc27fbe2d8a1b30ff49f63e07071bfc77aa0fde92f77f6142e61eba751b"
+    },
+    {
+      "path": "/api/v2/audit/stats",
+      "began_unix": 1793172483.5565858,
+      "ended_unix": 1793172483.5569754,
+      "status": 200,
+      "bytes": 62,
+      "sha256": "debfff0641e8491e2cb6519f219cc377c114f816279a4e86904baac227b02ca7"
+    },
+    {
+      "path": "/metrics",
+      "began_unix": 1793172483.5571527,
+      "ended_unix": 1793172483.6216464,
+      "status": 200,
+      "bytes": 19769,
+      "sha256": "7db967b0ceb10f88f515f7efcef6cc79e95ae070862d2147fe67a0e3964b4bcc"
+    }
+  ],
+  "method": {
+    "capture_script_sha256": "179b6c40ccd30fe423c18c46d0537ed1999db7cc385a6d8f08eaa5746b295724",
+    "raw_capture_sha256": "46cb4a7563ddcf1e77456df992a42cb684e4517eb5507c00d8a456f325982624",
+    "private_artifact_directory": "release/production-memory-postrestart-20261028/",
+    "sampling": "10s before reads, sequential GETs,15s cooldown; no DNS load or process pause",
+    "changes": "no clear/resize/restart/reload/save/trim/deploy; disk inputs before/after unchanged",
+    "atomic": false
+  },
+  "user_report": {
+    "source": "user_report",
+    "reported_date_taipei": "2026-10-28",
+    "approximate_rss": 62,
+    "unit_as_reported": "MB",
+    "exact_measurement_time": null,
+    "comment": "用户报告刚重启约62MB，感觉高于以前；该瞬间没有独立/proc采样，历史启动回退尚未验证。",
+    "independently_measured": false,
+    "historical_regression_verified": false
+  },
+  "first_readonly_probe": {
+    "source": "read-only SSH probe recorded in conversation tool output",
+    "captured_unix": 1793172345.328676,
+    "captured_at_taipei": "2026-10-28T15:25:45+08:00",
+    "rss_kib": 65196,
+    "rss_mib": 63.66796875,
+    "hwm_kib": 87704,
+    "note": "later than user observation, not immediate startup RSS"
+  },
+  "restart_events": [
+    {
+      "unix": 1793028875.985204,
+      "at_taipei": "2026-10-26T23:34:35.985204+08:00",
+      "pid": 2854529,
+      "event": "in_place_restart_marker"
+    },
+    {
+      "unix": 1793070477.901649,
+      "at_taipei": "2026-10-27T11:07:57.901649+08:00",
+      "pid": 2854529,
+      "event": "in_place_restart_marker"
+    },
+    {
+      "unix": 1793172283.50198,
+      "at_taipei": "2026-10-28T15:24:43.501980+08:00",
+      "pid": 2854529,
+      "event": "in_place_restart_marker"
+    }
+  ],
+  "comparison_with_pre_restart": {
+    "same_binary": true,
+    "same_cache_entry_counts": true,
+    "pre_restart_rss_kib": 95696.0,
+    "post_restart_rss_before_reads_kib": 65204.0,
+    "rss_change_mib": -29.77734375,
+    "audit_retained": [
+      100000,
+      472
+    ],
+    "distinct_domains": [
+      1338,
+      45
+    ],
+    "attribution": "restart resets audit and allocator/runtime state; do not assign whole RSS change solely to logs or claim code optimization benefit"
+  }
+}

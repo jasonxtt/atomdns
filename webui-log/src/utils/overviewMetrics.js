@@ -8,6 +8,13 @@ export const THRESHOLDS = Object.freeze({
 
 const finite = (value) => typeof value === 'number' && Number.isFinite(value)
 
+// Missing/invalid metadata is unavailable, never zero or a truncated rank size.
+export function parseDistinctDomainCount(header) {
+  if (typeof header !== 'string' || !/^\d+$/.test(header.trim())) return null
+  const count = Number(header.trim())
+  return Number.isSafeInteger(count) ? count : null
+}
+
 // 'ok' | 'warn' | 'bad' | '' (no colour / no value)
 export function latencyTone(ms) {
   if (!finite(ms)) return ''

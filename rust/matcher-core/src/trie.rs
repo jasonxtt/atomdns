@@ -26,7 +26,7 @@ impl<V> Node<V> {
 /// Go's `ReverseDomainScanner`: trims one more trailing dot, then yields the
 /// labels from the right. Empty labels between or after dots are kept, but a
 /// leading empty label (the text starts with `.`) is never yielded.
-fn reverse_labels(s: &str) -> Vec<&str> {
+pub(crate) fn reverse_labels(s: &str) -> Vec<&str> {
     let s = s.strip_suffix('.').unwrap_or(s);
     let mut labels = Vec::new();
     let mut end = s.len();

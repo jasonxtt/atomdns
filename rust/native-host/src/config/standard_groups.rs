@@ -581,9 +581,13 @@ fn render(groups: &[Group], resolutions: &BTreeMap<u32, Resolution>) -> String {
     let mut b = String::from("plugins:\n# 由 special_groups API 自动生成。不要手动编辑。\n");
     for g in groups {
         let n = g.slot;
+        let concurrent = resolutions[&n]
+            .raw
+            .len()
+            .clamp(1, super::aliapi::MAX_CONCURRENT);
         let _ = write!(
             b,
-            "  - tag: special_route_{n}\n    type: sd_set_light\n    args:\n      socks5: \"\"\n      local_config: \"srs/special_{n}.json\"\n\n  - tag: special_manual_{n}\n    type: domain_set_light\n    args:\n      files:\n        - \"rule/special_{n}.txt\"\n\n  - tag: cache_special_{n}\n    type: cache\n    args:\n      size: 20000000\n      lazy_cache_ttl: 259200000\n      dump_file: cache/cache_special_{n}.dump\n      dump_interval: 36000\n\n  - tag: special_upstream_{n}\n    type: aliapi\n    args:\n      concurrent: 2\n      upstreams:\n"
+            "  - tag: special_route_{n}\n    type: sd_set_light\n    args:\n      socks5: \"\"\n      local_config: \"srs/special_{n}.json\"\n\n  - tag: special_manual_{n}\n    type: domain_set_light\n    args:\n      files:\n        - \"rule/special_{n}.txt\"\n\n  - tag: cache_special_{n}\n    type: cache\n    args:\n      size: 20000000\n      lazy_cache_ttl: 259200000\n      dump_file: cache/cache_special_{n}.dump\n      dump_interval: 36000\n\n  - tag: special_upstream_{n}\n    type: aliapi\n    args:\n      concurrent: {concurrent}\n      upstreams:\n"
         );
         if resolutions[&n].raw.is_empty() {
             b.push_str("        - addr: \"223.5.5.5\"\n\n");

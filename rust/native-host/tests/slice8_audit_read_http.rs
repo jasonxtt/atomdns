@@ -211,7 +211,18 @@ fn run_rich_upstream(
 #[derive(Debug)]
 struct HttpResponse {
     status: u16,
+    head: String,
     body: String,
+}
+
+impl HttpResponse {
+    fn distinct_domains(&self) -> Option<usize> {
+        self.head
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .find(|(name, _)| name.eq_ignore_ascii_case("X-Audit-Distinct-Domains"))
+            .and_then(|(_, value)| value.trim().parse().ok())
+    }
 }
 
 async fn http_request(address: SocketAddr, method: &str, target: &str) -> HttpResponse {
@@ -237,6 +248,7 @@ async fn http_request(address: SocketAddr, method: &str, target: &str) -> HttpRe
         .expect("HTTP status integer");
     HttpResponse {
         status,
+        head: head.to_owned(),
         body: body.to_owned(),
     }
 }
@@ -283,6 +295,7 @@ async fn http_post(address: SocketAddr, target: &str, body: &str) -> HttpRespons
         .expect("HTTP POST status integer");
     HttpResponse {
         status,
+        head: head.to_owned(),
         body: body.to_owned(),
     }
 }
@@ -1437,6 +1450,119 @@ fn udp_real_listener_audits_parent_ownership_after_identical_child_response() {
     child_task.join().expect("child upstream shutdown");
     parent_task.join().expect("parent upstream shutdown");
     let _ = std::fs::remove_dir_all(root);
+}
+
+async fn assert_distinct_domains(api: SocketAddr, count: usize, limit: usize) -> Value {
+    let response = http_request(
+        api,
+        "GET",
+        &format!("/api/v2/audit/rank/domain?limit={limit}"),
+    )
+    .await;
+    assert_eq!(response.status, 200);
+    assert_eq!(response.distinct_domains(), Some(count));
+    let rows: Value = serde_json::from_str(&response.body).expect("rank array JSON");
+    assert!(rows.is_array());
+    assert!(rows.as_array().unwrap().len() <= limit);
+    rows
+}
+
+#[test]
+fn distinct_domain_count_covers_the_ring_without_rank_truncation() {
+    let root = std::env::temp_dir().join(format!("mosdns-distinct-domains-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let host = HostAssembly::with_options_and_state_root(
+        local_default_config(&root, free_udp_port(), free_tcp_port()),
+        HostOptions::default().with_audit_capacity(620),
+        &root,
+    )
+    .unwrap();
+    let bound = host.block_on(host.bind_host()).unwrap();
+    let dns = bound.dns_addr();
+    let api = bound.api_addr().unwrap();
+    let shutdown = TransportCancellation::new();
+    host.block_on(async {
+        let task = tokio::task::spawn_local(bound.serve(shutdown.clone()));
+        tokio::task::spawn_blocking(move || {
+            for i in 0..550 {
+                udp_query(dns, &dns_query(i, &format!("d{i}.example")));
+            }
+            for (i, name, qtype) in [
+                (600, "d0.example", 1),
+                (601, "d0.example.", 28),
+                (602, "D0.EXAMPLE.", 28),
+            ] {
+                udp_query(dns, &dns_query_type(i, name, qtype));
+            }
+        })
+        .await
+        .unwrap();
+        let stats = http_request(api, "GET", "/api/v2/audit/stats").await;
+        assert_eq!(
+            serde_json::from_str::<Value>(&stats.body).unwrap()["total_queries"],
+            553
+        );
+        let top = assert_distinct_domains(api, 550, 20).await;
+        assert_eq!(top.as_array().unwrap().len(), 20);
+        let top500 = assert_distinct_domains(api, 550, 500).await;
+        assert_eq!(top500.as_array().unwrap().len(), 500);
+        let mut expected = (0..550)
+            .map(|i| (format!("d{i}.example"), if i == 0 { 3 } else { 1 }))
+            .collect::<Vec<_>>();
+        expected.push(("D0.EXAMPLE".to_owned(), 1));
+        expected.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+        let expected = expected
+            .into_iter()
+            .take(500)
+            .map(|(key, count)| serde_json::json!({"key": key, "count": count}))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            top500,
+            serde_json::json!(expected),
+            "raw rank body and ordering stay unchanged"
+        );
+        assert_eq!(http_post(api, "/api/v1/audit/stop", "{}").await.status, 200);
+        tokio::task::spawn_blocking(move || {
+            udp_query(dns, &dns_query(603, "not-captured.example"))
+        })
+        .await
+        .unwrap();
+        assert_distinct_domains(api, 550, 20).await;
+        assert_eq!(
+            http_post(api, "/api/v1/audit/start", "{}").await.status,
+            200
+        );
+        assert_eq!(
+            http_post(api, "/api/v1/audit/capacity", r#"{"capacity":2}"#)
+                .await
+                .status,
+            200
+        );
+        assert_distinct_domains(api, 0, 20).await;
+        for (i, name, qtype, expected) in [
+            (610, "same.example", 1, 1),
+            (611, "SAME.EXAMPLE.", 28, 1),
+            (612, "other.example", 1, 2),
+            (613, "other.example.", 28, 1),
+        ] {
+            tokio::task::spawn_blocking(move || udp_query(dns, &dns_query_type(i, name, qtype)))
+                .await
+                .unwrap();
+            assert_distinct_domains(api, expected, 20).await;
+        }
+        assert_eq!(
+            http_post(api, "/api/v1/audit/clear", "{}").await.status,
+            200
+        );
+        assert_eq!(
+            assert_distinct_domains(api, 0, 20).await,
+            serde_json::json!([])
+        );
+        shutdown.cancel();
+        task.await.unwrap().unwrap();
+    });
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

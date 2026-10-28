@@ -1,7 +1,7 @@
 //! One-time migration of the reference host's override files to the native
 //! `webinfo/settings.json` (M1-f2). The inputs are `config_overrides.json`,
 //! `upstream_overrides.json` and `domain_generation_settings.json`; the
-//! outputs are the settings (differences from the YAML only) and a report that
+//! outputs are the settings (value differences and managed upstream lists) and a report that
 //! names everything that could not be carried over. The reference's inference
 //! and fallback rules are reproduced from `coremain/api_upstream.go`.
 //! See `docs/rust/contracts/native-settings.md` and the task's `design.md`.
@@ -444,7 +444,7 @@ fn upstream_lists(
             .is_some_and(|yaml| *yaml != go_concurrent)
         {
             report.info(format!(
-                "{group}：Go 按启用数把 concurrent 重算为 {go_concurrent}，原生保持 YAML 的 {}（如需一致请改 YAML）",
+                "{group}：迁移后的设置按启用数把 concurrent 重算为 {go_concurrent}，覆盖 YAML 的 {}",
                 context.concurrent[group]
             ));
         }
@@ -488,20 +488,7 @@ fn upstream_lists(
     }
 
     for (group, list) in mapped {
-        let canonical = |entries: &[UpstreamEntry]| {
-            entries
-                .iter()
-                .map(UpstreamEntry::canonical)
-                .collect::<Vec<_>>()
-        };
-        if context
-            .upstreams
-            .get(&group)
-            .is_some_and(|yaml| canonical(yaml) == canonical(&list))
-        {
-            report.info(format!("{group}：迁移后的列表与 YAML 默认相同，不写入"));
-            continue;
-        }
+        // Retain managed-list intent even when the entries equal YAML.
         report.mapped(format!(
             "{group}：{} 个条目（启用 {}）→ settings.upstreams.{group}",
             list.len(),
@@ -791,7 +778,7 @@ mod tests {
     }
 
     #[test]
-    fn a_list_equal_to_the_yaml_is_not_written_and_a_duplicate_tag_is_renamed() {
+    fn a_list_equal_to_the_yaml_stays_managed_and_a_duplicate_tag_is_renamed() {
         let (settings, report) = run_plan(
             r#"{
               "foreign": [{"tag":"google","enabled":true,"protocol":"https","addr":"https://dns.google/dns-query"}],
@@ -799,7 +786,7 @@ mod tests {
               "domestic": [{"tag":"ali","enabled":true,"protocol":"udp","addr":"udp://223.5.5.5"}]}"#,
         );
         // All lists equal the YAML defaults once `foreignecs` is renamed.
-        assert!(settings.upstreams.is_empty(), "{:?}", settings.upstreams);
+        assert_eq!(settings.upstreams.len(), 3, "{:?}", settings.upstreams);
         assert!(
             report
                 .lines
@@ -818,7 +805,8 @@ mod tests {
               "foreign": [{"tag":"google","enabled":false,"protocol":"https","addr":"https://dns.google/dns-query"}],
               "domestic": [{"tag":"ali","enabled":true,"protocol":"udp","addr":"udp://223.5.5.5"}]}"#,
         );
-        assert!(settings.upstreams.is_empty(), "{:?}", settings.upstreams);
+        assert_eq!(settings.upstreams.len(), 1, "{:?}", settings.upstreams);
+        assert!(settings.upstreams.contains_key("domestic"));
         assert_eq!(report.unmapped, 2, "{:?}", report.lines);
         let joined = report.lines.join("\n");
         assert!(

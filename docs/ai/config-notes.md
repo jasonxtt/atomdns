@@ -15,6 +15,12 @@ Small UI/runtime JSON state belongs under `/cus/mosdns/webinfo`. When both a
 legacy root-level file and a `webinfo/` file exist, follow the current source's
 migration/precedence logic and prefer the managed state location.
 
+Native `settings.json` upstream lists record UI/API management per group:
+non-empty saves persist even if identical to YAML and use all enabled upstreams
+concurrently, capped at 20. Empty-list saves restore YAML list and `concurrent`;
+groups without a stored list keep the YAML concurrency. Merely opening the UI
+does not switch policy. See `docs/rust/contracts/native-settings.md`.
+
 Do not place user rules, WebUI state, upstream state, generated files, caches,
 SRS data, or config-update state into config-package `managed_files`.
 

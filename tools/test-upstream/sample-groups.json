@@ -1,0 +1,9 @@
+{
+  "domestic": [
+    {"tag": "provider-a", "addr": "udp://unused-a", "enabled": true},
+    {"tag": "provider-b", "addr": "udp://unused-b", "enabled": true}
+  ],
+  "foreign": [
+    {"tag": "provider-c", "addr": "https://unused-c/dns-query", "enabled": true}
+  ]
+}

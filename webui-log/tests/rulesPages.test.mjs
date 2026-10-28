@@ -242,8 +242,8 @@ test('the log page sends alias editing to the clients sub-item', () => {
 test('each sub-item page has its switches first, then lists and subscriptions', () => {
   const expected = {
     Mode: ['FlagSwitches page="mode"', 'tag="realiplist"', 'tag="cnfakeipfilter"'],
-    Upstream: ['FlagSwitches page="upstream"', '<UpstreamPanel />', '<OverridesPanel />', 'tag="ddnslist"'],
-    Routing: ['FlagSwitches page="routing"', 'tag="whitelist"', 'tag="greylist"', 'tag="direct_ip"', 'tag="rewrite"', 'kind="online"', '<SpecialGroupLinks />'],
+    Upstream: ['FlagSwitches page="upstream"', '<UpstreamPanel />', '<OverridesPanel />'],
+    Routing: ['FlagSwitches page="routing"', 'tag="whitelist"', 'tag="greylist"', 'tag="direct_ip"', 'tag="rewrite"', 'tag="ddnslist"', 'kind="online"', '<SpecialGroupLinks />'],
     Blocking: ['FlagSwitches page="blocking"', 'tag="blocklist"', 'kind="adguard"'],
     Learning: ['FlagSwitches page="learning"', '<DomainGenerationPanel />', '<LearningData />', '<RequeryPanel />'],
     Cache: ['FlagSwitches page="cache"', '<CachePanel />', 'to="/rules/learning"'],
@@ -352,5 +352,7 @@ test('the upstream page hides groups not in use unless asked, and checks before 
   const overview = read('../src/pages/OverviewPage.vue')
   assert.match(overview, /filter\(\(group\) => upstreamGroupStates\.value\[group\]\?\.active !== false\)/)
   const upstream = read('../src/pages/rules/RulesUpstreamPage.vue')
-  assert.match(upstream, /运行模式 › DDNS 优先国外解析/)
+  const routing = read('../src/pages/rules/RulesRoutingPage.vue')
+  assert.doesNotMatch(upstream, /tag="ddnslist"/)
+  assert.match(routing, /运行模式 › DDNS 优先国外解析/)
 })

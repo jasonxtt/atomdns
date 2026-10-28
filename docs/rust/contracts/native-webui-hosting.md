@@ -329,6 +329,14 @@ highlighted; on narrow screens the 规则设置 tab toggles the second row the s
 Routes use `vue-router` hash history, so a reload keeps the page and unknown addresses return to
 `#/overview`:
 
+The 域名统计 card shows the exact unique question-name count within current
+retained audit coverage, from `X-Audit-Distinct-Domains` on the domain rank
+response. It is not the number of returned top rows and never clips at500.
+The UI requests only20 display rows. A/AAAA, repeats, ASCII-case variants and
+trailing dots do not inflate the count. Missing/invalid count metadata (including
+an older backend) displays `--`; raw ranking labels and other card scopes remain
+unchanged. Client-count rank truncation is not changed by this increment.
+
 | Module | Addresses |
 | --- | --- |
 | 概览 | `#/overview` — figures from the retained audit records (their coverage is taken from `/api/v2/audit/stats/windows`; the per-window table was dropped in the part-1 rework), cache hit (summed `mosdns_cache_hit_total` / `mosdns_cache_query_total` of the named caches), CPU (one-core % between two `process_cpu_seconds_total` samples), memory (RSS), upstream (groups not in use under the current switches left out), routing, top domains/clients, slowest queries, learning summary (`/plugins/route_learner/status`) |
@@ -347,8 +355,8 @@ shows its reason, and a modified flag shows "已修改" with a restore-default (
 | Sub-item | Content |
 | --- | --- |
 | 运行模式 | `mode` flags; the `realiplist` and `cnfakeipfilter` lists |
-| 上游设置 | `upstream` flags; the upstream list by group (identifier, protocol, address, enabled, latency; other parameters in the edit dialog; restore default per group); groups whose `show_when` does not hold (`GET /api/v1/upstream/groups`, [native-settings](native-settings.md)) hidden unless "显示未生效的组" is on (then marked 当前未生效); disabling or deleting a group's last enabled upstream is refused before any request with the reason (and the switch to turn off instead); SOCKS5/ECS overrides; the `ddnslist`; the special groups' upstreams read-only with a link. Since v0.4.0 `config_rust` declares no `upstream` flag (`ddns_foreign` is in 运行模式) |
-| 分流规则 | `routing` flags; lists `whitelist`, `greylist`, `direct_ip`, `rewrite`; the five online sets (`geosite_cn`, `geosite_no_cn`, `geoip_cn`, `cuscn`, `cusnocn`); the special groups' lists read-only with links |
+| 上游设置 | `upstream` flags; the upstream list by group (identifier, protocol, address, enabled, latency; other parameters in the edit dialog; restore default per group); groups whose `show_when` does not hold (`GET /api/v1/upstream/groups`, [native-settings](native-settings.md)) hidden unless "显示未生效的组" is on (then marked 当前未生效); disabling or deleting a group's last enabled upstream is refused before any request with the reason (and the switch to turn off instead); SOCKS5/ECS overrides; the special groups' upstreams read-only with a link. Since v0.4.0 `config_rust` declares no `upstream` flag (`ddns_foreign` is in 运行模式) |
+| 分流规则 | `routing` flags; lists `whitelist`, `greylist`, `direct_ip`, `rewrite`, then `ddnslist` (DDNS 域名, with a link to 运行模式 for the DDNS priority flag); the five online sets (`geosite_cn`, `geosite_no_cn`, `geoip_cn`, `cuscn`, `cusnocn`); the special groups' lists read-only with links |
 | 请求屏蔽 | `blocking` flags; `blocklist`; AdGuard subscriptions |
 | 域名学习 | `learning` flags; the domain-generation switches (`/api/v1/domain-generation`); learned categories (counts, clearing one whole category) and entries (`/plugins/route_learner/entries`: category filter, search, sort, paging; no single-entry delete); requery state, run/cancel and timer |
 | 缓存设置 | `cache` flags; cache statistics, per-cache and all clearing, cache entry viewer |

@@ -129,12 +129,9 @@ fn reference_files_become_the_differences_only() {
     assert_eq!(settings["version"], 1);
     assert_eq!(settings["proxies"]["main_proxy"]["addr"], "10.0.0.1:1080");
     assert_eq!(settings["ecs"]["client_ecs"]["addr"], "198.51.100.5");
-    // `foreign`/`foreignecs` equal the YAML once Go's proxy fallback is explicit.
-    assert!(settings["upstreams"].get("foreign").is_none(), "{settings}");
-    assert!(
-        settings["upstreams"].get("foreignecs").is_none(),
-        "{settings}"
-    );
+    // Even YAML-equivalent lists retain the reference's managed concurrency.
+    assert!(settings["upstreams"]["foreign"].is_array(), "{settings}");
+    assert!(settings["upstreams"]["foreignecs"].is_array(), "{settings}");
     let domestic = settings["upstreams"]["domestic"].as_array().unwrap();
     assert_eq!(domestic.len(), 3);
     assert_eq!(domestic[1]["tag"], "isp");

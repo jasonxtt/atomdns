@@ -1,9 +1,109 @@
 # Rust migration validation summary
 
-Updated 2026-10-06. This is a public summary of existing evidence, not a new test run.
+Updated 2026-10-28. This is a public summary of existing evidence, not a new test run.
 The Rust branch remains experimental: full native E2E, scaffold retirement and
 explicit production approval are still required. Completed task lifecycle does
 not imply complete feature coverage or performance acceptance.
+
+## Production memory observation baseline (2026-10-28; read-only)
+
+Running `v0.4.0-patch-3687d269` matches the recorded deployment artifact and all247
+Git build inputs. At15:11 Asia/Taipei, before/after diagnostic reads:RSS95696KiB,
+PSS94016KiB;100000 retained audit rows contain1338 distinct domains. Seven caches
+hold50557 live entries; learner categories hold23024 rows, with independent and
+potentially overlapping counting scopes. Neither sum is a unique-domain count.
+The domain-card count is derived from the ring, without a permanent extra map.
+
+The25.39s observation retains102 samples, bounded500-row log composition data,
+and unchanged84-file config/rule/persisted-state fingerprints plus a private
+archive. No clear/resize/restart/load/deployment or product edit. This is a
+production observation, not an A/B or component-heap/performance PASS. See the
+[baseline and repeat method](validation-records/10-28-production-memory-baseline/README.md).
+
+Follow-up: the user reports approximately62MB immediately after restarting.
+A journal marker at15:24:43 confirms an in-place restart. Later read-only capture
+at15:27:53–15:28:18 records RSS63.68–63.98MiB,472 audit rows/45 domains and50557
+cache entries. User-reported and later measured values remain separate. PID/start
+ticks/NRestarts survive this exec-based restart; the earlier39h46 duration is PID
+age, not program-image uptime. See the [post-restart record](validation-records/10-28-production-memory-baseline/post-restart-snapshot.json).
+
+After the user's switch to main/v0.4.0, a15:38:51 restart marker precedes the
+first RSS read77.50MiB at15:39:51. Same-method capture15:40:43–15:41:09 records
+RSS77.52→77.69MiB,341 retained logs/46 domains and50557 cache entries. Domain
+cardinality comes from all341 returned log rows because this old main lacks the
+full-count header. Live/disk SHA matches historicalv0.4.0; original production
+build manifest was not recovered. This remains a different-time production
+observation, not a controlled savings percentage. See the [main record](validation-records/10-28-production-memory-baseline/main-post-restart-snapshot.json).
+
+## Lossless cache/rank increment (withdrawn 2026-10-28)
+
+The three experimental changes from `3687d269` through `fb61c247` have been
+withdrawn. Rust sources and all247 program build inputs are restored exactly to
+`3687d269`, preserving the earlier domain-index/audit optimizations. Main and
+production are unchanged. Fresh Linux workspace1533/0/0,formatting and strict
+Clippy pass; all247 build inputs match BASE. No performance exception, merge or active review
+submission is implied.
+
+Same-artifact, same-seed BASE controls each received150000/150000 measured
+replies with identical DNS semantic projections, yet CPU/protocol reply rose
+7.92%,p95 5.06%,p99 16.49%. The method cannot reliably attribute a5% difference
+to code. A direct-CoreDNS instrumented diagnostic also records millisecond sender
+compression/scheduling stalls, but does not reproduce the historical71 misses
+or prove candidate safety. Whole-program acceptance remains unproven.
+
+The archived candidate passed Linux1541 tests and reduced observed cache
+show/dump incremental read peaks from6148 to324KiB and2368 to896KiB. Those
+remain historical management-read observations, not retained-heap or steady-RSS
+improvements and not approval to restore the implementations. Original failed
+batches, all negative results and the owner-selected manual review arrangement
+remain recorded. See the [attribution and withdrawal record](validation-records/10-27-memory-lossless-cache-rank/diagnosis-2026-10-28.md)
+and [historical evidence](validation-records/10-27-memory-lossless-cache-rank/README.md).
+
+## Exact retained domain count (2026-10-26; manual review pending)
+
+The domain card now uses exact full-snapshot cardinality instead of the number
+of returned top500 rows. Repeated A/AAAA, ASCII-case and terminal-dot variants
+count once within retained audit coverage. The domain-rank JSON body is unchanged;
+an additive count header feeds the overview's20-row request. No persistent
+domain map or change to other card scopes. Linux affected318/0, local310/0,
+frontend83/0, strict Clippy/fmt and UI build passed. No production update.
+See [scope and validation](validation-records/10-26-distinct-domain-count/README.md).
+
+## Managed upstream concurrency and DDNS placement (2026-10-26; scoped review PASS)
+
+The user authorized settings-managed aliapi concurrency to follow enabled count
+(up to20), while YAML-only groups retain explicit concurrent. Nonempty upstream
+saves preserve management even when equal to YAML; empty saves restore YAML.
+Generated special groups and the settings importer follow the same policy.
+The DDNS list now follows rewrite in routing; its mode flag and data are unchanged.
+Linux native-host720/0 plus final affected347/0, frontend80/0, strict Clippy,
+formatting and UI build passed. Broader workspace attempts timed out and are
+not recorded as full PASS; a macOS port assertion also fails on the parent.
+The user-provided Claude review passed f2fc0016 with one nonblocking P3 in
+migration-report wording. After separate explicit authorization, program and
+WebUI v0.4.0-patch-f2fc0016 were installed for production observation. No push,
+main merge or Release. This review does not cover the later domain-count patch.
+See [scope, checks and retained limitations](validation-records/10-26-managed-upstream-concurrency/README.md).
+
+## Memory optimization (2026-10-26; stage accepted)
+
+The user accepted frozen candidate `b16e850d`, including CPU/protocol-reply
++5.57% versus the historical 5% limit. RSS median fell 23.09%; final product
+Linux workspace1529/0 and strict Clippy passed. No merge, push or deployment.
+
+Pre-merge M0/M1 passed. M3 memory numbers met limits, but seven candidate sends
+were skipped and its original batch remains failed. The user deferred sender
+scheduling and authorized separate MF/R3 tests: MF and all ten audit-operation
+gates passed three pairs under explicit known-CNAME and unsent-only exceptions.
+Three new BASE unsent slots, natural TTL differences and 142 flag-publication
+differences remain recorded. Full correctness/state qualification and original
+production component heap goals remain open; the two-hour soak was not run.
+
+R4 public evidence is consolidated in the [implementation, measurements,
+exceptions and reproduction record](validation-records/10-25-memory-optimization/README.md).
+Raw evidence remains in branch history/private archives; owned test resources
+were cleaned and existing services preserved. Stage acceptance is not a claim
+that every original gate passed or permission to merge, release or deploy.
 
 ## Native switch state task (2026-10-06; cumulative C2C review PASS)
 
@@ -15,7 +115,7 @@ durable exact-value control, and generic native controls in both Vue shells.
 Focused HTTP coverage is 14/14, the candidate-rebind and post-drain value
 regressions are green, Node coverage is 29/29, both Vue bundles build, and the
 canonical-temp-root native-host library run is 181/181 (four subprocess probes
-ignored). One unrelated integration test cannot bind `127.0.0.2:0` in this
+ignored). One unrelated integration test cannot bind its secondary loopback address in this
 environment. The ordered release manifest now includes 225 per-path source
 hashes and the controlled `/` + `/log` browser/DNS evidence is complete. C2C
 found P1-4/P2-10/P2-11; the complete remediation snapshot passed, and a fresh

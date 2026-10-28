@@ -63,6 +63,35 @@ const ONE: &str = "  - tag: p\n    type: socks5_proxy\n    args: {addr: '127.0.0
 const TWO: &str = "  - tag: p\n    type: socks5_proxy\n    args: {addr: '127.0.0.1:17890'}\n  - tag: other\n    type: socks5_proxy\n    args: {addr: '127.0.0.1:17891'}";
 
 #[test]
+fn generated_groups_race_all_enabled_upstreams_up_to_twenty() {
+    let tree = Tree::new("managed-concurrent", "", true);
+    for (count, disabled) in [(3, 0), (4, 1), (21, 0)] {
+        let entries = (0..count)
+            .map(|i| {
+                serde_json::json!({
+                    "tag": format!("peer{i}"), "enabled": i >= disabled,
+                    "protocol": "udp", "addr": format!("127.0.0.1:{}", 19000 + i)
+                })
+            })
+            .collect::<Vec<_>>();
+        std::fs::write(
+            tree.0.join("webinfo/special_upstream_groups.json"),
+            serde_json::json!([{"slot": 50, "name": "managed", "owned_upstreams": entries}])
+                .to_string(),
+        )
+        .unwrap();
+        let config = load_and_compile(&tree.0.join("config.yaml")).unwrap();
+        let group = config
+            .forward_definitions
+            .iter()
+            .find(|group| group.tag == "special_upstream_50")
+            .unwrap();
+        assert_eq!(group.entries.len(), count - disabled);
+        assert_eq!(group.concurrent, (count - disabled).min(20));
+    }
+}
+
+#[test]
 fn owned_proxy_requires_exactly_one_object_and_never_falls_back() {
     for (name, proxies, reason) in [
         ("missing", "", "no socks5_proxy"),
