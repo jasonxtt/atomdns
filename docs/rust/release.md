@@ -72,6 +72,14 @@
 6. **全新安装包**：用同一份 `rtdns-webui.tar.gz` 在 file 仓库运行 `mosdns/config/build_config_rust_zip.sh <rtdns-webui.tar.gz>` 重新生成 `config_rust.zip`（带 `ui/main/`）并提交 file 仓库。
    Release 建好后，用 `curl -fsSL <config.url> | sha256sum` 再核对一次与元数据一致。更新器只在 `applied_config_schema < required_config_schema` 时下载配置包。
 
+## v0.4.1 升级须知（2026-10-28；内存优化，仅程序与界面）
+
+- 配置 schema 仍为 4，没有新配置包：在线更新只换程序与 `ui/main`（已安装界面时），不动配置文件与用户数据。
+- 常驻内存下降：域名索引池化与审计日志去重，受控测试稳态 RSS −23%（不做操作时约 68 → 52 MiB），热应用峰值约 −17%，日志读/清空/改容量峰值约 −30%；每个应答的 CPU 约 +5.6%。证据见 [10-25-memory-optimization](validation-records/10-25-memory-optimization/README.md)。
+- **行为变化**：由 WebUI/接口保存过的上游组（`webinfo/settings.json` 的 `upstreams.<组>`），现在同时向组内**所有启用的上游**并发查询（最多 20 个，与 Go 版一致）；只用 YAML 的组保持自己的 `concurrent`。
+  专属分流组同样按启用数并发。想恢复 YAML 的列表与并发数，在上游设置里对该组"恢复默认"。保存与 YAML 相同的列表也会保留为"已管理"。
+- 概览"域名统计"改为按完整保留日志计数（以前受排行截断影响会偏小）；DDNS 名单移到"分流规则"页。
+
 ## v0.4.0 升级须知（配置 schema 4，2026-10-24；WebUI 拆出程序）
 
 ### WebUI 从程序里拆出来
