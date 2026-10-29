@@ -235,8 +235,14 @@ schema, route or configuration argument changes.
 
 Existing special/single-decision/no-V/memory priorities remain. Canonical route
 groups retain direct/proxy priority. If those rules choose no core, select the
-first domain_set tag belonging to 白名单/订阅直连补充/订阅直连/灰名单/订阅代理补充/
-订阅代理/CN fakeip filter/!CN fakeip filter, preserving 记忆无V4/记忆无V6 prefixes.
+first domain_set tag belonging to 白名单/直连域名/中国域名/灰名单/代理域名/
+非中国域名/CN fakeip filter/!CN fakeip filter, preserving 记忆无V4/记忆无V6 prefixes.
+Config schema 5 (2026-10-29) renamed the subscription tags to match the WebUI:
+订阅直连补充 -> 直连域名 (`cuscn`), 订阅代理补充 -> 代理域名 (`cusnocn`),
+订阅直连 -> 中国域名 (`geosite_cn`), 订阅代理 -> 非中国域名 (`geosite_no_cn`).
+Both names are recognized with the same meaning and priority (the custom set
+before the base set, within each route); the tag found is returned as written,
+so audit records kept under schema 4 keep the old names.
 If none qualifies, retain the deduplicated user labels. Reference: pinned Go
 75f26677 coremain/audit.go, computeEffectiveTag's allowed-tag fallback.
 
@@ -250,7 +256,7 @@ owner change.
 ### 5. Good / Base / Bad Cases
 
 Good: cached 白名单|订阅代理 with entry ali-entry -> 白名单. Base: reverse input
-order with no group -> 订阅代理. Bad: flatten the first case to the whole tag
+order with no group -> 订阅代理 (likewise 白名单|非中国域名 -> 白名单). Bad: flatten the first case to the whole tag
 string, or drop the no-V prefix while selecting the core.
 
 ### 6. Tests Required

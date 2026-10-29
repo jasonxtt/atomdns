@@ -4542,6 +4542,35 @@ fn upstream_endpoint(config: &CompiledConfig, identity: &str) -> Option<String> 
         })
 }
 
+// Decision tags of the direct and proxy route groups in priority order. The
+// subscription sets carry two names: 直连域名/代理域名/中国域名/非中国域名 (config
+// schema 5) and 订阅直连补充/订阅代理补充/订阅直连/订阅代理 (schema 4 and the audit
+// records written under it); both mean the same set and the tag found is returned as is.
+const DIRECT_ROUTE_TAGS: [&str; 6] = [
+    "白名单",
+    "直连域名",
+    "订阅直连补充",
+    "中国域名",
+    "订阅直连",
+    "CN fakeip filter",
+];
+const DIRECT_CANDIDATE_TAGS: [&str; 7] = [
+    "白名单",
+    "直连域名",
+    "订阅直连补充",
+    "中国域名",
+    "订阅直连",
+    "CN fakeip filter",
+    "!CN fakeip filter",
+];
+const PROXY_CANDIDATE_TAGS: [&str; 5] = [
+    "灰名单",
+    "代理域名",
+    "订阅代理补充",
+    "非中国域名",
+    "订阅代理",
+];
+
 fn compute_effective_tag(
     domain_set: &str,
     final_upstream: Option<&str>,
@@ -4626,22 +4655,15 @@ fn compute_effective_tag(
             Some("sequence_fakeip_addlist" | "sequence_fakeip_addlist_exit")
         )
     {
-        for candidate in ["白名单", "订阅直连补充", "订阅直连", "CN fakeip filter"] {
+        for candidate in DIRECT_ROUTE_TAGS {
             if tags.contains(&candidate) {
                 return join_effective_tags(&no_v, "直连候选转代理");
             }
         }
     }
     let candidates = match route_kind {
-        Some("direct") => [
-            "白名单",
-            "订阅直连补充",
-            "订阅直连",
-            "CN fakeip filter",
-            "!CN fakeip filter",
-        ]
-        .as_slice(),
-        Some("proxy") => ["灰名单", "订阅代理补充", "订阅代理"].as_slice(),
+        Some("direct") => DIRECT_CANDIDATE_TAGS.as_slice(),
+        Some("proxy") => PROXY_CANDIDATE_TAGS.as_slice(),
         _ => [].as_slice(),
     };
     if let Some(tag) = candidates.iter().find(|candidate| tags.contains(candidate)) {
@@ -4654,10 +4676,14 @@ fn compute_effective_tag(
         matches!(
             **tag,
             "白名单"
+                | "直连域名"
                 | "订阅直连补充"
+                | "中国域名"
                 | "订阅直连"
                 | "灰名单"
+                | "代理域名"
                 | "订阅代理补充"
+                | "非中国域名"
                 | "订阅代理"
                 | "CN fakeip filter"
                 | "!CN fakeip filter"
@@ -8590,6 +8616,86 @@ plugins:
             "foo|bar",
             "unknown user labels remain intact"
         );
+    }
+
+    #[test]
+    fn subscription_tags_derive_the_same_under_old_and_new_names() {
+        // (old name, new name) of the four subscription sets.
+        let direct_base = ("订阅直连", "中国域名");
+        let direct_custom = ("订阅直连补充", "直连域名");
+        let proxy_base = ("订阅代理", "非中国域名");
+        let proxy_custom = ("订阅代理补充", "代理域名");
+        for pick in [0, 1] {
+            let name = |pair: (&'static str, &'static str)| if pick == 0 { pair.0 } else { pair.1 };
+            // Direct route: the custom set outranks the base set, the whitelist both.
+            assert_eq!(
+                compute_effective_tag(
+                    &format!("{}|{}", name(direct_base), name(direct_custom)),
+                    Some("domestic"),
+                    None,
+                    None
+                ),
+                name(direct_custom)
+            );
+            assert_eq!(
+                compute_effective_tag(name(direct_base), Some("domestic"), None, None),
+                name(direct_base)
+            );
+            assert_eq!(
+                compute_effective_tag(
+                    &format!("{}|白名单", name(direct_custom)),
+                    Some("domestic"),
+                    None,
+                    None
+                ),
+                "白名单"
+            );
+            // Proxy route likewise, the greylist first.
+            assert_eq!(
+                compute_effective_tag(
+                    &format!("{}|{}", name(proxy_base), name(proxy_custom)),
+                    Some("foreign"),
+                    None,
+                    None
+                ),
+                name(proxy_custom)
+            );
+            assert_eq!(
+                compute_effective_tag(name(proxy_base), Some("foreign"), None, None),
+                name(proxy_base)
+            );
+            assert_eq!(
+                compute_effective_tag(
+                    &format!("{}|灰名单", name(proxy_custom)),
+                    Some("foreign"),
+                    None,
+                    None
+                ),
+                "灰名单"
+            );
+            // A direct candidate routed to the proxy by FakeIP.
+            for direct in [direct_base, direct_custom] {
+                assert_eq!(
+                    compute_effective_tag(
+                        name(direct),
+                        Some("foreign"),
+                        None,
+                        Some("sequence_fakeip_addlist")
+                    ),
+                    "直连候选转代理"
+                );
+            }
+            // No route type: the first recognized decision stays, with no-V flags.
+            assert_eq!(
+                compute_effective_tag(
+                    &format!("记忆无V4|{}|{}", name(proxy_base), name(direct_base)),
+                    None,
+                    None,
+                    None
+                ),
+                format!("记忆无V4|{}", name(proxy_base))
+            );
+        }
     }
 
     #[test]

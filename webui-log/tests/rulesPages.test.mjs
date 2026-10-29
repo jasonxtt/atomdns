@@ -8,7 +8,7 @@ import { RULE_SECTIONS } from '../src/navigation.js'
 import { createAppRouter } from '../src/router.js'
 import { aliasMapFromRows, aliasRowsFrom, aliasesChanged, normalizeAliasMap } from '../src/utils/clientAliases.js'
 import { LIST_LINE_CAP, canSaveList, canonicalRules, filterLines, readList, sameRules, showUrl } from '../src/utils/ruleList.js'
-import { ROUTING_SUBSCRIPTIONS, SUBSCRIPTION_FORMATS, inferFromUrl, isDownloaded, needsCategory, ruleFields, sortRules, withFormat } from '../src/utils/subscription.js'
+import { BASE_SUBSCRIPTIONS, CUSTOM_SUBSCRIPTIONS, ROUTING_SUBSCRIPTIONS, SUBSCRIPTION_FORMATS, canDeleteRule, defaultAddress, disableWarning, emptyCatalogs, inferFromUrl, isDownloaded, needsCategory, needsDisableConfirm, ruleFields, sortRules, withFormat } from '../src/utils/subscription.js'
 import { clearDirty, hasUnsaved, resetUnsaved, setDirty } from '../src/utils/unsaved.js'
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8')
@@ -187,9 +187,88 @@ test('nothing is asked without unsaved changes; opening another special group wi
 
 // ----- subscriptions and aliases -------------------------------------------------------
 
-test('the routing page lists the five online sets', () => {
+test('the five online sets are the base ones then the custom ones', () => {
   assert.deepEqual(ROUTING_SUBSCRIPTIONS.map((item) => item.tag), ['geosite_cn', 'geosite_no_cn', 'geoip_cn', 'cuscn', 'cusnocn'])
   assert.equal(new Set(ROUTING_SUBSCRIPTIONS.map((item) => item.type)).size, 5)
+})
+
+test('the subscriptions page has a custom group above the base rules, under the shared names', () => {
+  assert.deepEqual(CUSTOM_SUBSCRIPTIONS.map((item) => item.type), ['cuscn', 'cusnocn'])
+  assert.deepEqual(CUSTOM_SUBSCRIPTIONS.map((item) => item.label), ['直连域名', '代理域名'])
+  assert.deepEqual(BASE_SUBSCRIPTIONS.map((item) => item.type), ['geositecn', 'geositenocn', 'geoipcn'])
+  assert.deepEqual(BASE_SUBSCRIPTIONS.map((item) => item.label), ['中国域名', '非中国域名', '中国 IP'])
+  assert.ok(ROUTING_SUBSCRIPTIONS.every((item) => !/[(（]/.test(item.label)), 'no type suffix in the labels')
+  const page = read('../src/pages/rules/RulesRoutingPage.vue')
+  const custom = page.indexOf('variant="custom"')
+  const base = page.indexOf('variant="base"')
+  assert.ok(custom > 0 && base > custom, 'custom first, base below')
+  assert.match(page, /title="自定义订阅" :catalogs="CUSTOM_SUBSCRIPTIONS"/)
+  assert.match(page, /title="基础规则" :catalogs="BASE_SUBSCRIPTIONS"/)
+  assert.match(page, /自定义订阅优先于基础规则；同一域名同时命中时，代理域名优先。手动的白名单、灰名单优先级更高。/)
+  assert.match(page, /基础规则决定国内外分流的大方向，一般保持默认即可。/)
+  assert.doesNotMatch(page, /ROUTING_SUBSCRIPTIONS/)
+})
+
+test('the base table has no add button, a base mark, a placeholder and a warning; the others keep theirs', () => {
+  const source = read('../src/components/rules/SubscriptionTable.vue')
+  assert.match(source, /v-if="!base" class="btn primary" type="button" @click="beginAdd"/)
+  assert.match(source, /未设置地址/)
+  assert.match(source, /@click="beginSetDefault\(rule\.type\)"/)
+  assert.match(source, /基础<\/span>/)
+  assert.match(source, /更换地址前请确认新规则集与原来是同一类内容，否则会导致大量域名分流错误。/)
+  assert.match(source, /@click="restoreDefault"[^>]*>恢复默认地址/)
+  assert.match(source, /v-if="deletable\(rule\)"/)
+  assert.match(source, /if \(removing\.value \|\| !deletable\(rule\)\) return/, 'deletes run one at a time')
+  assert.match(source, /finally \{\s*removing\.value = false/)
+  assert.match(source, /<option v-for="item in catalogs"/, 'the type list is the catalogs of the table')
+  assert.match(source, /needsDisableConfirm\(props\.variant, raw \? raw\.enabled : true, payload\.enabled\)/, 'a saved edit that turns a base set off asks first')
+  assert.match(source, /needsDisableConfirm\(props\.variant, rule\.enabled, !rule\.enabled\)/, 'the switch asks first')
+  // Special groups and AdGuard pass no variant, so they stay as they were.
+  const detail = read('../src/components/rules/SpecialGroupDetail.vue')
+  assert.doesNotMatch(detail.match(/<SubscriptionTable[^>]*>/)[0], /variant/)
+  assert.doesNotMatch(read('../src/pages/rules/RulesBlockingPage.vue').match(/<SubscriptionTable[^>]*>/)[0], /variant/)
+})
+
+test('a base type keeps its last source; other sources and other tables delete freely', () => {
+  const rules = [{ type: 'geositecn', name: 'a' }, { type: 'geositecn', name: 'b' }, { type: 'geoipcn', name: 'c' }]
+  assert.equal(canDeleteRule(rules, rules[0], 'base'), true, 'an extra source can go')
+  assert.equal(canDeleteRule(rules, rules[2], 'base'), false, 'the last one stays')
+  assert.equal(canDeleteRule(rules, rules[2], 'custom'), true)
+  assert.equal(canDeleteRule(rules, rules[2], ''), true)
+})
+
+test('a base type with no source gets a placeholder, only when its catalog was read', () => {
+  const rules = [{ type: 'geositecn', name: 'a' }]
+  const all = ['geositecn', 'geositenocn', 'geoipcn']
+  assert.deepEqual(emptyCatalogs(rules, BASE_SUBSCRIPTIONS, all).map((item) => item.type), ['geositenocn', 'geoipcn'])
+  assert.deepEqual(emptyCatalogs(rules, BASE_SUBSCRIPTIONS, ['geositecn', 'geoipcn']).map((item) => item.type), ['geoipcn'], 'a failed read is not shown as empty')
+  assert.deepEqual(emptyCatalogs([], BASE_SUBSCRIPTIONS, []), [])
+})
+
+test('the default of a base set is the record of the configuration package', () => {
+  const byType = Object.fromEntries(BASE_SUBSCRIPTIONS.map((item) => [item.type, item.defaults]))
+  assert.deepEqual(byType.geositecn, { name: 'geosite_cn', files: 'srs/geosite-cn.srs', url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/sing/geo/geosite/cn.srs' })
+  assert.equal(byType.geositenocn.files, 'srs/geolocation-!cn.srs')
+  assert.equal(byType.geoipcn.name, 'geoip_cn')
+  for (const item of BASE_SUBSCRIPTIONS) assert.equal(item.defaults.name, item.tag)
+  // "恢复默认地址" puts back the address, an automatic format and no category, not name or file.
+  assert.deepEqual(defaultAddress('geoipcn'), { url: byType.geoipcn.url, format: 'auto', category: '' })
+  assert.equal(defaultAddress('cuscn'), null)
+  const source = read('../src/components/rules/SubscriptionTable.vue')
+  assert.match(source, /function restoreDefault\(\) \{\s*const address = defaultAddress\(editor\.type\)\s*if \(address\) Object\.assign\(editor, address\)/)
+})
+
+test('turning a base set off asks first, with the consequence of that type', () => {
+  assert.equal(needsDisableConfirm('base', true, false), true)
+  assert.equal(needsDisableConfirm('base', true, true), false)
+  assert.equal(needsDisableConfirm('base', false, false), false, 'already off')
+  assert.equal(needsDisableConfirm('custom', true, false), false)
+  assert.equal(needsDisableConfirm('', true, false), false)
+  assert.match(disableWarning('geoipcn'), /有 IP 的一律走代理。这是影响最大的一项/)
+  assert.match(disableWarning('geositecn'), /会变慢；非 A\/AAAA 请求会全部走国外上游/)
+  assert.match(disableWarning('geositenocn'), /改为按中国 IP 判断，多一次上游查询/)
+  assert.equal(new Set(BASE_SUBSCRIPTIONS.map((item) => disableWarning(item.type))).size, 3)
+  assert.equal(disableWarning('cuscn'), '')
 })
 
 test('a new subscription takes its name and file from the address', () => {

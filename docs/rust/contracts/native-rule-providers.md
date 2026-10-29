@@ -20,6 +20,8 @@ the configuration root (`-d`).
 | `si_set` | `local_config` (required), `socks5` (downloads) | same manifest shape; CIDRs of enabled SRS or CIDR-text files; usable in `resp_ip $tag`. |
 | `adguard_rule` | `dir` (required), `socks5` | `<dir>/config.json` + `<dir>/<id>.rules` of enabled lists (AdGuard / hosts text; other download formats are converted to it). Only block rules are exported; `@@` lines never reach the mapper. Lists that are not on disk are skipped at compile time and downloaded in the background once the host serves. |
 
+WebUI grouping of the five 分流规则 online sets (interface only; the API and the manifests do not enforce it): 基础规则 are `geositecn`/`geositenocn`/`geoipcn` (中国域名/非中国域名/中国 IP), which the WebUI keeps at one source or more per type, cannot be added as new types, asks to confirm before one is turned off and can restore the default address of; 自定义订阅 are `cuscn`/`cusnocn` (直连域名/代理域名), freely added, edited and deleted. New subscriptions can only be of these two types.
+
 A missing, empty or unparsable manifest is an empty source list (diagnostic only); a manifest with a string the reference repairs (lone UTF-16 surrogate escape, invalid UTF-8) is refused instead, because Go would keep its sources. Manifests decode like Go's `encoding/json` into each plugin's own struct (case-insensitive keys applied in document order, `null` = zero value, wrong-typed known fields and non-RFC 3339 `last_updated` fail the whole file; `tools/m1a1-oracle/manifest_parity.py`); an enabled
 source whose file is missing, unreadable or not a valid SRS is skipped with a diagnostic.
 Unknown arguments are configuration errors. `domain_set_light`/`sd_set_light` have no executable
