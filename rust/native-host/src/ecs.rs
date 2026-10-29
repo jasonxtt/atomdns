@@ -69,7 +69,9 @@ impl Subnet {
         }
         let mut address = vec![0; usize::from(width) / 8];
         address[..data.len() - 4].copy_from_slice(&data[4..]);
-        if source % 8 != 0 && address[usize::from(source) / 8] & (u8::MAX >> (source % 8)) != 0 {
+        if !source.is_multiple_of(8)
+            && address[usize::from(source) / 8] & (u8::MAX >> (source % 8)) != 0
+        {
             return Err(error("unmasked ECS address"));
         }
         Ok(Self {

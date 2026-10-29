@@ -20,14 +20,14 @@ fn fixture(index: u32) -> AuditRecord {
     let peer: SocketAddr = "[2001:db8::53]:853".parse().unwrap();
     AuditRecord {
         timestamp: UNIX_EPOCH + Duration::from_secs(100 + u64::from(index)),
-        client_addr: if index % 2 == 0 {
+        client_addr: if index.is_multiple_of(2) {
             "192.0.2.1:53000"
         } else {
             "[2001:db8::1]:53001"
         }
         .parse()
         .unwrap(),
-        transport: if index % 2 == 0 {
+        transport: if index.is_multiple_of(2) {
             QueryTransport::Udp
         } else {
             QueryTransport::Tcp
@@ -51,8 +51,8 @@ fn fixture(index: u32) -> AuditRecord {
         response_details: ResponseDetails {
             rcode: u16::try_from(index % 4).unwrap(),
             flags: ResponseFlags {
-                aa: index % 2 == 0,
-                tc: index % 3 == 0,
+                aa: index.is_multiple_of(2),
+                tc: index.is_multiple_of(3),
                 ra: true,
             },
             answers: vec![
@@ -79,7 +79,7 @@ fn fixture(index: u32) -> AuditRecord {
             ][index as usize % 3],
             answer_decode_error: (index % 3 == 2).then(|| "truncated answer".to_owned()),
         },
-        cache_status: if index % 2 == 0 {
+        cache_status: if index.is_multiple_of(2) {
             CacheStatus::Hit
         } else {
             CacheStatus::Miss
@@ -100,8 +100,8 @@ fn fixture(index: u32) -> AuditRecord {
             upstream: "provider".to_owned(),
             outcome: UpstreamAttemptOutcome::Response,
         }],
-        upstream_diagnostics: (index % 3 != 0).then(|| UpstreamDiagnostics {
-            schema_version: if index % 2 == 0 { 1 } else { 2 },
+        upstream_diagnostics: (!index.is_multiple_of(3)).then(|| UpstreamDiagnostics {
+            schema_version: if index.is_multiple_of(2) { 1 } else { 2 },
             branches: vec![
                 UpstreamDiagnosticBranch {
                     id: 0,
