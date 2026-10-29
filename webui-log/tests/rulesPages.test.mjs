@@ -283,9 +283,9 @@ test('the log page sends alias editing to the clients sub-item', () => {
 
 test('each sub-item page has its switches first, then lists and subscriptions', () => {
   const expected = {
-    Mode: ['FlagSwitches page="mode"', 'tag="realiplist"', 'tag="cnfakeipfilter"'],
+    Mode: ['FlagSwitches page="mode"'],
     Upstream: ['FlagSwitches page="upstream"', '<UpstreamPanel />', '<OverridesPanel />'],
-    Routing: ['FlagSwitches page="routing"', 'tag="whitelist"', 'tag="greylist"', 'tag="direct_ip"', 'tag="rewrite"', 'tag="ddnslist"', 'kind="online"', '<SpecialGroupLinks />'],
+    Routing: ['FlagSwitches page="routing"', 'kind="online"', '<SpecialGroupLinks />', 'tag="whitelist"', 'tag="greylist"', 'tag="realiplist"', 'tag="cnfakeipfilter"', 'tag="direct_ip"', 'tag="rewrite"', 'tag="ddnslist"'],
     Blocking: ['FlagSwitches page="blocking"', 'tag="blocklist"', 'kind="adguard"'],
     Learning: ['FlagSwitches page="learning"', '<DomainGenerationPanel />', '<LearningData />', '<RequeryPanel />'],
     Cache: ['FlagSwitches page="cache"', '<CachePanel />', 'to="/rules/learning"'],
