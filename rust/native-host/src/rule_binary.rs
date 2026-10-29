@@ -706,7 +706,7 @@ pub(crate) mod tests {
                 c(&[203, 0, 113, 9], 32),
                 c(&v6, 32),
                 c(&[1, 2, 3], 8),
-                c(&[10, 0, 0, 0], 33),
+                c(&[198, 51, 100, 0], 33),
             ],
             false,
         ));
@@ -923,19 +923,21 @@ pub(crate) mod tests {
 
     #[test]
     fn mrs_ranges_become_the_fewest_prefixes() {
-        let v6 = |tail: u8| {
+        let v6 = |high: u8, tail: u8| {
             let mut out = [0u8; 16];
             out[..4].copy_from_slice(&[0x20, 0x01, 0x0d, 0xb8]);
+            out[14] = high;
             out[15] = tail;
             out
         };
         let file = mrs_ip_file(&[
             (mapped([192, 0, 2, 0]), mapped([192, 0, 2, 255])), // a whole /24
             (mapped([198, 51, 100, 7]), mapped([198, 51, 100, 7])), // one address
-            (mapped([203, 0, 113, 250]), mapped([203, 0, 114, 5])), // across an octet
-            (v6(0), v6(255)),                                   // IPv6 /120
-            (mapped([192, 0, 2, 9]), v6(1)),                    // mixed families
-            (mapped([10, 0, 0, 9]), mapped([10, 0, 0, 1])),     // from > to
+            (mapped([203, 0, 113, 250]), mapped([203, 0, 113, 255])), // two prefixes
+            (v6(0, 0), v6(0, 255)),                             // IPv6 /120
+            (v6(1, 0xfa), v6(2, 5)),                            // across a byte
+            (mapped([192, 0, 2, 9]), v6(0, 1)),                 // mixed families
+            (mapped([192, 0, 2, 9]), mapped([192, 0, 2, 1])),   // from > to
         ]);
         let parsed = parse_mrs(&file, Want::Ips, false).unwrap();
         let got: Vec<String> = parsed.ips.iter().map(|(a, b)| format!("{a}/{b}")).collect();
@@ -946,9 +948,11 @@ pub(crate) mod tests {
                 "198.51.100.7/32",
                 "203.0.113.250/31",
                 "203.0.113.252/30",
-                "203.0.114.0/30",
-                "203.0.114.4/31",
                 "2001:db8::/120",
+                "2001:db8::1fa/127",
+                "2001:db8::1fc/126",
+                "2001:db8::200/126",
+                "2001:db8::204/127",
             ]
         );
         assert_eq!(parsed.skipped.summary(), "invalid range=2");
