@@ -15,7 +15,7 @@ mosdns-dns-core = { path = "../dns-core" }
 # IDs. Only `fill` is used, to draw the two ID octets. Default features are
 # disabled because the crate declares no default feature set, and only `std`
 # is enabled for error/std integration. Resolved lock: getrandom 0.4.3
-# (MIT OR Apache-2.0, MSRV 1.85, edition 2024) - at the workspace MSRV, not
+# (MIT OR Apache-2.0, MSRV 1.85, edition 2024) - below the workspace MSRV, not
 # above it. This was already present in the lock as a transitive dependency of
 # uuid/moka, so making it direct adds no new crate to the resolved graph.
 getrandom = { version = "0.4.3", default-features = false, features = ["std"] }
@@ -28,28 +28,28 @@ tokio = { version = "1", features = ["macros", "net", "rt", "sync", "time"] }
 tokio-util = { version = "0.7.16", features = ["rt"] }
 # Slice0 secure endpoint construction: only the structured URL parser is used;
 # no TLS/HTTP crate is introduced in this slice. The committed lock file holds
-# the transitive `idna_adapter` at 1.1.0 because the ICU-backed 1.2.x line
-# declares a 1.86+ MSRV, above this workspace's 1.85.
+# the transitive `idna_adapter` at 1.1.0; the ICU-backed 1.2.x line (MSRV
+# 1.86+) was held back while the workspace MSRV was 1.85 and is not needed.
 url = "2"
 # Slice0 pure DoH GET request-target encoding. Default features are disabled so
 # the crate brings in no `std`-only surface beyond the reviewed `alloc` string
 # encoder; only `general_purpose::URL_SAFE_NO_PAD` is used and no decode path is
 # compiled for production. Resolved lock: base64 0.22.1 (MIT OR Apache-2.0,
-# MSRV 1.48.0), below the workspace MSRV of 1.85.
+# MSRV 1.48.0), below the workspace MSRV of 1.87.
 base64 = { version = "=0.22.1", default-features = false, features = ["alloc"] }
 # Slice0 secure TLS policy preflight. Only the client policy type is needed, so
 # the TLS engine is added without its aws-lc-rs/post-quantum/logging defaults.
 # `ring` is the reviewed safe provider, `std` enables std integration, and
 # `tls12` keeps TLS 1.2 available under rustls' safe defaults. Resolved lock:
 # rustls 0.23.45 (Apache-2.0 OR ISC OR MIT, MSRV 1.71), ring 0.17.14
-# (Apache-2.0 AND ISC, MSRV 1.66.0) - both below the workspace MSRV of 1.85.
+# (Apache-2.0 AND ISC, MSRV 1.66.0) - both below the workspace MSRV of 1.87.
 # Slice0 adds only the reviewed dependency graph; no TLS socket I/O is
 # implemented by this slice.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 # Slice0 secure endpoint/HTTP dependency review. Exact pins preserve the
 # reviewed lock: hyper 1.11.0 (MIT, MSRV 1.63), hyper-util 0.1.20 (MIT, MSRV
 # 1.64), http-body-util 0.1.3 (MIT, MSRV 1.61), tokio-rustls 0.26.4
-# (MIT OR Apache-2.0, MSRV 1.71) - all below the workspace MSRV of 1.85.
+# (MIT OR Apache-2.0, MSRV 1.71) - all below the workspace MSRV of 1.87.
 # hyper exposes the low-level HTTP/1.1+HTTP/2 client connection APIs; hyper-util
 # contributes only the `tokio` IO/executor adapter. No `client`,
 # `client-legacy` or `client-pool` feature is enabled, so no high-level pooled
@@ -63,7 +63,7 @@ tokio-rustls = { version = "=0.26.4", default-features = false, features = ["rin
 # Exact pins preserve the reviewed lock: quinn =0.11.7 (MIT OR Apache-2.0,
 # rust-version 1.71), quinn-proto 0.11.x / quinn-udp 0.5.x via quinn (same
 # license family), h3 =0.0.8 (MIT, MSRV 1.70), h3-quinn =0.0.10 (MIT, MSRV
-# 1.70, depends on quinn 0.11.7) — all below the workspace MSRV of 1.85.
+# 1.70, depends on quinn 0.11.7) — all below the workspace MSRV of 1.87.
 # Default features are disabled and this manifest requests only `runtime-tokio`
 # + `rustls-ring`: this excludes `platform-verifier` (platform trust-store
 # auto-loading would violate the caller-supplied-roots contract) and never
@@ -107,7 +107,7 @@ h3-quinn = { version = "=0.0.10", default-features = false }
 # rustls-pki-types, yasna, and the `time` family, with resolver 3 holding
 # time/time-core at 0.3.45/0.1.7 (MSRV 1.83.0) and deranged at 0.5.8 (MSRV
 # 1.85.0) rather than the 1.88-requiring newer lines. Nothing activated by this
-# dev-dependency is above the workspace MSRV of 1.85. This crate is used only by
+# dev-dependency is above the workspace MSRV of 1.87. This crate is used only by
 # `tests/`; no production code imports it, and `cargo tree -e normal` shows
 # neither rcgen nor x509-parser for the crate or the workspace.
 rcgen = { version = "=0.14.7", default-features = false, features = ["ring"] }

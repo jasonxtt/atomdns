@@ -14,6 +14,7 @@ use std::net::IpAddr;
 use serde::de::{DeserializeSeed, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
 use crate::config::providers;
+use crate::rule_binary;
 
 /// The most rules one file may yield.
 pub(crate) const MAX_RULES: usize = 2_000_000;
@@ -30,6 +31,10 @@ pub(crate) enum Format {
     Text,
     Yaml,
     Json,
+    /// v2ray `geosite.dat` / `geoip.dat` (one category).
+    Dat,
+    /// mihomo binary rule set.
+    Mrs,
 }
 
 impl Format {
@@ -41,6 +46,8 @@ impl Format {
             "text" => Some(Self::Text),
             "yaml" => Some(Self::Yaml),
             "json" => Some(Self::Json),
+            "dat" => Some(Self::Dat),
+            "mrs" => Some(Self::Mrs),
             _ => None,
         }
     }
@@ -52,6 +59,8 @@ impl Format {
             Self::Text => "text",
             Self::Yaml => "yaml",
             Self::Json => "json",
+            Self::Dat => "dat",
+            Self::Mrs => "mrs",
         }
     }
 
@@ -82,6 +91,9 @@ pub(crate) fn resolve(format: Format, bytes: &[u8], url: &str) -> Format {
     if is_srs(bytes) {
         return Format::Srs;
     }
+    if rule_binary::is_mrs(bytes) {
+        return Format::Mrs;
+    }
     let path = url
         .split(['?', '#'])
         .next()
@@ -91,6 +103,12 @@ pub(crate) fn resolve(format: Format, bytes: &[u8], url: &str) -> Format {
     // fail like it always did, not be read as text.
     if path.ends_with(".srs") {
         return Format::Srs;
+    }
+    if path.ends_with(".dat") {
+        return Format::Dat;
+    }
+    if path.ends_with(".mrs") {
+        return Format::Mrs;
     }
     if path.ends_with(".yaml") || path.ends_with(".yml") {
         return Format::Yaml;
@@ -126,7 +144,7 @@ pub(crate) fn resolve(format: Format, bytes: &[u8], url: &str) -> Format {
 pub(crate) struct Skipped(BTreeMap<&'static str, u64>);
 
 impl Skipped {
-    fn add(&mut self, reason: &'static str) {
+    pub(super) fn add(&mut self, reason: &'static str) {
         self.add_many(reason, 1);
     }
 
@@ -161,20 +179,20 @@ pub(crate) struct Parsed {
 }
 
 impl Parsed {
-    fn check_room(&self) -> Result<(), String> {
+    pub(super) fn check_room(&self) -> Result<(), String> {
         if self.domains.len() + self.ips.len() >= MAX_RULES {
             return Err(format!("more than {MAX_RULES} rules in one file"));
         }
         Ok(())
     }
 
-    fn push_domain(&mut self, rule: String) -> Result<(), String> {
+    pub(super) fn push_domain(&mut self, rule: String) -> Result<(), String> {
         self.check_room()?;
         self.domains.push(rule);
         Ok(())
     }
 
-    fn push_ip(&mut self, prefix: (IpAddr, u8)) -> Result<(), String> {
+    pub(super) fn push_ip(&mut self, prefix: (IpAddr, u8)) -> Result<(), String> {
         self.check_room()?;
         self.ips.push(prefix);
         Ok(())
@@ -191,14 +209,14 @@ enum Bare {
 }
 
 #[derive(Clone, Copy)]
-enum Name {
+pub(super) enum Name {
     Domain,
     Full,
     Keyword,
 }
 
 impl Name {
-    fn prefix(self) -> &'static str {
+    pub(super) fn prefix(self) -> &'static str {
         match self {
             Self::Domain => "domain",
             Self::Full => "full",
@@ -222,7 +240,9 @@ pub(crate) fn parse(bytes: &[u8], format: Format, regexp: bool) -> Result<Parsed
         Format::Yaml => parse_yaml(bytes, regexp, &mut out)?,
         Format::Json => parse_json(bytes, regexp, &mut out)?,
         Format::Text => parse_lines(bytes, Bare::Domain, regexp, &mut out)?,
-        Format::Auto | Format::Srs => return Err("not a text format".to_owned()),
+        Format::Auto | Format::Srs | Format::Dat | Format::Mrs => {
+            return Err("not a text format".to_owned());
+        }
     }
     Ok(out)
 }
@@ -454,14 +474,14 @@ fn wildcard_regexp(pattern: &str) -> Option<String> {
     Some(format!("^{}$", converted.join("\\.")))
 }
 
-fn name_ok(value: &str) -> bool {
+pub(super) fn name_ok(value: &str) -> bool {
     !value.is_empty()
         && value
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
 }
 
-fn push_name(kind: Name, value: &str, out: &mut Parsed) -> Result<(), String> {
+pub(super) fn push_name(kind: Name, value: &str, out: &mut Parsed) -> Result<(), String> {
     let value = value.trim();
     // A keyword keeps its dots: `.ads` is not `ads`.
     let value = if matches!(kind, Name::Keyword) {
@@ -480,13 +500,20 @@ fn push_name(kind: Name, value: &str, out: &mut Parsed) -> Result<(), String> {
     out.push_domain(format!("{}:{}", kind.prefix(), value.to_ascii_lowercase()))
 }
 
-fn push_regexp(pattern: &str, regexp: bool, out: &mut Parsed) -> Result<(), String> {
+pub(super) fn push_regexp(pattern: &str, regexp: bool, out: &mut Parsed) -> Result<(), String> {
     if !regexp {
         out.skipped.add("regexp disabled");
         return Ok(());
     }
     if pattern.is_empty() {
         out.skipped.add("invalid name");
+        return Ok(());
+    }
+    // A rule is one line of the converted file and is read back trimmed: a line
+    // break would inject another rule, edge whitespace would be lost.
+    if pattern.chars().any(char::is_control) || pattern.trim() != pattern {
+        out.skipped
+            .add("regexp with a control character or edge space");
         return Ok(());
     }
     out.push_domain(format!("regexp:{pattern}"))
@@ -506,7 +533,7 @@ pub(crate) fn parse_prefix(value: &str) -> Option<(IpAddr, u8)> {
     (bits <= widest).then_some((address, bits))
 }
 
-fn push_prefix(value: &str, out: &mut Parsed) -> Result<(), String> {
+pub(super) fn push_prefix(value: &str, out: &mut Parsed) -> Result<(), String> {
     match parse_prefix(value.trim()) {
         Some(prefix) => out.push_ip(prefix),
         None => {
@@ -867,9 +894,12 @@ pub(crate) fn adguard_file(
     let mut text = header(format, url);
     let mut written = 0;
     for rule in domains {
-        let readable = adguard_form(rule).filter(|(line, expected)| {
-            providers::adguard_rules(line).as_slice() == [(false, expected.clone())]
-        });
+        // One rule is one line; a line break would start another rule.
+        let readable = adguard_form(rule)
+            .filter(|_| !rule.chars().any(char::is_control))
+            .filter(|(line, expected)| {
+                providers::adguard_rules(line).as_slice() == [(false, expected.clone())]
+            });
         match readable {
             Some((line, _)) => {
                 text.push_str(&line);
@@ -898,7 +928,9 @@ mod tests {
     fn format_values_and_serialization() {
         assert_eq!(Format::parse(" YAML "), Some(Format::Yaml));
         assert_eq!(Format::parse("auto"), Some(Format::Auto));
-        assert_eq!(Format::parse("dat"), None);
+        assert_eq!(Format::parse(" DAT "), Some(Format::Dat));
+        assert_eq!(Format::parse("mrs"), Some(Format::Mrs));
+        assert_eq!(Format::parse("mmdb"), None);
         assert_eq!(serde_json::to_string(&Format::Srs).unwrap(), "\"srs\"");
         assert!(Format::default().is_auto());
     }
@@ -937,6 +969,14 @@ mod tests {
         assert_eq!(
             resolve(Format::Auto, b"<html>", "https://example.com/a.SRS?x=1"),
             Format::Srs
+        );
+        assert_eq!(
+            resolve(Format::Auto, b"x", "https://example.com/geosite.DAT?x=1"),
+            Format::Dat
+        );
+        assert_eq!(
+            resolve(Format::Auto, b"x", "https://example.com/cn.mrs"),
+            Format::Mrs
         );
         assert!(!is_srs(b"SRS\x09"));
         assert!(!is_srs(b"SRS"));
@@ -1081,6 +1121,43 @@ mod tests {
         assert!(off.skipped.summary().contains("regexp disabled=3"));
         let on = parse(input.as_bytes(), Format::Text, true).unwrap();
         assert_eq!(on.domains.len(), 4);
+    }
+
+    #[test]
+    fn a_regexp_cannot_carry_a_line_break_into_the_converted_file() {
+        let json = "{\"rules\":[{\"domain_regex\":[\")\\nregexp:\\\\p{L}+\",\"a\\rb\",\" ^c$\",\"^ok\\\\.example\\\\.com$\"]}]}";
+        let parsed = parse(json.as_bytes(), Format::Json, true).unwrap();
+        assert_eq!(parsed.domains, ["regexp:^ok\\.example\\.com$"]);
+        assert!(
+            parsed
+                .skipped
+                .summary()
+                .contains("regexp with a control character or edge space=3")
+        );
+        let file = String::from_utf8(domain_file(
+            &parsed.domains,
+            Format::Json,
+            "https://example.com/a.json",
+        ))
+        .unwrap();
+        assert_eq!(file.lines().count(), 2);
+        // The block-list writer also takes rules that did not come from the
+        // line parsers (an SRS file): a rule with a line break is left out.
+        let mut skipped = Skipped::default();
+        let rules = [
+            ")\n||victim.example^\n(".to_owned(),
+            "ok.example.com".to_owned(),
+        ]
+        .map(|body| format!("regexp:{body}"));
+        let (text, written) = adguard_file(
+            &rules,
+            &mut skipped,
+            Format::Srs,
+            "https://example.com/a.srs",
+        );
+        assert_eq!(written, 1);
+        assert_eq!(String::from_utf8(text).unwrap().lines().count(), 2);
+        assert_eq!(skipped.total(), 1);
     }
 
     #[test]

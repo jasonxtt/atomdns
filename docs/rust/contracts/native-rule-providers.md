@@ -81,12 +81,19 @@ Quick matcher and executor over **context** marks (`mark N [N…]`, base-10 `u32
 once, when it is downloaded; start-up and hot reloads read only the stored file.
 
 **`format` field.** Optional in the manifest (and in the `PUT /config/{name}`, `POST|PUT /rules` bodies and their
-JSON views): `auto` (default), `srs`, `text`, `yaml`, `json`. `auto` is never written, so a manifest without the
+JSON views): `auto` (default), `srs`, `text`, `yaml`, `json`, `dat`, `mrs`. `auto` is never written, so a manifest without the
 field is written back byte for byte as before. The value is read without regard to case. A manifest with an
 unknown or non-string value reads it as `auto` (diagnostic, the manifest stays usable); the API answers 400.
 
+**`category` field.** Optional string in the same places as `format`, trimmed, written only when not empty. It names
+the category of a `.dat` file to import (`cn`, `category-ads-all`, …) and is ignored for every other format. With
+`format` `dat` it is required: the API answers 400 (`category is required for format dat`), and a manifest entry
+without it fails its download. An `auto` source whose address ends in `.dat` needs it as well (the download fails
+without it).
+
 **Detection (`auto`)**, in order: the SRS magic (`SRS` and a version byte 0..=3) is `srs`; the extension of the
-download address path (`.srs` is `srs` too, so a `.srs` address that returns a page fails as it always did; `.yaml` `.yml` is `yaml`, `.json` is `json`, `.txt` `.list` `.conf` is `text`); the content
+content (a zstd frame whose first four decoded bytes are `MRS\x01` is `mrs`); the extension of the
+download address path (`.dat` is `dat`, `.mrs` is `mrs`; `.srs` is `srs` too, so a `.srs` address that returns a page fails as it always did; `.yaml` `.yml` is `yaml`, `.json` is `json`, `.txt` `.list` `.conf` is `text`); the content
 (first non-blank character `{` is `json`, a line starting with `payload:` is `yaml`); otherwise `text`.
 
 **Storage.** An SRS download is stored as it is for `sd_set_light` and `si_set`. Every other download is converted
@@ -100,7 +107,7 @@ JSON, Clash-style text, dnsmasq text, or a text file that mixes such lines into 
 become `domain:` rules) is converted to AdGuard text: `domain:x` becomes
 `||x^`, `full:x` a plain `x` line, `regexp:r` becomes `/r/`, `keyword:k` becomes `/k/` with the dots escaped (AdGuard
 text has no keyword rule). Each converted line is read back with the AdGuard reader and kept only if it yields the same
-rule; the others are skipped. A block list takes only domain rules. An SRS block list is read strictly: a logical
+rule (a rule with a control character is never written); the others are skipped. A block list takes only domain rules. An SRS block list is read strictly: a logical
 rule is left out, and a rule with conditions besides domain items is left out and ends the reading (rules before it
 are kept), both counted as skipped, because the block list must not match more than the file says (the routing sets
 keep reading SRS as before). An AdGuard/hosts list is read at most up to 2,000,000 rules; more is a failed download.
@@ -139,7 +146,8 @@ is skipped whole, because it is narrower than the conditions kept; so is a rule 
 `ip_cidr` (all conditions of one rule must match, which two separate sets cannot express).
 
 **Switches and limits.** `regexp:` rules (also those made from `*` wildcards) are used only when the source has
-`enable_regexp` (`sd_set_light`); `adguard_rule` has no such switch and `/regex/` lines already apply there. Every
+`enable_regexp` (`sd_set_light`); a regexp with a control character (a line break would start another rule in the
+converted file) or leading or trailing whitespace is skipped in every format; `adguard_rule` has no such switch and `/regex/` lines already apply there. Every
 rule goes through the existing refusal check (valid-Go regexps outside the gate, Unicode-lowercase rules refuse the
 whole download). Limits: the 64 MiB download limit, lines of 64 KiB or more are skipped, at most 2,000,000 rules per
 file (more is a failed download, not a truncation). A download that cannot be read or yields no usable rule fails and
@@ -151,7 +159,56 @@ rules and the number of skipped ones by reason.
 `localhost` and the other local names are skipped. The reference and earlier versions of this host ignored such
 lines. Hosts lines with any other address are still ignored.
 
-Not supported (planned separately): `.dat` (geosite/geoip) and `.mrs`; `.mmdb` and `db` are not planned.
+### `.dat` (v2ray `geosite.dat` / `geoip.dat`)
+
+One category is imported as a whole; the other categories are skipped by length without being decoded. The category
+name is matched without regard to case; a file with the category more than once is merged. A missing category fails
+the download and the message lists the first 20 category names of the file. `@attribute` filtering is not supported
+(attributes are ignored). A domain set and a block list read a `geosite.dat`, an IP set reads a `geoip.dat`.
+
+| `geosite.dat` Domain type | Rule |
+| --- | --- |
+| Plain (0, also when absent) | `keyword:` |
+| Regex (1) | `regexp:` (needs `enable_regexp`; goes through the refusal check) |
+| RootDomain (2) | `domain:` |
+| Full (3) | `full:` |
+| any other value | skipped (`unknown domain type`) |
+
+`geoip.dat`: every CIDR of the category becomes a prefix (host bits are cleared). A category with `reverse_match`
+fails the download, because "everything but these networks" cannot be expressed. An entry whose address is not 4 or
+16 bytes or whose prefix is longer than the address is skipped.
+
+The protobuf is read flat over the downloaded bytes (no recursion): varints are at most 10 bytes, every length must
+fit in the remaining data, wire types other than 0, 1, 2 and 5 and fields of the wrong wire type are errors. A
+damaged file fails the download and the stored file is kept.
+
+### `.mrs` (mihomo binary rule set)
+
+A zstd stream (pure Rust decoder), decoded through a hard limit of 64 MiB: more output fails the download, and a
+frame that declares a window larger than that is refused before anything is allocated. After the header (`MRS\x01`,
+behavior byte, count, extra) the `domain` behavior holds a succinct domain set and the `ipcidr` behavior address
+ranges. The behavior has to match the subscription (a domain set or block list takes `domain`, an IP set `ipcidr`),
+otherwise the download fails; `classical` is not an `.mrs` behavior. The succinct set is walked with the same bounded
+traversal as SRS (bitmap and label sizes, key length, 2,000,000 keys, 64 MiB of keys).
+
+mihomo stores each domain pattern reversed, and `DomainSet.Has` gives the patterns these meanings:
+
+| Pattern in the file | Matches | Rule |
+| --- | --- | --- |
+| `x` | `x` only | `full:x` |
+| `+.x` (stored as `x` and `+.x`) | `x` and its subdomains | `domain:x` |
+| `.x` (stored as `+.x` only) | subdomains of `x` only | `regexp:^.+\.x$` (needs `enable_regexp`; `domain:x` would also match `x`) |
+| `*` as a whole label (`*.x`, `a.*.x`) | exactly one label there | an anchored `regexp:` with `[^.]+` (needs `enable_regexp`) |
+
+Approximation: mihomo's `*` can match an empty label in corner cases; here it needs at least one character.
+`ipcidr` ranges are converted to the fewest CIDR prefixes (an IPv4-mapped IPv6 address is read as IPv4; a range
+with mixed families or `from` after `to` is skipped as `invalid range`).
+
+The same rule limits as the other formats apply (2,000,000 rules per file, a download that yields no usable rule
+fails). Real-file comparison against the text versions published with `meta-rules-dat` is in the task validation
+record (`geosite.dat`/`geosite/*.mrs` give the same domain rules, `geoip.dat`/`geoip/*.mrs` the same address ranges).
+
+Not supported: `.mmdb` and `db` are not planned.
 
 ## Management (M1-a2)
 
