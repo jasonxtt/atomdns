@@ -33,9 +33,9 @@ const MAX_KEY_LEN: usize = 1024;
 /// tens of millions of objects.
 pub const MAX_ITEMS: usize = 2_000_000;
 /// 64-bit words of one succinct-set bitmap (about 16.7 million bits).
-const MAX_SET_WORDS: u64 = 1 << 18;
+pub const MAX_SET_WORDS: u64 = 1 << 18;
 /// Label bytes of one succinct set, and key bytes the walk may materialize.
-const MAX_SET_BYTES: u64 = 16 * 1024 * 1024;
+pub const MAX_SET_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_KEY_BYTES: usize = 64 * 1024 * 1024;
 const PREFIX_LABEL: u8 = b'\r';
 const ROOT_LABEL: u8 = b'\n';
@@ -500,7 +500,7 @@ fn addr(bytes: &[u8]) -> Option<IpAddr> {
 
 /// Minimal CIDR cover of `[from, to]`; ranges of mixed families or with
 /// `from > to` contribute nothing.
-fn range_to_prefixes(from: IpAddr, to: IpAddr, out: &mut Vec<(IpAddr, u8)>) {
+pub fn range_to_prefixes(from: IpAddr, to: IpAddr, out: &mut Vec<(IpAddr, u8)>) {
     match (from, to) {
         (IpAddr::V4(a), IpAddr::V4(b)) => {
             let (mut lo, hi) = (u128::from(u32::from(a)), u128::from(u32::from(b)));
@@ -548,6 +548,29 @@ fn cover(lo: &mut u128, hi: u128, width: u32, mut emit: impl FnMut(u128, u8)) {
         }
         *lo = last + 1;
     }
+}
+
+/// Every key of a succinct set given as its three raw parts (the layout is
+/// the same in sing's `domain.Matcher` and mihomo's `DomainSet`), in traversal
+/// order. The caller bounds the part sizes with [`MAX_SET_WORDS`] and
+/// [`MAX_SET_BYTES`]; the keys are charged against [`MAX_ITEMS`] and
+/// [`MAX_KEY_BYTES`].
+///
+/// # Errors
+///
+/// An error when the parts are not a well-formed set or the budgets run out.
+pub fn succinct_set_keys(
+    leaves: Vec<u64>,
+    label_bitmap: Vec<u64>,
+    labels: Vec<u8>,
+) -> io::Result<Vec<Vec<u8>>> {
+    let set = SuccinctSet {
+        leaves,
+        label_bitmap,
+        labels,
+    };
+    let (mut items, mut bytes) = (MAX_ITEMS, MAX_KEY_BYTES);
+    set.keys(&mut items, &mut bytes)
 }
 
 /// The succinct domain set of sing's `domain.Matcher` (read side only).

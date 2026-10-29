@@ -25,8 +25,9 @@ pub use mix::MixMatcher;
 pub use normalize::normalize;
 pub use regex::{RegexBuildError, RegexMatcher, check_go_regexp};
 pub use srs::{
-    DomainSrs, IpSrs, MAX_INFLATED_BYTES, PlainDomainSrs, SrsError, decode_domain_srs,
-    decode_domain_srs_plain, decode_ip_srs,
+    DomainSrs, IpSrs, MAX_INFLATED_BYTES, MAX_SET_BYTES, MAX_SET_WORDS, PlainDomainSrs, SrsError,
+    decode_domain_srs, decode_domain_srs_plain, decode_ip_srs, range_to_prefixes,
+    succinct_set_keys,
 };
 pub use trie::DomainSuffixMatcher;
 pub use valued::{ValuedBuildError, ValuedDomainMatcher, ValuedMatchResult, ValuedRule};

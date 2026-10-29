@@ -8,7 +8,7 @@ import { RULE_SECTIONS } from '../src/navigation.js'
 import { createAppRouter } from '../src/router.js'
 import { aliasMapFromRows, aliasRowsFrom, aliasesChanged, normalizeAliasMap } from '../src/utils/clientAliases.js'
 import { LIST_LINE_CAP, canSaveList, canonicalRules, filterLines, readList, sameRules, showUrl } from '../src/utils/ruleList.js'
-import { ROUTING_SUBSCRIPTIONS, SUBSCRIPTION_FORMATS, inferFromUrl, isDownloaded, ruleFields, sortRules, withFormat } from '../src/utils/subscription.js'
+import { ROUTING_SUBSCRIPTIONS, SUBSCRIPTION_FORMATS, inferFromUrl, isDownloaded, needsCategory, ruleFields, sortRules, withFormat } from '../src/utils/subscription.js'
 import { clearDirty, hasUnsaved, resetUnsaved, setDirty } from '../src/utils/unsaved.js'
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8')
@@ -207,7 +207,7 @@ test('only an .srs address keeps its file name; other formats are stored as conv
 })
 
 test('the format of a subscription is saved only when it is not auto', () => {
-  assert.deepEqual(SUBSCRIPTION_FORMATS.map((item) => item.value), ['auto', 'srs', 'text', 'yaml', 'json'])
+  assert.deepEqual(SUBSCRIPTION_FORMATS.map((item) => item.value), ['auto', 'srs', 'text', 'yaml', 'json', 'dat', 'mrs'])
   const payload = { name: 'a', url: 'https://example.com/a.yaml' }
   assert.deepEqual(withFormat({}, payload, 'auto'), payload, 'auto sends no field')
   assert.deepEqual(withFormat({}, payload, undefined), payload)
@@ -217,6 +217,27 @@ test('the format of a subscription is saved only when it is not auto', () => {
   const source = readFileSync(new URL('../src/components/rules/SubscriptionTable.vue', import.meta.url), 'utf8')
   assert.match(source, /v-model="editor\.format"/)
   assert.match(source, /format: String\(rule\.format \|\| 'auto'\)/, 'the stored format is shown when editing')
+})
+
+test('a DAT subscription names a category, sent only when it is used and not empty', () => {
+  assert.equal(needsCategory('dat', 'https://example.com/x'), true)
+  assert.equal(needsCategory('auto', 'https://example.com/geosite.DAT?x=1#f'), true)
+  assert.equal(needsCategory(undefined, 'https://example.com/geosite.dat'), true)
+  assert.equal(needsCategory('auto', 'https://example.com/cn.mrs'), false)
+  assert.equal(needsCategory('mrs', 'https://example.com/geosite.dat'), false)
+  assert.equal(needsCategory('auto', 'https://example.com/rules'), false)
+  const payload = { name: 'a', url: 'https://example.com/geosite.dat' }
+  assert.deepEqual(withFormat({}, payload, 'dat', ' cn '), { ...payload, format: 'dat', category: 'cn' })
+  assert.deepEqual(withFormat({}, payload, 'auto', 'cn'), { ...payload, category: 'cn' })
+  assert.equal('category' in withFormat({}, payload, 'dat', '  '), false, 'an empty category is not sent')
+  assert.equal('category' in withFormat({}, payload, 'dat'), false)
+  assert.equal('category' in withFormat({ category: 'cn' }, { name: 'a', url: 'https://example.com/a.txt' }, 'auto', 'cn'), false, 'a category the format does not use is dropped')
+  assert.equal('category' in withFormat({ category: 'cn' }, payload, 'mrs', 'cn'), false)
+  assert.equal(withFormat({ category: 'cn', rule_count: 4 }, payload, 'dat', 'ads').category, 'ads')
+  const source = readFileSync(new URL('../src/components/rules/SubscriptionTable.vue', import.meta.url), 'utf8')
+  assert.match(source, /<template v-if="showCategory">[\s\S]*v-model="editor\.category"[\s\S]*placeholder="例如 cn"/)
+  assert.match(source, /category: String\(rule\.category \|\| ''\)/, 'the stored category is shown when editing')
+  assert.equal((source.match(/editor\.format, editor\.category/g) || []).length, 3, 'every save sends the category through withFormat')
 })
 
 test('a subscription counts as downloaded with a rule count or an update time', () => {

@@ -37,6 +37,8 @@ time = { version = "0.3", features = ["formatting", "parsing"] }
 tokio = { version = "1", features = ["rt", "signal"] }
 tokio-rustls = { version = "=0.26.4", default-features = false, features = ["ring", "tls12"] }
 url = "2"
+# Pure-Rust zstd decoding for mihomo `.mrs` rule sets (decoder only).
+ruzstd = { version = "=0.9.1", default-features = false, features = ["std"] }
 yaml_serde = "=0.10.7"
 
 [dev-dependencies]

@@ -17,15 +17,36 @@ export const SUBSCRIPTION_FORMATS = Object.freeze([
   { value: 'srs', label: 'SRS' },
   { value: 'text', label: '文本 (.txt .list .conf)' },
   { value: 'yaml', label: 'YAML' },
-  { value: 'json', label: 'JSON' }
+  { value: 'json', label: 'JSON' },
+  { value: 'dat', label: 'DAT (v2ray geosite / geoip)' },
+  { value: 'mrs', label: 'MRS (mihomo)' }
 ])
 
+// A `.dat` file holds many categories, so the subscription names the one to import: with the
+// DAT format, or with an automatic format and an address that ends in `.dat`.
+export function needsCategory(format, url) {
+  if (format === 'dat') return true
+  if (format && format !== 'auto') return false
+  const raw = String(url || '').trim()
+  let path = raw.split('#')[0].split('?')[0]
+  try {
+    path = new URL(raw).pathname
+  } catch {
+    // keep the text before `?` and `#`
+  }
+  return /\.dat$/i.test(path)
+}
+
 // The record to save: the stored record's fields under the edited ones. `auto` leaves the
-// field out, which also clears a format the record had before.
-export function withFormat(base, payload, format) {
+// field out, which also clears a format the record had before. The category is sent only
+// where it is used and not empty, so a stored one goes when the format no longer needs it.
+export function withFormat(base, payload, format, category = '') {
   const merged = { ...base, ...payload }
   if (!format || format === 'auto') delete merged.format
   else merged.format = format
+  const text = String(category || '').trim()
+  if (text && needsCategory(format, merged.url)) merged.category = text
+  else delete merged.category
   return merged
 }
 

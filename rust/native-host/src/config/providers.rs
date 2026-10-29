@@ -214,6 +214,8 @@ pub(crate) struct SourceEntry {
     pub(crate) rule_count: i64,
     /// How the download is read; `auto` is not written to the manifest.
     pub(crate) format: Format,
+    /// The category a `.dat` download is read for; empty when not set.
+    pub(crate) category: String,
     /// The RFC 3339 text exactly as read (or written); `None` is the zero time.
     pub(crate) last_updated: Option<String>,
 }
@@ -240,6 +242,7 @@ impl Schema {
             | "update_interval_hours"
             | "rule_count"
             | "format"
+            | "category"
             | "last_updated" => true,
             "id" => self == Self::Adguard,
             "type" | "files" => self != Self::Adguard,
@@ -444,6 +447,9 @@ impl<'de> serde::de::DeserializeSeed<'de> for EntrySeed {
                         ("files", Value::String(text)) => entry.files = text,
                         ("type", Value::String(text)) => entry.kind = text,
                         ("url", Value::String(text)) => entry.url = text,
+                        ("category", Value::String(text)) => {
+                            entry.category = text.trim().to_owned()
+                        }
                         ("enabled", Value::Bool(flag)) => entry.enabled = flag,
                         ("enable_regexp", Value::Bool(flag)) => entry.enable_regexp = flag,
                         ("auto_update", Value::Bool(flag)) => entry.auto_update = flag,
@@ -533,10 +539,17 @@ pub(crate) fn parse_source_object(bytes: &[u8], schema: Schema) -> Result<Source
     if text.trim_start().starts_with("null") {
         return Ok(SourceEntry::default());
     }
-    EntrySeed(schema, true)
+    let entry = EntrySeed(schema, true)
         .deserialize(&mut deserializer)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    if entry.format == Format::Dat && entry.category.is_empty() {
+        return Err(CATEGORY_REQUIRED.to_owned());
+    }
+    Ok(entry)
 }
+
+/// The API error for a `dat` source without a category.
+pub(crate) const CATEGORY_REQUIRED: &str = "category is required for format dat";
 
 /// Where one manifest-backed provider keeps its state.
 #[derive(Clone, Debug)]
@@ -1924,10 +1937,25 @@ mod tests {
         let strict = |body: &str| parse_source_object(body.as_bytes(), Schema::Si);
         assert_eq!(strict(r#"{"format":"text"}"#).unwrap().format, Format::Text);
         assert!(
-            strict(r#"{"format":"dat"}"#)
+            strict(r#"{"format":"mmdb"}"#)
                 .unwrap_err()
                 .contains("unknown format")
         );
+        assert_eq!(
+            strict(r#"{"format":"dat"}"#).unwrap_err(),
+            CATEGORY_REQUIRED
+        );
+        assert_eq!(
+            strict(r#"{"format":"dat","category":"  "}"#).unwrap_err(),
+            CATEGORY_REQUIRED
+        );
+        let dat = strict(r#"{"format":"DAT","category":" cn "}"#).unwrap();
+        assert_eq!((dat.format, dat.category.as_str()), (Format::Dat, "cn"));
+        // Other formats keep a category without needing one, and a manifest
+        // may hold a `dat` source without it (the download then fails).
+        assert_eq!(strict(r#"{"category":"cn"}"#).unwrap().category, "cn");
+        let lenient = parse_manifest(br#"[{"name":"a","format":"dat"}]"#, Schema::Sd).unwrap();
+        assert_eq!(lenient[0].format, Format::Dat);
         assert!(strict(r#"{"format":1}"#).is_err());
         assert_eq!(strict(r#"{"format":null}"#).unwrap().format, Format::Auto);
     }
