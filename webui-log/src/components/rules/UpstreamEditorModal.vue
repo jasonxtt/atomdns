@@ -2,6 +2,7 @@
 import { computed, reactive } from 'vue'
 import { nativeProxyFlag, protocolUsesProxy } from '../../utils/nativeSettings'
 import { setError } from '../../utils/notice'
+import AppIcon from '../AppIcon.vue'
 
 // Add or edit one upstream. Only what the runtime supports is offered; a record that
 // carries anything else is read-only in the list and never reaches this dialog.
@@ -62,11 +63,11 @@ function save() {
 
 <template>
   <Teleport to="body">
-    <div class="modal-mask upstream-editor-modal-mask">
-      <section class="panel form-modal-card upstream-editor-modal-card" role="dialog" :aria-label="entry ? '编辑上游' : '添加上游'">
+    <div class="modal-mask modal-mask-center">
+      <section class="panel form-modal-card" role="dialog" :aria-label="entry ? '编辑上游' : '添加上游'">
         <header class="panel-header">
           <h3>{{ entry ? '编辑上游' : '添加上游' }}</h3>
-          <button class="btn tiny secondary" type="button" aria-label="关闭" @click="emit('close')">✕</button>
+          <button class="rt-row-icon" type="button" aria-label="关闭" title="关闭" @click="emit('close')"><AppIcon name="x" :size="18" /></button>
         </header>
         <div class="form-grid">
           <label>所属组</label>

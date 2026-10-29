@@ -66,7 +66,7 @@ onBeforeUnmount(() => window.removeEventListener('mosdns-log-refresh', load))
 </script>
 
 <template>
-  <section class="panel rt-setting-section" data-domain-generation>
+  <section class="panel rt-setting-section rt-setting-tiles" data-domain-generation>
     <h3 class="rt-setting-section-title">学习项目</h3>
     <p v-if="!supportsOperation('system.domain_generation')" class="muted rt-setting-note" role="note">{{ operationReason('system.domain_generation') }}</p>
     <template v-else>

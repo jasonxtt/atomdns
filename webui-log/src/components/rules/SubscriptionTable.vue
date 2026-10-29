@@ -7,6 +7,7 @@ import { openConfirm } from '../../utils/confirm'
 import { clearTopNotice, setError, setSuccess } from '../../utils/notice'
 import { SUBSCRIPTION_FORMATS, BASE_SUBSCRIPTIONS, canDeleteRule, defaultAddress, disableWarning, emptyCatalogs, inferFromUrl, isDownloaded, needsCategory, needsDisableConfirm, ruleFields, sortRules, withFormat } from '../../utils/subscription'
 import { formatDateTime } from '../../utils/time'
+import AppIcon from '../AppIcon.vue'
 
 // The one table for online subscriptions and AdGuard rules: name, address, enabled,
 // rule count, last update, manual update, edit / add / delete.
@@ -384,9 +385,15 @@ onBeforeUnmount(() => {
               <td class="mono" :title="formatDateTime(rule.last_updated)">{{ formatDateTime(rule.last_updated) }}</td>
               <td class="rt-col-actions">
                 <div class="rt-row-actions">
-                  <button class="btn tiny warning" type="button" @click="updateOne(rule)">更新</button>
-                  <button class="btn tiny secondary" type="button" @click="beginEdit(rule)">编辑</button>
-                  <button v-if="deletable(rule)" class="btn tiny danger" type="button" :disabled="removing" @click="remove(rule)">删除</button>
+                  <button class="rt-row-icon" type="button" title="更新" :aria-label="`更新 ${rule.name}`" @click="updateOne(rule)">
+                    <AppIcon name="refresh" :size="16" />
+                  </button>
+                  <button class="rt-row-icon" type="button" title="编辑" :aria-label="`编辑 ${rule.name}`" @click="beginEdit(rule)">
+                    <AppIcon name="pencil" :size="16" />
+                  </button>
+                  <button v-if="deletable(rule)" class="rt-row-icon danger" type="button" title="删除" :aria-label="`删除 ${rule.name}`" :disabled="removing" @click="remove(rule)">
+                    <AppIcon name="trash" :size="16" />
+                  </button>
                 </div>
               </td>
               </template>
@@ -397,11 +404,11 @@ onBeforeUnmount(() => {
     </template>
 
     <Teleport to="body">
-      <div v-if="editor.open" class="modal-mask" @click.self="editor.open = false">
+      <div v-if="editor.open" class="modal-mask modal-mask-center" @click.self="editor.open = false">
         <section class="panel form-modal-card" role="dialog" :aria-label="editor.editing ? `编辑${title}` : `新增${title}`">
           <header class="panel-header">
             <h3>{{ editor.editing ? '编辑' : '新增' }}{{ title }}</h3>
-            <button class="btn tiny secondary" type="button" aria-label="关闭" @click="editor.open = false">✕</button>
+            <button class="rt-row-icon" type="button" aria-label="关闭" title="关闭" @click="editor.open = false"><AppIcon name="x" :size="18" /></button>
           </header>
           <p v-if="base" class="rt-sub-warning" role="note">{{ WARNING }}</p>
           <div class="form-grid">

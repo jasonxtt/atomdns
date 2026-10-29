@@ -5,6 +5,7 @@ import { operationReason, supportsOperation } from '../../api/runtimeCapabilitie
 import { openConfirm } from '../../utils/confirm'
 import { setError, setSuccess } from '../../utils/notice'
 import { formatDateTime } from '../../utils/time'
+import AppIcon from '../AppIcon.vue'
 
 // What the host has learned: the categories with their counts (and clearing a whole
 // category), and the entries with why and when they were learned. Entries cannot be
@@ -148,7 +149,9 @@ onBeforeUnmount(() => {
               <td>{{ item.enabled ? '学习中' : '已关闭' }}</td>
               <td class="rt-col-actions">
                 <div class="rt-row-actions">
-                  <button class="btn tiny danger" type="button" :disabled="busy === item.tag || Number(item.entries) === 0" @click="flush(item)">清空</button>
+                  <button class="rt-row-icon danger" type="button" title="清空" :aria-label="`清空 ${item.label || item.tag}`" :disabled="busy === item.tag || Number(item.entries) === 0" @click="flush(item)">
+                    <AppIcon name="trash" :size="16" />
+                  </button>
                 </div>
               </td>
             </tr>
