@@ -27,8 +27,24 @@ export function isValidFlagList(data) {
   return Boolean(data) && Array.isArray(data.flags) && data.flags.every((flag) => flag && typeof flag.key === 'string')
 }
 
+// Wording the page shows instead of the configuration's own text, by flag key: an empty
+// description hides the explanation, `optionLabels` renames options by value.
+const FLAG_DISPLAY = Object.freeze({
+  client_routing: { description: '', optionLabels: { listed_direct: '名单内客户端始终直连' } }
+})
+
+export function flagDescription(flag) {
+  const shown = FLAG_DISPLAY[flag?.key]
+  return shown && 'description' in shown ? shown.description : String(flag?.description || '')
+}
+
+export function optionText(flag, option) {
+  return FLAG_DISPLAY[flag?.key]?.optionLabels?.[option?.value] || option?.label || String(option?.value)
+}
+
 export function optionLabel(flag, value) {
-  return (flag?.options || []).find((option) => option.value === value)?.label || String(value)
+  const option = (flag?.options || []).find((item) => item.value === value)
+  return option ? optionText(flag, option) : String(value)
 }
 
 // What the user is told after a change was applied.

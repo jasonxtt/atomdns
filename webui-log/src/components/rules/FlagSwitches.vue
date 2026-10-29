@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { deleteRequest, getJSON, postJSON } from '../../api/http'
-import { flagsForPage, isValidFlagList, optionLabel, runFlagChange } from '../../api/flags'
+import { flagDescription, flagsForPage, isValidFlagList, optionLabel, optionText, runFlagChange } from '../../api/flags'
 import { supportsOperation } from '../../api/runtimeCapabilities'
 import { clearTopNotice, setError, setSuccess } from '../../utils/notice'
 import SettingRow from '../settings/SettingRow.vue'
@@ -9,7 +9,11 @@ import SettingRow from '../settings/SettingRow.vue'
 // The switches of one sub-item of 规则设置: the flags the configuration declares for
 // `page`, in declaration order. A click is applied at once; while one change is being
 // applied the other switches of the page wait.
-const props = defineProps({ page: { type: String, required: true } })
+// `tiles` lays the page's switches out two or three to a line instead of one per row.
+const props = defineProps({
+  page: { type: String, required: true },
+  tiles: { type: Boolean, default: false }
+})
 
 const flags = ref([])
 const loaded = ref(false)
@@ -62,6 +66,13 @@ function restore(flag) {
   return apply(flag, () => deleteRequest(`/api/v1/flags/${encodeURIComponent(flag.key)}`))
 }
 
+// A choice flag explains its options in one sentence joined by "；": one option per line.
+function descriptionLines(flag) {
+  const text = flagDescription(flag)
+  if (flag.kind !== 'choice') return [text]
+  return text.split('；').map((line) => line.trim()).filter(Boolean)
+}
+
 function valueText(flag) {
   return flag.kind === 'choice' ? optionLabel(flag, flag.value) : flag.value ? '开启' : '关闭'
 }
@@ -74,11 +85,13 @@ onBeforeUnmount(() => window.removeEventListener('mosdns-log-refresh', load))
 </script>
 
 <template>
-  <section v-if="!enabled || loadError || pageFlags.length > 0" class="panel rt-setting-section" :data-flags-page="page">
-    <h3 class="rt-setting-section-title">开关</h3>
+  <section v-if="!enabled || loadError || pageFlags.length > 0" class="panel rt-setting-section" :class="{ 'rt-setting-tiles': tiles }" :data-flags-page="page">
     <p v-if="!enabled" class="muted rt-setting-note" role="note">当前配置没有可修改的功能开关。</p>
     <p v-else-if="loadError" class="rt-setting-error" role="alert">{{ loadError }}</p>
-    <SettingRow v-for="flag in pageFlags" :key="flag.key" :label="flag.label" :description="flag.description" :data-flag="flag.key">
+    <SettingRow v-for="flag in pageFlags" :key="flag.key" :label="flag.label" :class="{ 'rt-setting-stack': flag.kind === 'choice' && !flagDescription(flag) }" :data-flag="flag.key">
+      <template #description>
+        <span v-for="line in descriptionLines(flag)" :key="line" class="rt-desc-line">{{ line }}</span>
+      </template>
       <span v-if="flag.modified" class="rt-flag-mark" :data-flag-modified="flag.key">已修改</span>
       <span v-if="busyKey === flag.key" class="rt-setting-note" data-flag-busy>应用中…</span>
       <div v-if="flag.kind === 'choice'" class="rt-segmented" role="group" :aria-label="flag.label">
@@ -90,7 +103,7 @@ onBeforeUnmount(() => window.removeEventListener('mosdns-log-refresh', load))
           :aria-pressed="flag.value === option.value"
           :disabled="Boolean(busyKey)"
           @click="setValue(flag, option.value, $event)"
-        >{{ option.label }}</button>
+        >{{ optionText(flag, option) }}</button>
       </div>
       <label v-else class="switch" :title="valueText(flag)">
         <input

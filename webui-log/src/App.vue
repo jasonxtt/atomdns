@@ -32,11 +32,8 @@ watch(() => route.path, (path) => {
 function toggleModule(id) {
   expanded[id] = !expanded[id]
 }
-const pageTitle = computed(() => {
-  const module = activeModule.value
-  const title = route.meta?.title
-  return title && title !== module.label ? `${module.label} · ${title}` : module.label
-})
+// The page name alone: the sidebar already shows which module it belongs to.
+const pageTitle = computed(() => route.meta?.title || activeModule.value.label)
 const versionText = computed(() => capabilityState.health?.version || '')
 
 const topNotice = reactive({

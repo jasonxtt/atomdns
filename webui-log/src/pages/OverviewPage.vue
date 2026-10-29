@@ -1210,41 +1210,6 @@ onBeforeUnmount(() => {
   margin: 0;
 }
 
-.flat-table-wrap {
-  overflow-x: auto;
-}
-
-/* No inner panel: the rows sit straight on the card, separated by space and hairlines. */
-.flat-table {
-  width: 100%;
-  min-width: 0;
-}
-
-.flat-table th,
-.flat-table td {
-  padding: 8px;
-  font-size: 0.88rem;
-  white-space: nowrap;
-}
-
-.flat-table th {
-  position: static;
-  background: transparent;
-  box-shadow: none;
-  color: var(--ink-1);
-  font-size: 0.78rem;
-  font-weight: 500;
-}
-
-.flat-table tbody tr,
-.flat-table tbody tr:nth-child(even) {
-  background: transparent;
-}
-
-.flat-table tbody tr:hover {
-  background: var(--rp-hl-low);
-}
-
 .learner-summary {
   margin: 0 0 8px;
 }

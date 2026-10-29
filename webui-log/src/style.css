@@ -19,6 +19,8 @@
   --rp-hl-med: #dfdad9;
   --rp-hl-high: #cecacd;
   --rp-on-accent: #fffaf3;
+  --rp-fill: var(--rp-hl-low);
+  --rp-fill-hover: var(--rp-hl-med);
   --rp-gold-text: color-mix(in srgb, var(--rp-gold) 55%, var(--rp-text));
   --rp-foam-text: color-mix(in srgb, var(--rp-foam) 65%, var(--rp-text));
   --rp-shadow: 0 1px 2px #57527914;
@@ -47,6 +49,8 @@
   --rp-hl-med: #44415a;
   --rp-hl-high: #56526e;
   --rp-on-accent: #191724;
+  --rp-fill: var(--rp-hl-med);
+  --rp-fill-hover: var(--rp-hl-high);
   --rp-gold-text: var(--rp-gold);
   --rp-foam-text: var(--rp-foam);
   --rp-shadow: 0 1px 2px #0000004d;
@@ -95,14 +99,9 @@
   --surface-active: var(--rp-selected);
   --table-line: var(--rp-hl-low);
   --switch-off-bg: var(--rp-hl-high);
-  --switch-off-border: var(--rp-hl-high);
-  --switch-off-shadow: transparent;
-  --switch-on-bg-top: var(--rp-pine);
   --switch-on-bg: var(--rp-pine);
-  --switch-on-border: var(--rp-pine);
-  --switch-on-shadow: transparent;
-  --switch-knob: var(--rp-surface);
-  --switch-knob-on: var(--rp-surface);
+  --switch-knob: #fffaf3;
+  --switch-knob-on: #fffaf3;
   --menu-bg: var(--rp-hl-low);
   --menu-text: var(--rp-text);
   --menu-border: var(--rp-hl-med);
@@ -568,50 +567,61 @@ body {
   flex-wrap: wrap;
 }
 
+/* Pill buttons: filled neutral by default, accent for the main action, soft red / gold tints for the rest. */
 .btn {
   border: 1px solid transparent;
-  border-radius: 9px;
-  padding: 8px 12px;
+  border-radius: 999px;
+  padding: 8px 16px;
   font-weight: 600;
   color: var(--ink-0);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .btn:disabled {
-  opacity: 0.65;
+  opacity: 0.55;
   cursor: not-allowed;
 }
 
-.btn.primary,
 .btn.secondary {
-  background: var(--menu-bg);
-  border-color: var(--menu-border);
-  color: var(--menu-text);
+  background: var(--rp-fill);
+  color: var(--ink-0);
+}
+
+.btn.primary {
+  background: var(--rp-pine);
+  color: var(--rp-on-accent);
 }
 
 .btn.warning {
-  background: var(--menu-bg);
-  border-color: var(--menu-border);
-  color: var(--menu-text);
+  background: color-mix(in srgb, var(--rp-gold) 20%, transparent);
+  color: var(--rp-gold-text);
 }
 
 .btn.danger {
-  background: var(--menu-bg);
-  border-color: var(--menu-border);
-  color: var(--menu-text);
+  background: color-mix(in srgb, var(--rp-love) 16%, transparent);
+  color: color-mix(in srgb, var(--rp-love) 85%, var(--rp-text));
 }
 
-.btn.primary:hover:not(:disabled),
-.btn.secondary:hover:not(:disabled),
-.btn.warning:hover:not(:disabled),
+.btn.secondary:hover:not(:disabled) {
+  background: var(--rp-fill-hover);
+}
+
+.btn.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--rp-pine) 82%, var(--rp-text));
+}
+
+.btn.warning:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--rp-gold) 32%, transparent);
+}
+
 .btn.danger:hover:not(:disabled) {
-  background: var(--menu-hover-bg);
+  background: color-mix(in srgb, var(--rp-love) 28%, transparent);
 }
 
 .btn.tiny {
   font-size: 0.8rem;
-  padding: 6px 9px;
+  padding: 6px 12px;
 }
 
 input,
@@ -619,11 +629,19 @@ select,
 textarea {
   width: 100%;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--rp-r-lg);
   padding: 8px 10px;
   font: inherit;
   color: inherit;
   background: var(--surface-input);
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none;
+  border-color: var(--rp-pine);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--rp-pine) 28%, transparent);
 }
 
 textarea {
@@ -633,10 +651,9 @@ textarea {
   font-size: 0.86rem;
 }
 
+/* Tables are flat by default: no frame, no stripes; the sticky header takes the card's own colour. */
 .table-wrap {
   overflow: auto;
-  border: 1px solid var(--line);
-  border-radius: 12px;
 }
 
 table {
@@ -661,12 +678,15 @@ th,
 td {
   border-bottom: 1px solid var(--table-line);
   text-align: left;
-  padding: 10px;
-  font-size: 0.92rem;
+  padding: 9px 10px;
+  font-size: 0.9rem;
 }
 
 th {
-  background: var(--surface-head);
+  background: var(--panel);
+  color: var(--ink-1);
+  font-size: 0.8rem;
+  font-weight: 500;
   position: sticky;
   top: 0;
   z-index: 1;
@@ -677,15 +697,7 @@ tbody tr {
   transition: background 0.15s ease;
 }
 
-tbody tr:nth-child(even) {
-  background: var(--surface-soft);
-}
-
 tbody tr:hover {
-  background: var(--surface-hover);
-}
-
-tbody tr:nth-child(even):hover {
   background: var(--surface-hover);
 }
 
@@ -982,55 +994,63 @@ tr.disabled {
   font-size: 1rem;
 }
 
-.form-modal-card {
-  width: min(760px, 96vw);
-  max-height: calc(100vh - 40px);
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+/* Form dialogs: centred card, labels above their fields. */
+.modal-mask-center {
+  align-items: center;
   overflow: hidden;
+  padding-block: 16px;
+}
+
+.form-modal-card {
+  width: min(520px, 96vw);
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+  display: flex;
+  flex-direction: column;
   margin: 0 auto;
+  padding: 20px 24px;
+  border: 0;
+  border-radius: var(--rp-r-2xl);
+  box-shadow: var(--rp-elevated);
+  overflow: hidden;
 }
 
 .form-modal-card .panel-header {
-  margin-bottom: 10px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.form-modal-card .panel-header h3 {
+  font-size: 1.1rem;
 }
 
 .form-modal-card .form-grid {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
   min-height: 0;
   overflow: auto;
   align-content: start;
   padding-right: 4px;
 }
 
+.form-modal-card .form-grid label {
+  padding-top: 10px;
+  font-size: 0.84rem;
+}
+
+.form-modal-card .form-grid > label:first-child {
+  padding-top: 0;
+}
+
+.form-modal-card .switch-inline {
+  padding-left: 0;
+}
+
 .form-modal-card .actions {
   justify-content: flex-end;
   border-top: 0;
-  padding-top: 8px;
-  margin-top: 8px;
-  background: transparent;
-}
-
-.upstream-editor-modal-card {
-  width: min(980px, 96vw);
-  max-height: calc(100vh - 32px);
-  max-height: calc(100dvh - 32px);
-  display: flex;
-  flex-direction: column;
-  padding: 0;
-  overflow: hidden;
-}
-
-.upstream-editor-modal-mask {
-  align-items: flex-start;
-  overflow: hidden;
-  padding-block: 16px;
-}
-
-.upstream-editor-modal-card .actions {
-  justify-content: flex-end;
-  border-top: 0;
-  padding-top: 8px;
-  margin-top: 8px;
+  padding-top: 16px;
+  margin-top: 0;
   background: transparent;
 }
 
@@ -1336,15 +1356,6 @@ tr.disabled {
   gap: 8px;
 }
 
-.btn.primary:hover:not(:disabled),
-.btn.secondary:hover:not(:disabled),
-.btn.warning:hover:not(:disabled),
-.btn.danger:hover:not(:disabled) {
-  background: var(--menu-hover-bg) !important;
-  border-color: var(--menu-border) !important;
-  color: var(--menu-text) !important;
-}
-
 button:not(:disabled),
 button:not(:disabled) *,
 .btn:not(:disabled),
@@ -1456,10 +1467,8 @@ label.switch-table *,
   position: absolute;
   inset: 0;
   border-radius: 999px;
-  border: 1px solid var(--switch-off-border);
   background: var(--switch-off-bg);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 3px 10px var(--switch-off-shadow);
-  transition: all 0.2s ease;
+  transition: background 0.2s ease;
   cursor: pointer;
 }
 
@@ -1468,18 +1477,20 @@ label.switch-table *,
   position: absolute;
   width: 18px;
   height: 18px;
-  left: 2px;
-  top: 2px;
+  left: 3px;
+  top: 3px;
   border-radius: 50%;
   background: var(--switch-knob);
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.28);
+  box-shadow: var(--rp-shadow);
   transition: transform 0.2s ease;
 }
 
 .switch input:checked + .slider {
-  background: linear-gradient(180deg, var(--switch-on-bg-top) 0%, var(--switch-on-bg) 100%);
-  border-color: var(--switch-on-border);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.26), 0 4px 12px var(--switch-on-shadow);
+  background: var(--switch-on-bg);
+}
+
+.switch input:focus-visible + .slider {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--rp-pine) 40%, transparent);
 }
 
 .switch input:checked + .slider::before {
@@ -2064,27 +2075,33 @@ label.switch-table *,
 
 .rt-segmented {
   display: inline-flex;
-  border: 1px solid var(--menu-border);
-  border-radius: 8px;
-  overflow: hidden;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--rp-hl-med);
+  border-radius: 999px;
   width: fit-content;
 }
 
 .rt-segmented button {
   border: 0;
-  border-right: 1px solid var(--menu-border);
-  background: var(--menu-bg);
-  color: var(--menu-text);
-  height: 30px;
-  padding: 0 12px;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-1);
+  height: 28px;
+  padding: 0 14px;
   white-space: nowrap;
   font: inherit;
   font-size: 0.88rem;
   cursor: pointer;
 }
 
-.rt-segmented button:last-child {
-  border-right: 0;
+.rt-segmented button:hover:not(.active):not(:disabled) {
+  color: var(--ink-0);
+}
+
+.rt-segmented button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .rt-segmented button.active {
@@ -2103,33 +2120,43 @@ label.switch-table *,
 }
 
 .rt-setting-section {
-  padding: 8px 16px 2px;
+  padding: 8px 20px 4px;
 }
 
 .rt-setting-section-title {
-  margin: 0 0 2px;
-  font-size: 0.95rem;
+  margin: 4px 0 4px;
+  font-size: 1.05rem;
 }
 
-/* name | explanation | value and actions; the same columns in every section. */
+/* Name over its explanation on the left, the value and its actions on the right. */
 .rt-setting-row {
   display: grid;
-  grid-template-columns: 112px minmax(0, 1fr) auto;
-  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "label value" "desc value";
+  column-gap: 20px;
+  row-gap: 2px;
   align-items: center;
-  padding: 5px 0;
-  border-top: 1px solid var(--table-line);
+  padding: 14px 0;
+  border-top: 1px solid var(--rp-hl-low);
+}
+
+.rt-setting-row:first-child {
+  border-top: 0;
 }
 
 .rt-setting-label {
-  font-size: 0.88rem;
+  grid-area: label;
+  align-self: end;
+  font-size: 0.94rem;
   font-weight: 600;
 }
 
 .rt-setting-desc {
+  grid-area: desc;
+  align-self: start;
   color: var(--ink-1);
-  font-size: 0.8rem;
-  line-height: 1.45;
+  font-size: 0.82rem;
+  line-height: 1.5;
   min-width: 0;
 }
 
@@ -2138,6 +2165,7 @@ label.switch-table *,
 }
 
 .rt-setting-value {
+  grid-area: value;
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -2165,10 +2193,10 @@ label.switch-table *,
 .rt-setting-input {
   box-sizing: border-box;
   width: 200px;
-  height: 30px;
-  padding: 0 8px;
+  height: 32px;
+  padding: 0 10px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--rp-r-lg);
   background: var(--surface-input);
   color: var(--ink-0);
   font: inherit;
@@ -2183,8 +2211,8 @@ label.switch-table *,
 .rt-setting-inline .btn {
   display: inline-flex;
   align-items: center;
-  height: 30px;
-  padding: 0 10px;
+  height: 32px;
+  padding: 0 16px;
   white-space: nowrap;
   text-decoration: none;
 }
@@ -2309,7 +2337,8 @@ label.switch-table *,
 
   .rt-setting-row {
     grid-template-columns: minmax(0, 1fr);
-    gap: 4px;
+    grid-template-areas: "label" "desc" "value";
+    row-gap: 6px;
   }
 
   .rt-setting-value {
@@ -2329,14 +2358,14 @@ label.switch-table *,
   height: 22px;
   padding: 0 8px;
   border-radius: 999px;
-  border: 1px solid var(--warn);
+  background: color-mix(in srgb, var(--rp-gold) 20%, transparent);
   color: var(--warn);
   font-size: 0.75rem;
   white-space: nowrap;
 }
 
 .rt-flag-mark.rt-flag-running {
-  border-color: var(--brand);
+  background: color-mix(in srgb, var(--rp-pine) 14%, transparent);
   color: var(--brand);
 }
 
@@ -2355,7 +2384,7 @@ label.switch-table *,
 
 .rt-list-head h3 {
   margin: 0;
-  font-size: 0.95rem;
+  font-size: 1.05rem;
 }
 
 .rt-list-title {
@@ -2436,6 +2465,11 @@ label.switch-table *,
   white-space: nowrap;
 }
 
+/* Same width in the custom and the base subscription tables, so their columns line up. */
+.rt-sub-wrap .rt-col-actions {
+  width: 108px;
+}
+
 .rt-sub-table td,
 .rt-upstream-table td,
 .rt-learning-entries td {
@@ -2455,14 +2489,18 @@ label.switch-table *,
 
 .rt-row-actions {
   display: flex;
-  gap: 6px;
+  gap: 2px;
   justify-content: flex-end;
   white-space: nowrap;
 }
 
-.rt-upstream-group-row td {
-  background: var(--surface-head);
+/* A group is a plain heading on the card: name, count, marks, then its own actions. */
+.rt-upstream-group-row td,
+.rt-upstream-group-row:hover td {
   max-width: none;
+  padding-top: 20px;
+  border-bottom: 0;
+  background: transparent;
 }
 
 .rt-upstream-group-head {
@@ -2470,6 +2508,10 @@ label.switch-table *,
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.rt-upstream-group-head strong {
+  font-size: 0.94rem;
 }
 
 .rt-upstream-group-actions {
@@ -2532,7 +2574,34 @@ label.switch-table *,
 
 .rt-alias-input {
   width: 100%;
-  max-width: 320px;
+}
+
+/* Aliases as a grid of "address | name" pairs, a few to a line. */
+.rt-alias-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(270px, 100%), 1fr));
+  gap: 10px 28px;
+  margin: 0 0 8px;
+  padding: 0 4px 0 0;
+  list-style: none;
+  max-height: 360px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--rp-hl-high) transparent;
+}
+
+.rt-alias-item {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.rt-alias-ip {
+  overflow: hidden;
+  font-size: 0.86rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .rt-group-detail {
@@ -2589,25 +2658,31 @@ label.switch-table *,
 
 .rt-subtabs {
   display: flex;
-  gap: 4px;
+  gap: 6px;
   overflow-x: auto;
   margin: 4px 0 12px;
-  border-bottom: 1px solid var(--line);
+  padding: 2px;
   scrollbar-width: none;
 }
 
 .rt-subtab {
   flex: 0 0 auto;
-  padding: 7px 12px;
-  border-bottom: 2px solid transparent;
+  padding: 6px 16px;
+  border-radius: 999px;
   color: var(--ink-1);
   font-size: 0.9rem;
   text-decoration: none;
   white-space: nowrap;
 }
 
+.rt-subtab:hover:not(.active) {
+  background: var(--rp-fill);
+  color: var(--ink-0);
+}
+
 .rt-subtab.active {
-  border-bottom-color: var(--ink-0);
+  background: var(--rp-selected);
+  box-shadow: inset 0 0 0 1px var(--rp-pine);
   color: var(--ink-0);
   font-weight: 600;
 }
@@ -2900,4 +2975,198 @@ button.legend-row:hover {
   .overview-ranks {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+.rt-desc-line {
+  display: block;
+}
+
+/* A choice without an explanation: name and its marks on top, the options across the full width below. */
+.rt-setting-stack {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas: "label mark restore" "choice choice choice";
+  row-gap: 10px;
+}
+
+.rt-setting-stack > .rt-setting-value {
+  display: contents;
+}
+
+.rt-setting-stack .rt-setting-label {
+  align-self: center;
+}
+
+.rt-setting-stack .rt-setting-desc {
+  display: none;
+}
+
+.rt-setting-stack .rt-flag-mark,
+.rt-setting-stack .rt-setting-note {
+  grid-area: mark;
+}
+
+.rt-setting-stack .btn {
+  grid-area: restore;
+}
+
+.rt-setting-stack .rt-segmented {
+  grid-area: choice;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  width: auto;
+}
+
+.rt-setting-stack .rt-segmented button {
+  min-width: 0;
+}
+
+@media (max-width: 760px) {
+  .rt-setting-stack .rt-segmented {
+    grid-auto-flow: row;
+    border-radius: 22px;
+  }
+
+  .rt-setting-stack .rt-segmented button {
+    height: 34px;
+  }
+}
+
+/* Switches two or three to a line, each in its own outlined tile: name and explanation on the left, the switch on the right. */
+.rt-setting-tiles.rt-setting-section {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.rt-setting-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
+  gap: 12px;
+}
+
+.rt-setting-tiles > :not(.rt-setting-row) {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.rt-setting-tiles .rt-setting-row {
+  grid-template-areas: "label value" "desc value";
+  column-gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--rp-hl-med);
+  border-radius: var(--radius-md);
+}
+
+.rt-setting-tiles .rt-setting-value {
+  align-self: center;
+  max-width: 12rem;
+}
+
+/* Several parts of one page in one card, told apart by a divider with a small mark in the middle. */
+.rt-panel-group {
+  padding: 16px 20px 20px;
+}
+
+.rt-panel-group > .panel {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.rt-panel-group .rt-setting-row {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.rt-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 14px 0;
+}
+
+.rt-divider:first-child {
+  display: none;
+}
+
+.rt-divider::before,
+.rt-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--rp-hl-med);
+}
+
+.rt-divider i {
+  width: 6px;
+  height: 6px;
+  background: var(--rp-hl-high);
+  transform: rotate(45deg);
+}
+
+/* ---- flat tables: no inner panel, rows sit straight on the card ---- */
+
+.flat-table-wrap {
+  overflow-x: auto;
+}
+
+.flat-table {
+  width: 100%;
+  min-width: 0;
+}
+
+.flat-table th,
+.flat-table td {
+  padding: 8px;
+  font-size: 0.88rem;
+  white-space: nowrap;
+}
+
+.flat-table th {
+  position: static;
+  background: transparent;
+  box-shadow: none;
+  color: var(--ink-1);
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.flat-table tbody tr,
+.flat-table tbody tr:nth-child(even) {
+  background: transparent;
+}
+
+.flat-table tbody tr:hover {
+  background: var(--rp-hl-low);
+}
+
+/* ---- round icon buttons inside rows and dialogs ---- */
+
+.rt-row-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-1);
+  cursor: pointer;
+}
+
+.rt-row-icon:hover:not(:disabled) {
+  background: var(--rp-fill);
+  color: var(--ink-0);
+}
+
+.rt-row-icon.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--rp-love) 16%, transparent);
+  color: color-mix(in srgb, var(--rp-love) 85%, var(--rp-text));
+}
+
+.rt-row-icon:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }

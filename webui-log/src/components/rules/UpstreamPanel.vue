@@ -8,6 +8,7 @@ import { isModified, settingsBackedProxy, settingsSources } from '../../utils/na
 import { clearTopNotice, setError, setSuccess } from '../../utils/notice'
 import { latencyTone } from '../../utils/overviewMetrics'
 import { lastUpstreamReason, loadUpstreamGroups, orderUpstreamGroups, parseUpstreamStatsMetrics, protocolDisplayLabel, upstreamAddressDisplay, upstreamGroupDisplay } from '../../utils/upstreamStats'
+import AppIcon from '../AppIcon.vue'
 import UpstreamEditorModal from './UpstreamEditorModal.vue'
 
 // The upstream list by group: identifier, protocol, address, enabled and latency; every
@@ -254,8 +255,8 @@ onBeforeUnmount(() => window.removeEventListener('mosdns-log-refresh', load))
       <p v-if="!canManage" class="muted" role="note">{{ operationReason('upstreams.manage') }}</p>
       <p v-if="loading && groups.length === 0" class="muted">读取中…</p>
       <p v-else-if="groups.length === 0" class="muted">暂无上游配置</p>
-      <div v-if="groups.length > 0" class="table-wrap rt-compact-table">
-        <table class="rt-upstream-table">
+      <div v-if="groups.length > 0" class="flat-table-wrap">
+        <table class="flat-table rt-upstream-table">
           <thead>
             <tr>
               <th class="sortable" @click="onSort('tag')">标识 {{ sortMark('tag') }}</th>
@@ -295,8 +296,12 @@ onBeforeUnmount(() => window.removeEventListener('mosdns-log-refresh', load))
               <td class="text-right" :class="row.tone ? `rt-text-${row.tone}` : ''">{{ row.latency === null ? '-' : `${row.latency.toFixed(1)} ms` }}</td>
               <td class="rt-col-actions">
                 <div class="rt-row-actions">
-                  <button class="btn tiny secondary" type="button" :disabled="!canManage || row.status.readOnly" @click="beginEdit(group, row)">编辑</button>
-                  <button class="btn tiny danger" type="button" :disabled="!canManage || row.status.readOnly" @click="remove(group, row)">删除</button>
+                  <button class="rt-row-icon" type="button" title="编辑" :aria-label="`编辑 ${row.entry.tag}`" :disabled="!canManage || row.status.readOnly" @click="beginEdit(group, row)">
+                    <AppIcon name="pencil" :size="16" />
+                  </button>
+                  <button class="rt-row-icon danger" type="button" title="删除" :aria-label="`删除 ${row.entry.tag}`" :disabled="!canManage || row.status.readOnly" @click="remove(group, row)">
+                    <AppIcon name="trash" :size="16" />
+                  </button>
                 </div>
               </td>
             </tr>

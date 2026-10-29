@@ -156,19 +156,14 @@ onBeforeUnmount(() => {
         <input v-model="manualName" class="rt-setting-input" placeholder="别名，例如 iPhone" aria-label="别名" @keyup.enter="addManual" />
         <button class="btn secondary" type="button" @click="addManual">加入列表</button>
       </div>
-      <div class="table-wrap rt-compact-table rt-scroll-wrap">
-        <table class="rt-alias-table">
-          <thead><tr><th>客户端 IP</th><th>别名</th></tr></thead>
-          <tbody>
-            <tr v-if="loading && rows.length === 0"><td colspan="2" class="empty">读取中…</td></tr>
-            <tr v-else-if="shown.length === 0"><td colspan="2" class="empty">{{ filter ? '没有匹配的客户端' : '暂无客户端' }}</td></tr>
-            <tr v-for="row in shown" :key="`alias-${row.ip}`">
-              <td class="mono">{{ row.ip }}</td>
-              <td><input v-model="row.alias" class="rt-setting-input rt-alias-input" placeholder="为空表示删除别名" :aria-label="`${row.ip} 的别名`" /></td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+      <p v-if="loading && rows.length === 0" class="muted">读取中…</p>
+      <p v-else-if="shown.length === 0" class="muted">{{ filter ? '没有匹配的客户端' : '暂无客户端' }}</p>
+      <ul v-else class="rt-alias-grid">
+        <li v-for="row in shown" :key="`alias-${row.ip}`" class="rt-alias-item">
+          <span class="mono rt-alias-ip" :title="row.ip">{{ row.ip }}</span>
+          <input v-model="row.alias" class="rt-setting-input rt-alias-input" placeholder="为空表示删除别名" :aria-label="`${row.ip} 的别名`" />
+        </li>
+      </ul>
       <div class="actions rt-list-actions">
         <button class="btn primary" type="button" :disabled="loading || saving || !loaded || !dirty" @click="save">{{ saving ? '保存中…' : '保存全部' }}</button>
         <button class="btn secondary" type="button" :disabled="loading || saving" @click="exportFile">导出 JSON</button>
