@@ -198,11 +198,15 @@ test('a new subscription takes its name and file from the address', () => {
   assert.equal(inferFromUrl('https://example.com/'), null)
 })
 
-test('only an .srs address keeps its file name; other formats are stored as converted text', () => {
-  assert.deepEqual(inferFromUrl('https://example.com/a/ads.yaml'), { name: 'ads', files: 'srs/ads.txt' })
-  assert.deepEqual(inferFromUrl('https://example.com/a/list.json?x=1'), { name: 'list', files: 'srs/list.txt' })
+test('a new subscription keeps the file name of its address when it is a rule file', () => {
+  assert.deepEqual(inferFromUrl('https://example.com/a/ads.yaml'), { name: 'ads', files: 'srs/ads.yaml' })
+  assert.deepEqual(inferFromUrl('https://example.com/a/list.json?x=1'), { name: 'list', files: 'srs/list.json' })
   assert.deepEqual(inferFromUrl('https://example.com/hosts.txt'), { name: 'hosts', files: 'srs/hosts.txt' })
+  assert.deepEqual(inferFromUrl('https://example.com/rules/gfw.mrs'), { name: 'gfw', files: 'srs/gfw.mrs' })
+  assert.deepEqual(inferFromUrl('https://example.com/geosite.dat'), { name: 'geosite', files: 'srs/geosite.dat' })
+  assert.deepEqual(inferFromUrl('https://example.com/a.list'), { name: 'a', files: 'srs/a.list' })
   assert.deepEqual(inferFromUrl('https://example.com/rules'), { name: 'rules', files: 'srs/rules.txt' })
+  assert.deepEqual(inferFromUrl('https://example.com/rules.php'), { name: 'rules', files: 'srs/rules.txt' })
   assert.deepEqual(inferFromUrl('https://example.com/GEO.SRS'), { name: 'GEO', files: 'srs/GEO.SRS' })
 })
 
