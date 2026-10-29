@@ -50,8 +50,11 @@ export function withFormat(base, payload, format, category = '') {
   return merged
 }
 
-// Name and local file proposed for a new subscription from its address. Only an `.srs` file
-// is kept as it is; any other download is stored converted, as text.
+// Name and local file proposed for a new subscription from its address. The file keeps the
+// address's name when it has a rule-file extension (the program reads a file by its content,
+// so a converted download may keep it); any other name gets `.txt`.
+const RULE_FILE_EXTENSION = /\.(srs|mrs|dat|txt|list|conf|ya?ml|json)$/i
+
 export function inferFromUrl(url) {
   const raw = String(url || '').trim()
   if (!raw) return null
@@ -69,7 +72,7 @@ export function inferFromUrl(url) {
   fileName = fileName.trim()
   if (!fileName) return null
   const name = fileName.replace(/\.[^.]+$/, '') || fileName
-  return { name, files: /\.srs$/i.test(fileName) ? `srs/${fileName}` : `srs/${name}.txt` }
+  return { name, files: RULE_FILE_EXTENSION.test(fileName) ? `srs/${fileName}` : `srs/${name}.txt` }
 }
 
 function isZero(value) {
