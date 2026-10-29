@@ -1,9 +1,12 @@
 <script setup>
+import AppIcon from './AppIcon.vue'
 import CapabilityBoundary from './CapabilityBoundary.vue'
+import DetailField from './DetailField.vue'
 import { supportsOperation, operationReason } from '../api/runtimeCapabilities'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { getJSON, postJSON } from '../api/http'
 import { normalizeAliasMap, normalizeIP } from '../utils/clientAliases'
+import { latencyTone } from '../utils/overviewMetrics'
 import { clearTopNotice, setError, setSuccess } from '../utils/notice'
 import { formatDateTime, formatRelativeTime as formatRelativeTimeText } from '../utils/time'
 
@@ -281,6 +284,12 @@ function responseSummary(log) {
 
 function logRowKey(item, index) {
   return `${item.trace_id || 'trace'}-${item.query_time || 'time'}-${item.client_ip || 'client'}-${index}`
+}
+
+// Only the slow ones get a colour; a normal duration keeps the text colour.
+function durationClass(ms) {
+  const tone = latencyTone(Number(ms))
+  return tone === 'warn' || tone === 'bad' ? `rt-text-${tone}` : ''
 }
 
 function openLogDetail(item) {
@@ -578,18 +587,18 @@ onBeforeUnmount(() => {
   <section class="sub-panel">
     <div v-if="isLiveMode" class="panel">
       <header class="panel-header">
-        <div>
-          <h3>实时查询</h3>
-          <p class="muted">支持分页与关键字过滤。输入带双引号表示精确匹配；支持按客户端别名搜索。</p>
-        </div>
+        <p class="muted">支持分页与关键字过滤。输入带双引号表示精确匹配；支持按客户端别名搜索。</p>
         <div class="actions">
-          <button class="btn tiny secondary" type="button" data-open-diagnostic @click="$emit('open-diagnostic')">诊断抓取</button>
+          <button class="btn secondary" type="button" data-open-diagnostic @click="$emit('open-diagnostic')">诊断抓取</button>
           <CapabilityBoundary operation="client.aliases"><router-link class="btn secondary" to="/rules/clients" data-open-aliases>客户端别名</router-link></CapabilityBoundary>
         </div>
       </header>
 
       <form class="query-search" @submit.prevent="refreshLogs">
-        <input v-model="searchInput" placeholder="全局搜索，使用 &quot;引号&quot; 精确匹配" />
+        <label class="query-search-field">
+          <AppIcon name="search" :size="16" />
+          <input v-model="searchInput" placeholder="全局搜索，使用 &quot;引号&quot; 精确匹配" aria-label="搜索日志" />
+        </label>
         <button class="btn primary" type="submit" :disabled="loading">搜索</button>
         <button class="btn secondary" type="button" :disabled="loading" @click="searchInput = ''; refreshLogs()">清空</button>
       </form>
@@ -606,7 +615,7 @@ onBeforeUnmount(() => {
               <th>时间</th>
               <th>域名 / 响应</th>
               <th>类型</th>
-              <th>耗时(ms)</th>
+              <th class="text-right">耗时 (ms)</th>
               <th>客户端</th>
             </tr>
           </thead>
@@ -624,7 +633,7 @@ onBeforeUnmount(() => {
               :class="{ selected: selectedLog === item }"
               @click="openLogDetail(item)"
             >
-              <td>{{ formatLogRelativeTime(item.query_time) }}</td>
+              <td class="log-time">{{ formatLogRelativeTime(item.query_time) }}</td>
               <td>
                 <div>
                   <span class="status-dot" :class="!item.response_code || item.response_code === 'NOERROR' ? 'ok' : 'fail'"></span>
@@ -632,8 +641,8 @@ onBeforeUnmount(() => {
                 </div>
                 <div class="muted">{{ responseSummary(item) }}</div>
               </td>
-              <td>{{ item.query_type || '-' }}</td>
-              <td>{{ Number(item.duration_ms || 0).toFixed(2) }}</td>
+              <td><span class="type-chip">{{ item.query_type || '-' }}</span></td>
+              <td class="text-right log-duration" :class="durationClass(item.duration_ms)">{{ Number(item.duration_ms || 0).toFixed(2) }}</td>
               <td>
                 <div><strong>{{ getDisplayName(item.client_ip) }}</strong></div>
                 <div v-if="hasAlias(item.client_ip)" class="muted mono">{{ normalizeIP(item.client_ip) }}</div>
@@ -643,7 +652,7 @@ onBeforeUnmount(() => {
         </table>
       </div>
 
-      <div class="actions" style="margin-top: 10px;">
+      <div class="actions log-more">
         <button
           class="btn secondary"
           :disabled="loading || Number(pagination.current_page || 1) >= Number(pagination.total_pages || 1)"
@@ -656,12 +665,9 @@ onBeforeUnmount(() => {
 
     <div v-else class="panel">
       <header class="panel-header">
-        <div>
-          <h3>诊断抓取</h3>
-          <p class="muted">开启一段时间的调试抓取，再获取日志查看每条查询经过的匹配器与插件。</p>
-        </div>
+        <p class="muted">开启一段时间的调试抓取，再获取日志查看每条查询经过的匹配器与插件。</p>
         <div class="actions">
-          <button class="btn tiny secondary" type="button" data-back-to-live @click="$emit('close')">返回实时查询</button>
+          <button class="btn secondary" type="button" data-back-to-live @click="$emit('close')">返回实时查询</button>
         </div>
       </header>
 
@@ -774,68 +780,74 @@ onBeforeUnmount(() => {
     </div>
 
     <Teleport to="body">
-      <div v-if="detailModalOpen && selectedLog" class="modal-mask" @click.self="closeLogDetail">
-        <section class="panel data-view-modal">
+      <div v-if="detailModalOpen && selectedLog" class="modal-mask modal-mask-center" @click.self="closeLogDetail">
+        <section class="panel data-view-modal detail-modal" role="dialog" aria-label="查询详情">
           <header class="panel-header">
             <div>
               <h3>查询详情</h3>
+              <p class="muted">{{ selectedLog.query_name || '-' }} · {{ formatTime(selectedLog.query_time) }}</p>
             </div>
-            <div class="actions">
-              <button class="btn secondary" type="button" @click="closeLogDetail">关闭</button>
-            </div>
+            <button class="rt-row-icon" type="button" aria-label="关闭" title="关闭" @click="closeLogDetail"><AppIcon name="x" :size="18" /></button>
           </header>
-          <div class="detail-grid">
-            <div><strong>时间:</strong> {{ formatTime(selectedLog.query_time) }}</div>
-            <div>
-              <strong>客户端:</strong>
-              <span :class="{ mono: getDetailActionField('client_ip')?.mono }">{{ getDetailActionField('client_ip')?.value || '-' }}</span>
-              <span class="detail-inline-actions">
-                <button class="btn tiny secondary" type="button" :disabled="!getDetailActionField('client_ip')?.copyValue" @click="copyText(getDetailActionField('client_ip')?.copyValue)">复制</button>
-                <button class="btn tiny secondary" type="button" :disabled="!getDetailActionField('client_ip')?.filterValue" @click="applyQuickFilter(getDetailActionField('client_ip')?.filterValue, getDetailActionField('client_ip')?.exact)">筛选</button>
-              </span>
+          <div class="detail-scroll">
+            <h4 class="detail-group-title">基本信息</h4>
+            <div class="detail-fields">
+              <DetailField label="时间" :value="formatTime(selectedLog.query_time)" />
+              <DetailField label="客户端" :field="getDetailActionField('client_ip')" @copy="copyText" @filter="applyQuickFilter" />
+              <DetailField label="域名" :field="getDetailActionField('query_name')" @copy="copyText" @filter="applyQuickFilter" />
+              <DetailField label="类型" :value="selectedLog.query_type || '-'" />
+              <DetailField label="类别" :value="selectedLog.query_class || '-'" />
+              <DetailField label="Trace ID" :field="getDetailActionField('trace_id')" wide @copy="copyText" @filter="applyQuickFilter" />
             </div>
-            <div>
-              <strong>域名:</strong>
-              <span :class="{ mono: getDetailActionField('query_name')?.mono }">{{ getDetailActionField('query_name')?.value || '-' }}</span>
-              <span class="detail-inline-actions">
-                <button class="btn tiny secondary" type="button" :disabled="!getDetailActionField('query_name')?.copyValue" @click="copyText(getDetailActionField('query_name')?.copyValue)">复制</button>
-                <button class="btn tiny secondary" type="button" :disabled="!getDetailActionField('query_name')?.filterValue" @click="applyQuickFilter(getDetailActionField('query_name')?.filterValue, getDetailActionField('query_name')?.exact)">筛选</button>
-              </span>
+
+            <div class="rt-divider" role="separator"><i></i></div>
+            <h4 class="detail-group-title">响应</h4>
+            <div class="detail-fields">
+              <DetailField label="响应码" :value="`${selectedLog.response_code || '-'}${selectedLog.is_blocked ? ' (已拦截)' : ''}`" />
+              <DetailField label="响应标志" :value="responseFlagText" />
+              <DetailField label="应答详情" :value="`${selectedLog.answer_details_status || 'complete'}${selectedLog.answer_decode_error ? `（${selectedLog.answer_decode_error}）` : ''}`" />
+              <DetailField label="耗时" :value="`${Number(selectedLog.duration_ms || 0).toFixed(2)} ms`" />
             </div>
-            <div><strong>类型:</strong> {{ selectedLog.query_type || '-' }}</div>
-            <div><strong>类别:</strong> {{ selectedLog.query_class || '-' }}</div>
-            <div>
-              <strong>Trace ID:</strong>
-              <span class="mono">{{ getDetailActionField('trace_id')?.value || '-' }}</span>
-              <span class="detail-inline-actions">
-                <button class="btn tiny secondary" type="button" :disabled="!getDetailActionField('trace_id')?.copyValue" @click="copyText(getDetailActionField('trace_id')?.copyValue)">复制</button>
-                <button class="btn tiny secondary" type="button" :disabled="!getDetailActionField('trace_id')?.filterValue" @click="applyQuickFilter(getDetailActionField('trace_id')?.filterValue, getDetailActionField('trace_id')?.exact)">筛选</button>
-              </span>
+            <div class="table-wrap detail-answers">
+              <table>
+                <thead>
+                  <tr>
+                    <th>应答类型</th>
+                    <th>数据</th>
+                    <th>TTL</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-if="!Array.isArray(selectedLog.answers) || selectedLog.answers.length === 0">
+                    <td colspan="3" class="empty">(empty)</td>
+                  </tr>
+                  <tr v-for="(answer, index) in (selectedLog.answers || [])" :key="`answer-${index}`">
+                    <td>{{ answer.type || '-' }}</td>
+                    <td class="mono">{{ answer.data || '-' }}</td>
+                    <td>{{ Number(answer.ttl || 0) }}s</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
-            <div><strong>生效标签:</strong> {{ selectedLog.effective_tag || selectedLog.domain_set || '-' }}</div>
-            <div><strong>命中标签:</strong> {{ selectedLog.domain_set || '-' }}</div>
-            <div>
-              <strong>匹配来源:</strong>
-              <span>{{ selectedLog.matched_rule_source || '-' }}</span>
+
+            <div class="rt-divider" role="separator"><i></i></div>
+            <h4 class="detail-group-title">分流与上游</h4>
+            <div class="detail-fields">
+              <DetailField label="生效标签" :value="selectedLog.effective_tag || selectedLog.domain_set || '-'" />
+              <DetailField label="命中标签" :value="selectedLog.domain_set || '-'" />
+              <DetailField label="匹配来源" :value="selectedLog.matched_rule_source || '-'" />
+              <DetailField label="分流规则" :field="getDetailActionField('domain_set')" @copy="copyText" @filter="applyQuickFilter" />
+              <DetailField label="专属分流组" :value="getMatchedGroupDisplay(selectedLog.matched_group)" />
+              <DetailField label="最终序列" :value="selectedLog.final_sequence || '-'" />
+              <DetailField label="最终上游组" :value="selectedLog.final_upstream || '-'" />
+              <DetailField label="上游目标" :value="selectedLog.upstream_targets || '-'" />
+              <DetailField label="最终上游" :value="selectedLog.selected_upstream || '-'" />
             </div>
-            <div>
-              <strong>分流规则:</strong>
-              <span>{{ getDetailActionField('domain_set')?.value || '-' }}</span>
-              <span class="detail-inline-actions">
-                <button class="btn tiny secondary" type="button" :disabled="!getDetailActionField('domain_set')?.copyValue" @click="copyText(getDetailActionField('domain_set')?.copyValue)">复制</button>
-                <button class="btn tiny secondary" type="button" :disabled="!getDetailActionField('domain_set')?.filterValue" @click="applyQuickFilter(getDetailActionField('domain_set')?.filterValue, getDetailActionField('domain_set')?.exact)">筛选</button>
-              </span>
-            </div>
-            <div><strong>专属分流组:</strong> {{ getMatchedGroupDisplay(selectedLog.matched_group) }}</div>
-            <div><strong>最终序列:</strong> {{ selectedLog.final_sequence || '-' }}</div>
-            <div><strong>最终上游组:</strong> {{ selectedLog.final_upstream || '-' }}</div>
-            <div><strong>上游目标:</strong> {{ selectedLog.upstream_targets || '-' }}</div>
-            <div><strong>最终上游:</strong> {{ selectedLog.selected_upstream || '-' }}</div>
-            <div v-if="selectedLog.upstream_diagnostics && ![1, 2].includes(selectedLog.upstream_diagnostics.schema_version)" class="detail-wide muted">
+            <p v-if="selectedLog.upstream_diagnostics && ![1, 2].includes(selectedLog.upstream_diagnostics.schema_version)" class="muted">
               原生上游诊断版本暂不支持（{{ selectedLog.upstream_diagnostics.schema_version ?? '-' }}）；普通响应与路由信息仍可用。
-            </div>
-            <div v-if="[1, 2].includes(selectedLog.upstream_diagnostics?.schema_version)" class="detail-wide">
-              <strong>原生上游诊断:</strong>
+            </p>
+            <div v-if="[1, 2].includes(selectedLog.upstream_diagnostics?.schema_version)" class="detail-diagnostics">
+              <span class="detail-label">原生上游诊断</span>
               <div v-if="selectedLog.upstream_diagnostics.schema_version === 2 && selectedLog.upstream_diagnostics.branches?.length" class="table-wrap upstream-diagnostics-table">
                 <table>
                   <thead><tr><th>ID</th><th>父级</th><th>角色</th><th>策略</th><th>QTYPE</th><th>决定</th></tr></thead>
@@ -851,15 +863,17 @@ onBeforeUnmount(() => {
                   </tbody>
                 </table>
               </div>
-              <span v-if="selectedLog.upstream_diagnostics.selected">
-                选中 {{ selectedLog.upstream_diagnostics.selected.entry || '-' }} ·
-                {{ selectedLog.upstream_diagnostics.selected.peer || '-' }} ·
-                {{ selectedLog.upstream_diagnostics.selected.transport || '-' }}
-              </span>
-              <span v-else>未选中最终网络上游</span>
+              <p class="detail-selected">
+                <template v-if="selectedLog.upstream_diagnostics.selected">
+                  选中 {{ selectedLog.upstream_diagnostics.selected.entry || '-' }} ·
+                  {{ selectedLog.upstream_diagnostics.selected.peer || '-' }} ·
+                  {{ selectedLog.upstream_diagnostics.selected.transport || '-' }}
+                </template>
+                <template v-else>未选中最终网络上游</template>
+              </p>
               <div class="table-wrap upstream-diagnostics-table">
                 <table>
-                    <thead><tr><th>序号</th><th v-if="selectedLog.upstream_diagnostics.schema_version === 2">分支</th><th v-if="selectedLog.upstream_diagnostics.schema_version === 2">QTYPE</th><th>Entry</th><th>Peer</th><th>传输</th><th>结果</th></tr></thead>
+                  <thead><tr><th>序号</th><th v-if="selectedLog.upstream_diagnostics.schema_version === 2">分支</th><th v-if="selectedLog.upstream_diagnostics.schema_version === 2">QTYPE</th><th>Entry</th><th>Peer</th><th>传输</th><th>结果</th></tr></thead>
                   <tbody>
                     <tr v-if="!selectedLog.upstream_diagnostics.attempts?.length"><td :colspan="selectedLog.upstream_diagnostics.schema_version === 2 ? 7 : 5" class="empty">无已启动上游</td></tr>
                     <tr v-for="attempt in (selectedLog.upstream_diagnostics.attempts || [])" :key="`diagnostic-${attempt.ordinal}`">
@@ -875,43 +889,10 @@ onBeforeUnmount(() => {
                 </table>
               </div>
             </div>
-            <div>
-              <strong>响应码:</strong>
-              {{ selectedLog.response_code || '-' }}<span v-if="selectedLog.is_blocked"> (已拦截)</span>
-            </div>
-            <div><strong>响应标志:</strong> {{ responseFlagText }}</div>
-            <div>
-              <strong>应答详情:</strong>
-              {{ selectedLog.answer_details_status || 'complete' }}
-              <span v-if="selectedLog.answer_decode_error" class="muted">（{{ selectedLog.answer_decode_error }}）</span>
-            </div>
-            <div><strong>耗时:</strong> {{ Number(selectedLog.duration_ms || 0).toFixed(2) }} ms</div>
-          </div>
 
-          <div class="table-wrap" style="margin-top: 10px;">
-            <table>
-              <thead>
-                <tr>
-                  <th>应答类型</th>
-                  <th>数据</th>
-                  <th>TTL</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-if="!Array.isArray(selectedLog.answers) || selectedLog.answers.length === 0">
-                  <td colspan="3" class="empty">(empty)</td>
-                </tr>
-                <tr v-for="(answer, index) in (selectedLog.answers || [])" :key="`answer-${index}`">
-                  <td>{{ answer.type || '-' }}</td>
-                  <td class="mono">{{ answer.data || '-' }}</td>
-                  <td>{{ Number(answer.ttl || 0) }}s</td>
-                </tr>
-              </tbody>
-            </table>
           </div>
         </section>
       </div>
-
     </Teleport>
   </section>
 </template>

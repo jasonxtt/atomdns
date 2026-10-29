@@ -3,6 +3,7 @@ import { capabilityState, operationReason, supportsOperation } from '../api/runt
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { getJSON, getJSONWithHeaders, getText } from '../api/http'
 import AppIcon from '../components/AppIcon.vue'
+import DetailField from '../components/DetailField.vue'
 import { setError, setSuccess } from '../utils/notice'
 import { formatDateTime } from '../utils/time'
 import {
@@ -1001,60 +1002,69 @@ onBeforeUnmount(() => {
     </div>
 
     <Teleport to="body">
-      <div v-if="slowDetailOpen && selectedSlowQuery" class="modal-mask modal-mask-top" @click.self="closeSlowDetail">
-        <section class="panel data-view-modal overview-slow-detail-modal">
+      <div v-if="slowDetailOpen && selectedSlowQuery" class="modal-mask modal-mask-top modal-mask-center" @click.self="closeSlowDetail">
+        <section class="panel data-view-modal detail-modal overview-slow-detail-modal" role="dialog" aria-label="最慢查询详情">
           <header class="panel-header">
             <div>
               <h3>最慢查询详情</h3>
+              <p class="muted">{{ selectedSlowQuery.query_name || '-' }} · {{ formatTime(selectedSlowQuery.query_time) }}</p>
             </div>
-            <div class="actions">
-              <button class="btn secondary" type="button" @click="closeSlowDetail">关闭</button>
-            </div>
+            <button class="rt-row-icon" type="button" aria-label="关闭" title="关闭" @click="closeSlowDetail"><AppIcon name="x" :size="18" /></button>
           </header>
-          <div class="detail-grid">
-            <div><strong>时间:</strong> {{ formatTime(selectedSlowQuery.query_time) }}</div>
-            <div>
-              <strong>客户端:</strong>
-              <span :class="{ mono: getSlowDetailActionField('client_ip')?.mono }">{{ getSlowDetailActionField('client_ip')?.value || '-' }}</span>
-              <span class="detail-inline-actions">
-                <button class="btn tiny secondary" type="button" :disabled="!getSlowDetailActionField('client_ip')?.copyValue" @click="copyText(getSlowDetailActionField('client_ip')?.copyValue)">复制</button>
-                <button class="btn tiny secondary" type="button" :disabled="!getSlowDetailActionField('client_ip')?.filterValue" @click="openLogFilterFromOverview(getSlowDetailActionField('client_ip')?.filterValue, getSlowDetailActionField('client_ip')?.exact)">筛选</button>
-              </span>
+          <div class="detail-scroll">
+            <h4 class="detail-group-title">基本信息</h4>
+            <div class="detail-fields">
+              <DetailField label="时间" :value="formatTime(selectedSlowQuery.query_time)" />
+              <DetailField label="客户端" :field="getSlowDetailActionField('client_ip')" @copy="copyText" @filter="openLogFilterFromOverview" />
+              <DetailField label="域名" :field="getSlowDetailActionField('query_name')" @copy="copyText" @filter="openLogFilterFromOverview" />
+              <DetailField label="类型" :value="selectedSlowQuery.query_type || '-'" />
+              <DetailField label="类别" :value="selectedSlowQuery.query_class || '-'" />
+              <DetailField label="Trace ID" :field="getSlowDetailActionField('trace_id')" wide @copy="copyText" @filter="openLogFilterFromOverview" />
             </div>
-            <div>
-              <strong>域名:</strong>
-              <span :class="{ mono: getSlowDetailActionField('query_name')?.mono }">{{ getSlowDetailActionField('query_name')?.value || '-' }}</span>
-              <span class="detail-inline-actions">
-                <button class="btn tiny secondary" type="button" :disabled="!getSlowDetailActionField('query_name')?.copyValue" @click="copyText(getSlowDetailActionField('query_name')?.copyValue)">复制</button>
-                <button class="btn tiny secondary" type="button" :disabled="!getSlowDetailActionField('query_name')?.filterValue" @click="openLogFilterFromOverview(getSlowDetailActionField('query_name')?.filterValue, getSlowDetailActionField('query_name')?.exact)">筛选</button>
-              </span>
+
+            <div class="rt-divider" role="separator"><i></i></div>
+            <h4 class="detail-group-title">响应</h4>
+            <div class="detail-fields">
+              <DetailField label="响应码" :value="selectedSlowQuery.response_code || '-'" />
+              <DetailField label="响应标志" :value="formatResponseFlags(selectedSlowQuery.response_flags)" />
+              <DetailField label="应答详情" :value="`${selectedSlowQuery.answer_details_status || 'complete'}${selectedSlowQuery.answer_decode_error ? `（${selectedSlowQuery.answer_decode_error}）` : ''}`" />
+              <DetailField label="耗时" :value="formatDuration(selectedSlowQuery.duration_ms)" />
             </div>
-            <div><strong>类型:</strong> {{ selectedSlowQuery.query_type || '-' }}</div>
-            <div><strong>类别:</strong> {{ selectedSlowQuery.query_class || '-' }}</div>
-            <div>
-              <strong>Trace ID:</strong>
-              <span class="mono">{{ getSlowDetailActionField('trace_id')?.value || '-' }}</span>
-              <span class="detail-inline-actions">
-                <button class="btn tiny secondary" type="button" :disabled="!getSlowDetailActionField('trace_id')?.copyValue" @click="copyText(getSlowDetailActionField('trace_id')?.copyValue)">复制</button>
-                <button class="btn tiny secondary" type="button" :disabled="!getSlowDetailActionField('trace_id')?.filterValue" @click="openLogFilterFromOverview(getSlowDetailActionField('trace_id')?.filterValue, getSlowDetailActionField('trace_id')?.exact)">筛选</button>
-              </span>
+            <div class="table-wrap detail-answers">
+              <table>
+                <thead>
+                  <tr>
+                    <th>应答类型</th>
+                    <th>数据</th>
+                    <th class="text-right">TTL</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-if="!Array.isArray(selectedSlowQuery.answers) || selectedSlowQuery.answers.length === 0">
+                    <td colspan="3" class="empty">(empty)</td>
+                  </tr>
+                  <tr v-for="(answer, index) in (selectedSlowQuery.answers || [])" :key="`slow-answer-${index}`">
+                    <td>{{ answer.type || '-' }}</td>
+                    <td class="mono">{{ answer.data || '-' }}</td>
+                    <td class="text-right">{{ Number(answer.ttl || 0) }}s</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
-            <div><strong>生效标签:</strong> {{ getDetailRuleLabel(selectedSlowQuery.effective_tag || selectedSlowQuery.domain_set) }}</div>
-            <div>
-              <strong>分流规则:</strong>
-              <span>{{ getSlowDetailActionField('domain_set')?.value || '-' }}</span>
-              <span class="detail-inline-actions">
-                <button class="btn tiny secondary" type="button" :disabled="!getSlowDetailActionField('domain_set')?.copyValue" @click="copyText(getSlowDetailActionField('domain_set')?.copyValue)">复制</button>
-                <button class="btn tiny secondary" type="button" :disabled="!getSlowDetailActionField('domain_set')?.filterValue" @click="openLogFilterFromOverview(getSlowDetailActionField('domain_set')?.filterValue, getSlowDetailActionField('domain_set')?.exact)">筛选</button>
-              </span>
+
+            <div class="rt-divider" role="separator"><i></i></div>
+            <h4 class="detail-group-title">分流与上游</h4>
+            <div class="detail-fields">
+              <DetailField label="生效标签" :value="getDetailRuleLabel(selectedSlowQuery.effective_tag || selectedSlowQuery.domain_set)" />
+              <DetailField label="分流规则" :field="getSlowDetailActionField('domain_set')" @copy="copyText" @filter="openLogFilterFromOverview" />
+              <DetailField label="上游组" :value="selectedSlowQuery.final_upstream || selectedSlowQuery.upstream_group || '-'" />
+              <DetailField label="最终上游" :value="selectedSlowQuery.selected_upstream || '-'" />
             </div>
-            <div><strong>上游组:</strong> {{ selectedSlowQuery.final_upstream || selectedSlowQuery.upstream_group || '-' }}</div>
-            <div><strong>最终上游:</strong> {{ selectedSlowQuery.selected_upstream || '-' }}</div>
-            <div v-if="selectedSlowQuery.upstream_diagnostics && ![1, 2].includes(selectedSlowQuery.upstream_diagnostics.schema_version)" class="detail-wide muted">
+            <p v-if="selectedSlowQuery.upstream_diagnostics && ![1, 2].includes(selectedSlowQuery.upstream_diagnostics.schema_version)" class="muted">
               原生上游诊断版本暂不支持（{{ selectedSlowQuery.upstream_diagnostics.schema_version ?? '-' }}）；普通响应与路由信息仍可用。
-            </div>
-            <div v-if="[1, 2].includes(selectedSlowQuery.upstream_diagnostics?.schema_version)" class="detail-wide">
-              <strong>原生上游诊断:</strong>
+            </p>
+            <div v-if="[1, 2].includes(selectedSlowQuery.upstream_diagnostics?.schema_version)" class="detail-diagnostics">
+              <span class="detail-label">原生上游诊断</span>
               <div v-if="selectedSlowQuery.upstream_diagnostics.schema_version === 2 && selectedSlowQuery.upstream_diagnostics.branches?.length" class="table-wrap upstream-diagnostics-table">
                 <table>
                   <thead><tr><th>ID</th><th>父级</th><th>角色</th><th>策略</th><th>QTYPE</th><th>决定</th></tr></thead>
@@ -1070,12 +1080,14 @@ onBeforeUnmount(() => {
                   </tbody>
                 </table>
               </div>
-              <span v-if="selectedSlowQuery.upstream_diagnostics.selected">
-                选中 {{ selectedSlowQuery.upstream_diagnostics.selected.entry || '-' }} ·
-                {{ selectedSlowQuery.upstream_diagnostics.selected.peer || '-' }} ·
-                {{ selectedSlowQuery.upstream_diagnostics.selected.transport || '-' }}
-              </span>
-              <span v-else>未选中最终网络上游</span>
+              <p class="detail-selected">
+                <template v-if="selectedSlowQuery.upstream_diagnostics.selected">
+                  选中 {{ selectedSlowQuery.upstream_diagnostics.selected.entry || '-' }} ·
+                  {{ selectedSlowQuery.upstream_diagnostics.selected.peer || '-' }} ·
+                  {{ selectedSlowQuery.upstream_diagnostics.selected.transport || '-' }}
+                </template>
+                <template v-else>未选中最终网络上游</template>
+              </p>
               <div class="table-wrap upstream-diagnostics-table">
                 <table>
                   <thead><tr><th>序号</th><th v-if="selectedSlowQuery.upstream_diagnostics.schema_version === 2">分支</th><th v-if="selectedSlowQuery.upstream_diagnostics.schema_version === 2">QTYPE</th><th>Entry</th><th>Peer</th><th>传输</th><th>结果</th></tr></thead>
@@ -1094,60 +1106,23 @@ onBeforeUnmount(() => {
                 </table>
               </div>
             </div>
-            <div><strong>响应码:</strong> {{ selectedSlowQuery.response_code || '-' }}</div>
-            <div><strong>响应标志:</strong> {{ formatResponseFlags(selectedSlowQuery.response_flags) }}</div>
-            <div>
-              <strong>应答详情:</strong>
-              {{ selectedSlowQuery.answer_details_status || 'complete' }}
-              <span v-if="selectedSlowQuery.answer_decode_error" class="muted">（{{ selectedSlowQuery.answer_decode_error }}）</span>
-            </div>
-            <div><strong>耗时:</strong> {{ formatDuration(selectedSlowQuery.duration_ms) }}</div>
-          </div>
-          <div class="table-wrap" style="margin-top: 10px;">
-            <table>
-              <thead>
-                <tr>
-                  <th>应答类型</th>
-                  <th>数据</th>
-                  <th class="text-right">TTL</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-if="!Array.isArray(selectedSlowQuery.answers) || selectedSlowQuery.answers.length === 0">
-                  <td colspan="3" class="empty">(empty)</td>
-                </tr>
-                <tr v-for="(answer, index) in (selectedSlowQuery.answers || [])" :key="`slow-answer-${index}`">
-                  <td>{{ answer.type || '-' }}</td>
-                  <td class="mono">{{ answer.data || '-' }}</td>
-                  <td class="text-right">{{ Number(answer.ttl || 0) }}s</td>
-                </tr>
-              </tbody>
-            </table>
           </div>
         </section>
       </div>
 
-      <div v-if="rankingDetail.open" class="modal-mask modal-mask-ranking" @click.self="closeRankingDetail">
-        <section class="panel data-view-modal overview-ranking-detail-modal">
+      <div v-if="rankingDetail.open" class="modal-mask modal-mask-ranking modal-mask-center" @click.self="closeRankingDetail">
+        <section class="panel data-view-modal detail-modal overview-ranking-detail-modal" role="dialog" :aria-label="rankingDetail.title">
           <header class="panel-header">
             <div>
               <h3>{{ rankingDetail.title }}</h3>
               <p class="muted">{{ rankingDetail.headline || '-' }}</p>
               <p v-if="rankingDetail.subline" class="muted mono ranking-detail-subline">{{ rankingDetail.subline }}</p>
             </div>
-            <div class="actions">
-              <button class="btn secondary" type="button" @click="closeRankingDetail">关闭</button>
-            </div>
+            <button class="rt-row-icon" type="button" aria-label="关闭" title="关闭" @click="closeRankingDetail"><AppIcon name="x" :size="18" /></button>
           </header>
-          <div class="overview-ranking-summary-grid">
-            <article
-              v-for="card in rankingDetailSummaryCards"
-              :key="card.key"
-              class="overview-ranking-summary-card"
-            >
-              <span class="overview-ranking-summary-label">{{ card.title }}</span>
-              <strong>{{ card.value }}</strong>
-            </article>
+          <div class="detail-scroll">
+          <div class="detail-fields ranking-summary">
+            <DetailField v-for="card in rankingDetailSummaryCards" :key="card.key" :label="card.title" :value="String(card.value)" />
           </div>
           <div class="table-wrap ranking-detail-table-fit">
             <table>
@@ -1181,11 +1156,12 @@ onBeforeUnmount(() => {
                 <td data-label="耗时" class="text-right">{{ formatDuration(log.duration_ms) }}</td>
                 <td data-label="响应">{{ log.response_code || '-' }}</td>
                 <td data-label="详情" class="text-right">
-                  <button class="btn tiny secondary" type="button" @click="openSlowDetail(log)">查看</button>
+                  <button class="rt-row-icon" type="button" title="查看详情" :aria-label="`查看 ${log.query_name || ''} 的详情`" @click="openSlowDetail(log)"><AppIcon name="eye" :size="16" /></button>
                 </td>
               </tr>
               </tbody>
             </table>
+          </div>
           </div>
         </section>
       </div>
