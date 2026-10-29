@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# Builds the release artifacts for a tag (linux/amd64 only): rtdns-linux-amd64.tar.gz
-# (one file, `rtdns`), rtdns-webui.tar.gz (the WebUI package: the files of
-# <config root>/ui/main/ at the top level) and rtdns-update-manifest.json. Nothing is
+# Builds the release artifacts for a tag on a Linux x86_64 host: rtdns-linux-<variant>.tar.gz
+# (one file, `rtdns`; the variant is amd64 by default), rtdns-webui.tar.gz (the WebUI package:
+# the files of <config root>/ui/main/ at the top level) and rtdns-update-manifest.json. Nothing is
 # published; attach the files to a GitHub release named like the tag by hand or from CI.
 #   scripts/build-rust-release.sh vX.Y.Z [out-dir]
-# PREBUILT=<path to an already built rtdns> skips the build (it must report the same tag).
+# VARIANTS="amd64 amd64-v3 arm64 armv7" builds more program packages (default: amd64). amd64-v3 is
+# the glibc build with -C target-cpu=x86-64-v3; arm64/armv7 are static musl builds made with
+# cargo-zigbuild and need qemu-user binfmt to run `rtdns version` (CI: .github/workflows/release-build.yml).
+# Only rtdns-linux-amd64.tar.gz is used by the in-app updater; the others are for manual installs.
+# PREBUILT=<path to an already built rtdns> replaces the amd64 build (it must report the same tag).
 # PREBUILT_WEBUI=<rtdns-webui.tar.gz> skips the WebUI build (its ui_version must be the tag).
 # RUST_CONFIG_PACKAGE=<config_rust_up.zip> is passed on to generate-rust-update-manifest.sh.
 set -euo pipefail
@@ -27,21 +31,40 @@ OUT="$(cd "${OUT}" && pwd)"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "${STAGE}"' EXIT
 
-if [ -n "${PREBUILT:-}" ]; then
-  cp "${PREBUILT}" "${STAGE}/rtdns"
-else
-  BUILD_VERSION="${TAG}" OUTPUT="${STAGE}/rtdns" "${ROOT_DIR}/scripts/build-rust-native.sh"
-fi
-chmod 0755 "${STAGE}/rtdns"
-REPORTED="$("${STAGE}/rtdns" version)"
-if [ "${REPORTED}" != "${TAG}" ]; then
-  echo "the binary reports ${REPORTED}, not ${TAG}" >&2
-  exit 1
-fi
-
-ARCHIVE="${OUT}/rtdns-linux-amd64.tar.gz"
-rm -f "${ARCHIVE}"
-tar -C "${STAGE}" --owner=0 --group=0 --numeric-owner -czf "${ARCHIVE}" rtdns
+for VARIANT in ${VARIANTS:-amd64}; do
+  TARGET=""
+  FLAGS=""
+  SUBCOMMAND="build"
+  case "${VARIANT}" in
+    amd64) ;;
+    amd64-v3) FLAGS="-C target-cpu=x86-64-v3" ;;
+    arm64) TARGET="aarch64-unknown-linux-musl"; SUBCOMMAND="zigbuild" ;;
+    armv7) TARGET="armv7-unknown-linux-musleabihf"; SUBCOMMAND="zigbuild" ;;
+    *) echo "unknown variant ${VARIANT} (amd64, amd64-v3, arm64, armv7)" >&2; exit 1 ;;
+  esac
+  BIN="${STAGE}/${VARIANT}/rtdns"
+  mkdir -p "${STAGE}/${VARIANT}"
+  if [ "${VARIANT}" = "amd64" ] && [ -n "${PREBUILT:-}" ]; then
+    cp "${PREBUILT}" "${BIN}"
+  else
+    # Own target dir per variant: the same triple with other RUSTFLAGS must not share build products.
+    # An empty CARGO_BUILD_TARGET is not "no target" to cargo: set it only for the cross variants.
+    env BUILD_VERSION="${TAG}" OUTPUT="${BIN}" CARGO_TARGET_DIR="${ROOT_DIR}/rust/target/release-${VARIANT}" \
+      CARGO_SUBCOMMAND="${SUBCOMMAND}" RUSTFLAGS="${FLAGS}" ${TARGET:+CARGO_BUILD_TARGET="${TARGET}"} \
+      "${ROOT_DIR}/scripts/build-rust-native.sh"
+  fi
+  chmod 0755 "${BIN}"
+  # Runs natively, or through qemu-user (binfmt) for the ARM variants.
+  REPORTED="$("${BIN}" version)"
+  if [ "${REPORTED}" != "${TAG}" ]; then
+    echo "the ${VARIANT} binary reports ${REPORTED}, not ${TAG}" >&2
+    exit 1
+  fi
+  ARCHIVE="${OUT}/rtdns-linux-${VARIANT}.tar.gz"
+  rm -f "${ARCHIVE}"
+  tar -C "${STAGE}/${VARIANT}" --owner=0 --group=0 --numeric-owner -czf "${ARCHIVE}" rtdns
+  echo "built ${ARCHIVE}"
+done
 
 WEBUI="${OUT}/rtdns-webui.tar.gz"
 rm -f "${WEBUI}"
@@ -70,4 +93,4 @@ if [ "${UI_REPORTED}" != "${TAG}" ]; then
 fi
 
 "${ROOT_DIR}/scripts/generate-rust-update-manifest.sh" "${TAG}" "${OUT}"
-echo "built ${ARCHIVE} and ${WEBUI}"
+echo "built ${VARIANTS:-amd64} and ${WEBUI}"

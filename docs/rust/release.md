@@ -10,7 +10,7 @@
 | 仓库 | `jasonxtt/rtdns` |
 | tag / Release 名 | `vX.Y.Z`（只认这一种写法；`rust-v*`、`lite-v*`、`vX.Y`、`vX.Y.Z-rc1` 都会被更新器忽略） |
 | 程序 | `rtdns`（`rust/native-host` 的 cargo bin；crate 名仍是 `mosdns-native-host`） |
-| 发布包 | `rtdns-linux-amd64.tar.gz`（包内只有一个文件 `rtdns`） |
+| 发布包 | `rtdns-linux-amd64.tar.gz`（包内只有一个文件 `rtdns`；v0.5.0 起另有 `-amd64-v3`、`-arm64`、`-armv7`，只有 `amd64` 参与在线更新） |
 | 界面包 | `rtdns-webui.tar.gz`（v0.4.0 起；顶层即 `<配置根>/ui/main/` 的文件，`ui-manifest.json` 的 `ui_version` 等于 tag） |
 | 清单 | `rtdns-update-manifest.json`（`format 1`、`channel "rust"`、`version` 等于 tag、各发布包的 sha256） |
 | 程序自报版本 | `rtdns version` 与 `GET /api/v1/system/health` 的 `version` 都等于 tag |
@@ -71,6 +71,25 @@
 5. **建 Release**，一次上传四个资产：程序包、界面包、清单、`config_rust_up.zip`（文件名必须与 `config.url` 末段一致）。
 6. **全新安装包**：用同一份 `rtdns-webui.tar.gz` 在 file 仓库运行 `mosdns/config/build_config_rust_zip.sh <rtdns-webui.tar.gz>` 重新生成 `config_rust.zip`（带 `ui/main/`）并提交 file 仓库。
    Release 建好后，用 `curl -fsSL <config.url> | sha256sum` 再核对一次与元数据一致。更新器只在 `applied_config_schema < required_config_schema` 时下载配置包。
+
+## v0.5.0 升级须知（2026-10-30；WebUI 换新外观，新增多种平台程序包）
+
+- 配置 schema 仍为 5，**没有新配置包**（元数据里的 `config` 仍指向 v0.4.2 的 `config_rust_up.zip`）：在线更新换程序，并在已安装 `ui/main` 时一并换成新界面，不动配置文件与用户数据。
+- **界面**：整套 WebUI 换了外观（Rosé Pine 配色、明暗两套主题、侧栏二级菜单、移动端底部导航、Ctrl/Cmd+K 搜索页面）；概览、规则设置各页、日志、系统管理的版式都重排过，功能与接口不变。
+  没有 `ui/main` 的部署（纯后端）不受影响；外置界面仍可放在 `ui/<名字>/`。
+- **程序包**：Release 现在带四种程序包，包内都只有一个文件 `rtdns`：
+
+  | 资产 | 目标 | 说明 |
+  | --- | --- | --- |
+  | `rtdns-linux-amd64.tar.gz` | x86_64，glibc | 通用基线；**在线更新只认这一个** |
+  | `rtdns-linux-amd64-v3.tar.gz` | x86_64，glibc | `-C target-cpu=x86-64-v3`（需要 AVX2 等，约 2013 年后的 CPU），手动安装 |
+  | `rtdns-linux-arm64.tar.gz` | aarch64，静态 musl | 手动安装；glibc 与 OpenWrt 都能跑 |
+  | `rtdns-linux-armv7.tar.gz` | armv7 硬浮点，静态 musl | 手动安装 |
+
+  非 amd64 平台的在线更新尚未支持（更新器只在 linux x86_64 上可用，清单里多出的包会被忽略）；这些平台升级时下载对应包、替换 `rtdns` 并重启，`ui/main` 用 `rtdns-webui.tar.gz` 手动换。
+  ARM 包是静态 musl 构建，内存分配器与 glibc 不同，常驻内存没有按 x86 的数据测过。
+- **构建**：`VARIANTS="amd64 amd64-v3 arm64 armv7" scripts/build-rust-release.sh vX.Y.Z` 一次出齐；ARM 包需要 `cargo-zigbuild` 与 qemu-user binfmt，
+  所以统一用 GitHub Actions 的手动工作流 `release-build.yml`（只构建、不发布，产物在 Actions 的 `release-<tag>` 里下载）。
 
 ## v0.4.2 升级须知（配置 schema 5，2026-10-29；在线订阅多格式、订阅分组、命中标签改名）
 

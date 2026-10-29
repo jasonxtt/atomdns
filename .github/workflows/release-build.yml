@@ -1,0 +1,56 @@
+name: Build rtdns release artifacts
+
+# Manual only, and build-only: it never tags or publishes. Run it from the Actions tab or
+# `gh workflow run release-build.yml --ref main -f tag=vX.Y.Z`, download the `release-<tag>`
+# artifact, check it, then create the GitHub Release by hand (docs/rust/release.md).
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (vX.Y.Z); must equal the native-host crate version
+        required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          targets: aarch64-unknown-linux-musl,armv7-unknown-linux-musleabihf
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: webui-log/package-lock.json
+      - name: Install the cross toolchain and qemu
+        # zig is the C cross compiler/linker for the static musl ARM builds (ring has C and asm);
+        # qemu-user-static runs the ARM programs for `rtdns version` and the smoke test below.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq qemu-user-static
+          pip install ziglang cargo-zigbuild
+      - name: Build
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          VARIANTS="amd64 amd64-v3 arm64 armv7" scripts/build-rust-release.sh "${TAG}" release/rust
+      - name: Check the artifacts
+        working-directory: release/rust
+        run: |
+          ls -l
+          jq '.version, (.artifacts | keys)' rtdns-update-manifest.json
+          for variant in amd64 amd64-v3 arm64 armv7; do
+            mkdir "verify-${variant}"
+            tar -xzf "rtdns-linux-${variant}.tar.gz" -C "verify-${variant}"
+            file "verify-${variant}/rtdns"
+            "./verify-${variant}/rtdns" version
+            rm -r "verify-${variant}"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ inputs.tag }}
+          path: release/rust/*
+          if-no-files-found: error
