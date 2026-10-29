@@ -4,7 +4,7 @@
   "required_config_schema": 5,
   "config_package_id": "rust-config-schema-5",
   "config": {
-    "url": "",
-    "sha256": ""
+    "url": "https://github.com/jasonxtt/rtdns/releases/download/v0.4.2/config_rust_up.zip",
+    "sha256": "78938d3aa262ed3ed7378e4516b4a31d01ea841e31ac029c27d777f1f42a4efc"
   }
 }

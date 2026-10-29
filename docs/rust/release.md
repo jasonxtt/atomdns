@@ -72,6 +72,44 @@
 6. **全新安装包**：用同一份 `rtdns-webui.tar.gz` 在 file 仓库运行 `mosdns/config/build_config_rust_zip.sh <rtdns-webui.tar.gz>` 重新生成 `config_rust.zip`（带 `ui/main/`）并提交 file 仓库。
    Release 建好后，用 `curl -fsSL <config.url> | sha256sum` 再核对一次与元数据一致。更新器只在 `applied_config_schema < required_config_schema` 时下载配置包。
 
+## v0.4.2 升级须知（配置 schema 5，2026-10-29；在线订阅多格式、订阅分组、命中标签改名）
+
+### 配置（schema 4 → 5）
+
+- 新配置包 `rust-config-schema-5` 只把 `rule_set.yaml` 里四个订阅集合的命中标签改名（另有注释同步），**分流判定、优先级与订阅清单都不变**。在线更新会与程序、界面一起应用。
+- **手动替换程序时也要换配置包**（同一 Release 的 `config_rust_up.zip`）；只换程序时功能不受影响，但日志仍写旧名称，更新状态提示配置包过旧。
+
+| 订阅集合 | 旧日志标签 | 新名称（日志与界面一致） |
+| --- | --- | --- |
+| `geosite_cn` | 订阅直连 | 中国域名 |
+| `geosite_no_cn` | 订阅代理 | 非中国域名 |
+| `cuscn` | 订阅直连补充 | 直连域名 |
+| `cusnocn` | 订阅代理补充 | 代理域名 |
+
+已写入的日志保留旧名称；程序同时认新旧名称，统计里新旧名称在旧记录过期前分开计数。
+
+### 在线订阅支持更多格式
+
+- 分流（域名集、IP 集）与请求屏蔽的订阅，除 `.srs` 外支持：文本（`.txt` `.list` `.conf`：域名列表、Clash/Surge/QuantumultX 经典规则、mihomo 写法、dnsmasq、hosts、CIDR）、Clash/mihomo YAML（`payload`）、sing-box JSON 规则集、v2ray `geosite.dat`/`geoip.dat`（按分类整体导入）、mihomo `.mrs`。
+- 下载时转换一次并存为规范文本，启动与热应用只读转换后的文件。清单新增可选字段 `format`（`auto` 缺省，另有 `srs`/`text`/`yaml`/`json`/`dat`/`mrs`）与 `category`（`dat` 必填）；WebUI 编辑框有"格式"下拉和"分类"输入。
+- 无法表达的规则（进程、端口、逻辑规则等）整条跳过并计数；`regexp` 类规则只在该来源开启"启用正则"时生效。`.dat` 不支持 `@属性` 过滤，`geoip.dat` 的 `reverse_match` 分类会下载失败。`.mrs` 解压上限 64 MiB。
+- 新订阅的本地文件沿用地址里的文件名（如 `srs/gfw.mrs`），文件按内容识别。同一个 `geosite.dat` 建多个分类时请给每个订阅不同的本地文件名。
+- GitHub 上的文件请用 raw 地址（`raw.githubusercontent.com/...` 或 `.../raw/...`），`.../blob/...` 是网页，下载会失败（旧文件保留）。
+
+### 行为变化
+
+- **请求屏蔽里的 hosts 行现在算拦截**（`0.0.0.0 name`、`127.0.0.1 name` 等按 `full:` 拦截，`localhost` 等跳过）。订阅了 hosts 格式列表的，升级后拦截条数会变多。
+- 请求屏蔽订阅下载到零条可用规则时算失败，保留旧文件。
+
+### 界面
+
+- 分流规则页分成三级标签：在线订阅、白/灰名单、FakeIP 过滤（两个 fakeip filter 名单从"运行模式"移来）、直连 IP 与重定向、DDNS 域名。
+- 在线订阅分两组：上方**自定义订阅**（直连域名、代理域名，新增只能选这两类）；下方**基础规则**（中国域名、非中国域名、中国 IP），可关闭、可改地址，界面上不能删掉最后一条，改地址有提示、关闭要确认，并可"恢复默认地址"。限制只在界面里，手写配置不受影响。
+
+### 构建
+
+- 新依赖 `ruzstd =0.9.1`（纯 Rust）；从源码构建需要 Rust 1.87 以上。
+
 ## v0.4.1 升级须知（2026-10-28；内存优化，仅程序与界面）
 
 - 配置 schema 仍为 4，没有新配置包：在线更新只换程序与 `ui/main`（已安装界面时），不动配置文件与用户数据。
