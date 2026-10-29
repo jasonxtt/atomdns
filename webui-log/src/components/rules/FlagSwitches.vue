@@ -68,6 +68,12 @@ function restore(flag) {
   return apply(flag, () => deleteRequest(`/api/v1/flags/${encodeURIComponent(flag.key)}`))
 }
 
+// The "modified" mark and the restore button. A choice inside a boxed page (运行模式) shows neither:
+// its options are all on screen, so the current one is plain to see.
+function showModified(flag) {
+  return flag.modified && !(flag.kind === 'choice' && props.joined)
+}
+
 // A choice flag explains its options in one sentence joined by "；": one option per line.
 function descriptionLines(flag) {
   const text = flagDescription(flag)
@@ -92,11 +98,11 @@ onBeforeUnmount(() => window.removeEventListener('mosdns-log-refresh', load))
     <p v-if="!enabled" class="muted rt-setting-note" role="note">当前配置没有可修改的功能开关。</p>
     <p v-else-if="loadError" class="rt-setting-error" role="alert">{{ loadError }}</p>
     <div :class="joined ? 'rt-setting-grid' : 'rt-setting-rows'">
-    <SettingRow v-for="flag in pageFlags" :key="flag.key" :label="flag.label" :class="{ 'rt-setting-stack': flag.kind === 'choice' && !flagDescription(flag), 'rt-setting-choice': flag.kind === 'choice' && tiles && Boolean(flagDescription(flag)) }" :data-flag="flag.key">
+    <SettingRow v-for="flag in pageFlags" :key="flag.key" :label="flag.label" :class="{ 'rt-setting-switch': flag.kind !== 'choice', 'rt-setting-stack': flag.kind === 'choice' && !flagDescription(flag), 'rt-setting-choice': flag.kind === 'choice' && (tiles || joined) && Boolean(flagDescription(flag)) }" :data-flag="flag.key">
       <template #description>
         <span v-for="line in descriptionLines(flag)" :key="line" class="rt-desc-line">{{ line }}</span>
       </template>
-      <span v-if="flag.modified" class="rt-flag-mark" :data-flag-modified="flag.key">已修改</span>
+      <span v-if="showModified(flag)" class="rt-flag-mark" :data-flag-modified="flag.key">已修改</span>
       <span v-if="busyKey === flag.key" class="rt-setting-note" data-flag-busy>应用中…</span>
       <div v-if="flag.kind === 'choice'" class="rt-segmented" role="group" :aria-label="flag.label">
         <button
@@ -119,7 +125,7 @@ onBeforeUnmount(() => window.removeEventListener('mosdns-log-refresh', load))
         />
         <span class="slider"></span>
       </label>
-      <button v-if="flag.modified" class="btn secondary" type="button" :disabled="Boolean(busyKey)" @click="restore(flag)">恢复默认</button>
+      <button v-if="showModified(flag)" class="btn secondary" type="button" :disabled="Boolean(busyKey)" @click="restore(flag)">恢复默认</button>
     </SettingRow>
     </div>
   </section>
