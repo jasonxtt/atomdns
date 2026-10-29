@@ -140,16 +140,16 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <SettingSection id="audit" title="审计日志">
+  <SettingSection id="audit" title="审计日志" tiles>
     <CapabilityBoundary operation="audit.control">
-      <SettingRow label="查询记录" description="记录每条查询的详情，概览与日志页的统计都来自这里；停止后不再新增">
+      <SettingRow label="查询记录" layout="form" description="记录每条查询的详情，概览与日志页的统计都来自这里；停止后不再新增">
         <span class="rt-setting-text" :class="audit.capturing ? 'rt-text-ok' : ''">{{ audit.capturing === null ? '读取中...' : (audit.capturing ? '记录中' : '已停止') }}</span>
         <button class="btn tiny primary" :disabled="audit.busy || audit.capturing === null" @click="toggleAuditCapture">{{ audit.busy ? '处理中...' : (audit.capturing ? '停止' : '开始') }}</button>
         <button class="btn tiny danger" :disabled="audit.busy || audit.capturing === null" @click="clearAuditLogs">清空</button>
       </SettingRow>
     </CapabilityBoundary>
     <CapabilityBoundary operation="audit.capacity">
-      <SettingRow label="详细日志上限" description="最多保存多少条查询详情（0–400000，0 表示不保存）。修改上限会清空已保存的详细日志">
+      <SettingRow label="详细日志上限" layout="form" description="最多保存多少条查询详情（0–400000，0 表示不保存）。修改上限会清空已保存的详细日志">
         <span class="rt-setting-text">{{ audit.capacity === null ? '读取中...' : `${Number(audit.capacity).toLocaleString()} 条` }}</span>
         <form class="rt-setting-inline" @submit.prevent="submitCapacity">
           <input v-model="audit.newCapacity" class="rt-setting-input rt-setting-input-short" :disabled="audit.busy || audit.capacity === null" type="number" min="0" max="400000" step="1" placeholder="新上限" aria-label="新的详细日志上限" />

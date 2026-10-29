@@ -1,6 +1,7 @@
 <script setup>
 import { onBeforeUnmount, onMounted, reactive } from 'vue'
 import { capabilityFetch } from '../../api/runtimeCapabilities'
+import AppIcon from '../AppIcon.vue'
 
 // The entries of one cache, newest page first, searchable and loaded in pages.
 const props = defineProps({ cache: { type: Object, required: true } })
@@ -62,14 +63,14 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer))
 
 <template>
   <Teleport to="body">
-    <div class="modal-mask" @click.self="$emit('close')">
-      <section class="panel data-view-modal" role="dialog" :aria-label="`${cache.name} 的条目`">
+    <div class="modal-mask modal-mask-center" @click.self="$emit('close')">
+      <section class="panel data-view-modal detail-modal" role="dialog" :aria-label="`${cache.name} 的条目`">
         <header class="panel-header">
           <div>
             <h3>{{ cache.name }}</h3>
             <p class="muted">已显示 {{ view.entries.length.toLocaleString() }}{{ view.total > 0 ? ` / ${view.total.toLocaleString()}` : '' }} 条</p>
           </div>
-          <div class="actions"><button class="btn secondary" type="button" @click="$emit('close')">关闭</button></div>
+          <button class="rt-row-icon" type="button" aria-label="关闭" title="关闭" @click="$emit('close')"><AppIcon name="x" :size="18" /></button>
         </header>
         <div class="data-view-search"><input v-model="view.query" placeholder="搜索…" aria-label="搜索缓存条目" @input="search" /></div>
         <p v-if="view.error" class="muted">{{ view.error }}</p>
@@ -84,7 +85,7 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer))
             <pre class="mono cache-pre">{{ item.message }}</pre>
           </details>
         </div>
-        <div class="actions" style="margin-top: 10px;">
+        <div class="actions log-more">
           <button class="btn primary" type="button" :disabled="view.loading || view.loadingMore || !view.hasMore" @click="fetchEntries(true)">{{ view.loadingMore ? '读取中…' : '加载更多' }}</button>
         </div>
       </section>

@@ -4,7 +4,6 @@ import { capabilityFetch } from '../../api/runtimeCapabilities'
 import { supportsOperation } from '../../api/runtimeCapabilities'
 import CapabilityBoundary from '../../components/CapabilityBoundary.vue'
 import SettingRow from '../../components/settings/SettingRow.vue'
-import SettingSection from '../../components/settings/SettingSection.vue'
 import { clearTopNotice, setError, setSuccess } from '../../utils/notice'
 
 const CONFIG_DIR_KEY = 'rtdns-config-dir'
@@ -61,12 +60,11 @@ async function backupConfig() {
 </script>
 
 <template>
-  <SettingSection id="backup" title="配置与备份">
-    <CapabilityBoundary operation="system.config_management">
-      <SettingRow label="备份配置" description="把配置目录打包成 zip 下载（不含 backup、update 两个目录）。目录必须是这台 rtdns 实际使用的配置目录">
-        <input v-model="configDir" class="rt-setting-input" placeholder="/etc/rtdns" aria-label="配置目录" @change="saveConfigDir" />
-        <button class="btn tiny primary" :disabled="backingUp" @click="backupConfig">{{ backingUp ? '备份中...' : '备份' }}</button>
-      </SettingRow>
-    </CapabilityBoundary>
-  </SettingSection>
+  <!-- One tile of the 配置与UI group (mounted by SystemUpdateSection). -->
+  <CapabilityBoundary operation="system.config_management">
+    <SettingRow label="备份配置" layout="form" description="把配置目录打包成 zip 下载（不含 backup、update 目录），目录须是 rtdns 实际使用的配置目录">
+      <input v-model="configDir" class="rt-setting-input" placeholder="/etc/rtdns" aria-label="配置目录" @change="saveConfigDir" />
+      <button class="btn tiny primary" :disabled="backingUp" @click="backupConfig">{{ backingUp ? '备份中...' : '备份' }}</button>
+    </SettingRow>
+  </CapabilityBoundary>
 </template>

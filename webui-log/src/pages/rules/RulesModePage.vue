@@ -4,6 +4,6 @@ import FlagSwitches from '../../components/rules/FlagSwitches.vue'
 
 <template>
   <div class="rt-settings-page">
-    <FlagSwitches page="mode" />
+    <FlagSwitches page="mode" tiles />
   </div>
 </template>

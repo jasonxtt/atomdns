@@ -5,6 +5,7 @@ import { capabilityState, operationReason, supportsOperation } from '../../api/r
 import CapabilityBoundary from '../../components/CapabilityBoundary.vue'
 import SettingRow from '../../components/settings/SettingRow.vue'
 import SettingSection from '../../components/settings/SettingSection.vue'
+import SystemBackupSection from './SystemBackupSection.vue'
 import { parseProcessMetrics } from '../../utils/overviewMetrics'
 import { clearTopNotice, setError, setSuccess } from '../../utils/notice'
 
@@ -22,7 +23,6 @@ const health = computed(() => capabilityState.health || null)
 // `path` "/") and the external ones (served at /<name>/).
 const uiEntries = computed(() => (Array.isArray(health.value?.external_ui) ? health.value.external_ui : []))
 const isWebui = (entry) => entry.path === '/' || (entry.path === undefined && entry.name === 'main')
-const webuiEntry = computed(() => uiEntries.value.find(isWebui) || null)
 const externalEntries = computed(() => uiEntries.value.filter((entry) => !isWebui(entry)))
 // The directory this page was loaded from ('/' for the built-in UI, '/<name>/' for an external one).
 const currentDirectory = typeof window !== 'undefined' ? new URL('./', window.location.href).pathname : '/'
@@ -91,16 +91,6 @@ const uptimeText = computed(() => {
   return start ? formatDuration(now.value / 1000 - start) : '--'
 })
 
-const resourceText = computed(() => {
-  const info = processInfo.value
-  const parts = []
-  if (info.residentBytes !== null) parts.push(`内存 ${(info.residentBytes / 1024 / 1024).toFixed(1)} MiB`)
-  if (info.cpuSeconds !== null) parts.push(`CPU 累计 ${info.cpuSeconds.toFixed(1)} 秒`)
-  if (info.threads !== null) parts.push(`${info.threads} 线程`)
-  if (info.openFds !== null) parts.push(`${info.openFds} 个打开的文件`)
-  return parts.join(' · ') || '--'
-})
-
 const TRANSACTION_STATES = { idle: '空闲', pending: '更新进行中', rolled_back: '上次更新已回滚' }
 const CONFIG_UPDATE_STATES = { success: '成功', failed: '失败', skipped: '跳过' }
 
@@ -120,7 +110,8 @@ const configPackage = computed(() => {
     updateMessage: status.config_update_message || '',
     updateError: status.config_update_error || '',
     backup: status.config_update_backup || '',
-    transactionState: transaction?.state ? (TRANSACTION_STATES[transaction.state] || transaction.state) : '',
+    // An idle transaction is the normal case and says nothing.
+    transactionState: transaction?.state && transaction.state !== 'idle' ? (TRANSACTION_STATES[transaction.state] || transaction.state) : '',
     transactionTarget: transaction?.target_version || '',
     transactionError: transaction?.last_error || '',
     rollback: status.rollback_performed ? (status.rollback_message || '已回滚') : ''
@@ -235,33 +226,29 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <SettingSection id="update" title="版本与更新">
-    <SettingRow label="程序版本" :description="processInfo.startTime ? `启动于 ${new Date(processInfo.startTime * 1000).toLocaleString('zh-CN', { hour12: false })}` : '当前运行的 rtdns'">
+  <SettingSection id="update" title="版本与更新" tiles>
+    <SettingRow label="程序版本" layout="stat" :description="processInfo.startTime ? `启动于 ${new Date(processInfo.startTime * 1000).toLocaleString('zh-CN', { hour12: false })}` : '当前运行的 rtdns'">
       <span class="rt-setting-text">{{ supportsOperation('system.version') ? (health?.version || '读取中') : operationReason('system.version') }}</span>
       <span v-if="supportsOperation('metrics.process')" class="muted rt-setting-note">已运行 {{ uptimeText }}</span>
     </SettingRow>
-    <SettingRow label="界面版本" description="配置目录 ui/main 下的 WebUI，在线更新时随程序一起替换" data-webui-version>
-      <span class="rt-setting-text">{{ webuiEntry?.mounted ? (webuiEntry.ui_version || '无版本信息') : (webuiEntry?.reason || '未安装') }}</span>
-    </SettingRow>
-    <SettingRow label="资源占用" description="本进程当前的内存与累计 CPU 时间">
-      <span class="rt-setting-text">{{ supportsOperation('metrics.process') ? resourceText : operationReason('metrics.process') }}</span>
-    </SettingRow>
     <CapabilityBoundary operation="system.update">
-      <SettingRow label="新版本" :description="`${updateBannerText}（上次检查 ${updateLastCheckedText}）`">
+      <SettingRow label="新版本" layout="stat" :description="`${updateBannerText}（上次检查 ${updateLastCheckedText}）`">
         <span class="rt-setting-text">{{ update.status?.latest_version || '--' }}</span>
         <button class="btn tiny secondary" :disabled="update.loading" @click="checkUpdate">{{ update.loading ? '处理中...' : '检查更新' }}</button>
       </SettingRow>
-      <SettingRow label="安装更新" description="下载并校验新版本后原地切换；新版本起不来会自动回到旧版本">
+      <SettingRow label="安装更新" layout="form" description="下载并校验新版本后原地切换；新版本起不来会自动回到旧版本">
         <button class="btn tiny primary" :disabled="update.loading || !hasUpdate" @click="applyUpdate(false)">立即更新</button>
         <button class="btn tiny danger" :disabled="update.loading || !update.status?.download_url" title="即使版本相同也重新安装" @click="applyUpdate(true)">强制更新</button>
       </SettingRow>
     </CapabilityBoundary>
-    <SettingRow label="配置包" data-config-package>
+  </SettingSection>
+
+  <!-- The configuration package, its backup and the other UI packages: one group, one line. -->
+  <SettingSection id="config" title="配置与UI" tiles>
+    <SettingRow label="配置包" layout="stat" data-config-package>
       <template #description>
-        程序需要的配置版本与本机已应用的版本<template v-if="configPackage.packageId">（{{ configPackage.packageId }}）</template>
-        <span v-if="configPackage.updateMessage" class="rt-setting-subline">最近配置升级：{{ configPackage.updateStatus }} · {{ configPackage.updateMessage }}</span>
+        <span v-if="configPackage.updateMessage" class="rt-setting-subline" :title="[configPackage.packageId, configPackage.backup && `升级前备份：${configPackage.backup}`].filter(Boolean).join('\n')">最近升级：{{ configPackage.updateStatus }} · {{ configPackage.updateMessage }}</span>
         <span v-if="configPackage.updateError" class="rt-setting-subline rt-text-bad">{{ configPackage.updateError }}</span>
-        <span v-if="configPackage.backup" class="rt-setting-subline">升级前备份：<span class="mono">{{ configPackage.backup }}</span></span>
         <span v-if="configPackage.transactionError" class="rt-setting-subline rt-text-warn">最近一次回滚：{{ configPackage.transactionError }}</span>
         <span v-if="configPackage.rollback" class="rt-setting-subline rt-text-warn">{{ configPackage.rollback }}</span>
       </template>
@@ -269,10 +256,11 @@ onBeforeUnmount(() => {
       <span v-if="configPackage.current" class="mini-badge">已是最新</span>
       <span v-if="configPackage.transactionState" class="muted rt-setting-note">更新事务：{{ configPackage.transactionState }}<template v-if="configPackage.transactionTarget"> · {{ configPackage.transactionTarget }}</template></span>
     </SettingRow>
-    <SettingRow v-for="entry in mountedPackages" :key="`ui-${entry.name}`" label="外置界面" :description="`配置目录 ui/${entry.name} 下的界面包，版本 ${entry.ui_version}`" data-external-ui-link>
+    <SystemBackupSection />
+    <SettingRow v-for="entry in mountedPackages" :key="`ui-${entry.name}`" label="外置界面" layout="form" :description="`ui/${entry.name} 下的界面包，版本 ${entry.ui_version}`" data-external-ui-link>
       <a class="btn tiny secondary" :href="packageUrl(entry)">前往 {{ packageUrl(entry) }}</a>
     </SettingRow>
-    <SettingRow v-for="entry in refusedPackages" :key="`refused-${entry.name}`" label="外置界面" :description="`ui/${entry.name} 未挂载`" data-external-ui-rejected>
+    <SettingRow v-for="entry in refusedPackages" :key="`refused-${entry.name}`" label="外置界面" layout="stat" :description="`ui/${entry.name} 未挂载`" data-external-ui-rejected>
       <span class="rt-setting-text">{{ entry.reason }}</span>
     </SettingRow>
   </SettingSection>
