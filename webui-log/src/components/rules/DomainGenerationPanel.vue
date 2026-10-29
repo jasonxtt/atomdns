@@ -66,16 +66,16 @@ onBeforeUnmount(() => window.removeEventListener('mosdns-log-refresh', load))
 </script>
 
 <template>
-  <section class="panel rt-setting-section rt-setting-tiles" data-domain-generation>
+  <section class="panel rt-setting-section rt-setting-tiles rt-setting-tiles-compact rt-setting-joined" data-domain-generation>
     <h3 class="rt-setting-section-title">学习项目</h3>
     <p v-if="!supportsOperation('system.domain_generation')" class="muted rt-setting-note" role="note">{{ operationReason('system.domain_generation') }}</p>
-    <template v-else>
+    <div v-else class="rt-setting-grid">
       <SettingRow v-for="profile in PROFILES" :key="profile.key" :label="profile.name" :description="profile.desc">
         <label class="switch">
           <input type="checkbox" :checked="Boolean(settings[profile.key])" :disabled="loading" :aria-label="profile.name" @change="toggle(profile, $event)" />
           <span class="slider"></span>
         </label>
       </SettingRow>
-    </template>
+    </div>
   </section>
 </template>

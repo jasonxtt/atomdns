@@ -86,21 +86,23 @@ onBeforeUnmount(() => window.removeEventListener('mosdns-log-refresh', load))
 </script>
 
 <template>
-  <section class="panel rt-setting-section" data-overrides>
+  <section class="panel rt-setting-section rt-setting-tiles rt-setting-tiles-compact rt-setting-joined" data-overrides>
     <h3 class="rt-setting-section-title">代理与 ECS</h3>
     <p v-if="!supportsOperation('system.global_overrides')" class="muted rt-setting-note" role="note">{{ operationReason('system.global_overrides') }}</p>
     <template v-else>
-      <p class="muted rt-setting-note" data-native-overrides-note>{{ NATIVE_OVERRIDES_NOTE }}</p>
-      <SettingRow label="SOCKS5 代理" description="上游走代理时使用的地址，格式 host:port。">
-        <span v-if="isModified(sources.socks5)" class="rt-flag-mark" data-override-modified="socks5">已修改</span>
-        <input v-model="overrides.socks5" class="rt-setting-input" placeholder="host:port" aria-label="SOCKS5 代理" />
-        <button v-if="isModified(sources.socks5)" class="btn secondary" type="button" :disabled="applying || !loaded" @click="restoreOverride('socks5')">恢复默认</button>
-      </SettingRow>
-      <SettingRow label="ECS 地址" description="向国外上游查询时携带的客户端子网地址（IPv4 或 IPv6）。">
-        <span v-if="isModified(sources.ecs)" class="rt-flag-mark" data-override-modified="ecs">已修改</span>
-        <input v-model="overrides.ecs" class="rt-setting-input" placeholder="IPv4 / IPv6" aria-label="ECS 地址" />
-        <button v-if="isModified(sources.ecs)" class="btn secondary" type="button" :disabled="applying || !loaded" @click="restoreOverride('ecs')">恢复默认</button>
-      </SettingRow>
+      <p class="muted rt-setting-note rt-overrides-note" data-native-overrides-note>{{ NATIVE_OVERRIDES_NOTE }}</p>
+      <div class="rt-setting-grid">
+        <SettingRow label="SOCKS5 代理" layout="form" description="上游走代理时使用的地址，格式 host:port。">
+          <span v-if="isModified(sources.socks5)" class="rt-flag-mark" data-override-modified="socks5">已修改</span>
+          <input v-model="overrides.socks5" class="rt-setting-input" placeholder="host:port" aria-label="SOCKS5 代理" />
+          <button v-if="isModified(sources.socks5)" class="btn secondary" type="button" :disabled="applying || !loaded" @click="restoreOverride('socks5')">恢复默认</button>
+        </SettingRow>
+        <SettingRow label="ECS 地址" layout="form" description="向国外上游查询时携带的客户端子网地址（IPv4 或 IPv6）。">
+          <span v-if="isModified(sources.ecs)" class="rt-flag-mark" data-override-modified="ecs">已修改</span>
+          <input v-model="overrides.ecs" class="rt-setting-input" placeholder="IPv4 / IPv6" aria-label="ECS 地址" />
+          <button v-if="isModified(sources.ecs)" class="btn secondary" type="button" :disabled="applying || !loaded" @click="restoreOverride('ecs')">恢复默认</button>
+        </SettingRow>
+      </div>
       <div class="actions rt-list-actions">
         <button class="btn primary" type="button" :disabled="applying || !loaded" @click="saveOverrides">{{ applying ? '保存中…' : '保存并应用' }}</button>
         <button class="btn secondary" type="button" :disabled="applying" @click="load">读取当前</button>

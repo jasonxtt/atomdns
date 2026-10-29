@@ -10,9 +10,11 @@ import SettingRow from '../settings/SettingRow.vue'
 // `page`, in declaration order. A click is applied at once; while one change is being
 // applied the other switches of the page wait.
 // `tiles` lays the page's switches out two or three to a line instead of one per row.
+// `joined` puts them side by side in one box with short dividing lines instead (see SettingSection).
 const props = defineProps({
   page: { type: String, required: true },
-  tiles: { type: Boolean, default: false }
+  tiles: { type: Boolean, default: false },
+  joined: { type: Boolean, default: false }
 })
 
 const flags = ref([])
@@ -86,9 +88,10 @@ onBeforeUnmount(() => window.removeEventListener('mosdns-log-refresh', load))
 </script>
 
 <template>
-  <section v-if="!enabled || loadError || pageFlags.length > 0" class="panel rt-setting-section" :class="{ 'rt-setting-tiles': tiles }" :data-flags-page="page">
+  <section v-if="!enabled || loadError || pageFlags.length > 0" class="panel rt-setting-section" :class="{ 'rt-setting-tiles': tiles || joined, 'rt-setting-tiles-compact rt-setting-joined': joined }" :data-flags-page="page">
     <p v-if="!enabled" class="muted rt-setting-note" role="note">当前配置没有可修改的功能开关。</p>
     <p v-else-if="loadError" class="rt-setting-error" role="alert">{{ loadError }}</p>
+    <div :class="joined ? 'rt-setting-grid' : 'rt-setting-rows'">
     <SettingRow v-for="flag in pageFlags" :key="flag.key" :label="flag.label" :class="{ 'rt-setting-stack': flag.kind === 'choice' && !flagDescription(flag), 'rt-setting-choice': flag.kind === 'choice' && tiles && Boolean(flagDescription(flag)) }" :data-flag="flag.key">
       <template #description>
         <span v-for="line in descriptionLines(flag)" :key="line" class="rt-desc-line">{{ line }}</span>
@@ -118,5 +121,6 @@ onBeforeUnmount(() => window.removeEventListener('mosdns-log-refresh', load))
       </label>
       <button v-if="flag.modified" class="btn secondary" type="button" :disabled="Boolean(busyKey)" @click="restore(flag)">恢复默认</button>
     </SettingRow>
+    </div>
   </section>
 </template>
