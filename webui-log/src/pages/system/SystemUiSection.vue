@@ -1,5 +1,5 @@
 <script setup>
-import { inject, reactive, ref } from 'vue'
+import { computed, inject, reactive } from 'vue'
 import SettingRow from '../../components/settings/SettingRow.vue'
 import SettingSection from '../../components/settings/SettingSection.vue'
 import { loadAutoRefreshState, saveAutoRefreshState } from '../../utils/autoRefresh'
@@ -7,12 +7,11 @@ import { setSuccess } from '../../utils/notice'
 import { THEME_LABELS, THEME_MODES } from '../../utils/theme'
 
 const theme = inject('theme')
-const themeMode = ref(theme.mode)
+const themeMode = computed(() => theme.mode)
 const autoRefresh = reactive(loadAutoRefreshState())
 
 function changeTheme(mode) {
   theme.setMode(mode)
-  themeMode.value = theme.mode
 }
 
 function emitAutoRefreshSettings() {

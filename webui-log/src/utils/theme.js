@@ -1,5 +1,7 @@
 // Light / dark / follow the system (default). The choice is kept in this browser only;
 // `data-theme` on <html> always carries the resolved 'light' or 'dark'.
+import { ref } from 'vue'
+
 export const THEME_STORAGE_KEY = 'rtdns-theme'
 export const THEME_MODES = Object.freeze(['system', 'light', 'dark'])
 export const THEME_LABELS = Object.freeze({ system: '跟随系统', light: '浅色', dark: '深色' })
@@ -22,19 +24,19 @@ function readStoredMode(storage) {
 // 'system', and saves a new choice.
 export function createThemeController({ root, storage, matchMedia } = {}) {
   const query = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : null
-  let mode = readStoredMode(storage)
+  const mode = ref(readStoredMode(storage))
   const apply = () => {
-    const theme = resolveTheme(mode, Boolean(query?.matches))
+    const theme = resolveTheme(mode.value, Boolean(query?.matches))
     root?.setAttribute('data-theme', theme)
     return theme
   }
-  query?.addEventListener?.('change', () => { if (mode === 'system') apply() })
+  query?.addEventListener?.('change', () => { if (mode.value === 'system') apply() })
   apply()
   return {
-    get mode() { return mode },
+    get mode() { return mode.value },
     setMode(next) {
-      mode = normalizeThemeMode(next)
-      try { storage?.setItem(THEME_STORAGE_KEY, mode) } catch { /* private mode: keep it for this page */ }
+      mode.value = normalizeThemeMode(next)
+      try { storage?.setItem(THEME_STORAGE_KEY, mode.value) } catch { /* private mode: keep it for this page */ }
       return apply()
     }
   }
