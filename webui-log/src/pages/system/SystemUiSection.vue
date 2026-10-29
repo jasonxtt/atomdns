@@ -26,8 +26,8 @@ function onAutoRefreshToggle(event) {
 </script>
 
 <template>
-  <SettingSection id="ui" title="界面">
-    <SettingRow label="主题" description="跟随系统时随操作系统切换深浅色；只保存在当前浏览器" data-theme-panel>
+  <SettingSection id="ui" title="界面" tiles>
+    <SettingRow label="主题" layout="form" description="跟随系统时随操作系统切换深浅色；只保存在当前浏览器" data-theme-panel>
       <div class="rt-segmented" role="radiogroup" aria-label="主题">
         <button
           v-for="mode in THEME_MODES"
@@ -42,7 +42,7 @@ function onAutoRefreshToggle(event) {
         </button>
       </div>
     </SettingRow>
-    <SettingRow label="自动刷新" description="按间隔自动刷新当前页面的数据；只保存在当前浏览器">
+    <SettingRow label="自动刷新" layout="form" description="按间隔自动刷新当前页面的数据；只保存在当前浏览器">
       <label class="switch switch-table">
         <input type="checkbox" :checked="autoRefresh.enabled" aria-label="自动刷新" @change="onAutoRefreshToggle" />
         <span class="slider"></span>

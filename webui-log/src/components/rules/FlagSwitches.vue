@@ -69,6 +69,7 @@ function restore(flag) {
 // A choice flag explains its options in one sentence joined by "；": one option per line.
 function descriptionLines(flag) {
   const text = flagDescription(flag)
+  if (!text) return []
   if (flag.kind !== 'choice') return [text]
   return text.split('；').map((line) => line.trim()).filter(Boolean)
 }
@@ -88,7 +89,7 @@ onBeforeUnmount(() => window.removeEventListener('mosdns-log-refresh', load))
   <section v-if="!enabled || loadError || pageFlags.length > 0" class="panel rt-setting-section" :class="{ 'rt-setting-tiles': tiles }" :data-flags-page="page">
     <p v-if="!enabled" class="muted rt-setting-note" role="note">当前配置没有可修改的功能开关。</p>
     <p v-else-if="loadError" class="rt-setting-error" role="alert">{{ loadError }}</p>
-    <SettingRow v-for="flag in pageFlags" :key="flag.key" :label="flag.label" :class="{ 'rt-setting-stack': flag.kind === 'choice' && !flagDescription(flag) }" :data-flag="flag.key">
+    <SettingRow v-for="flag in pageFlags" :key="flag.key" :label="flag.label" :class="{ 'rt-setting-stack': flag.kind === 'choice' && !flagDescription(flag), 'rt-setting-choice': flag.kind === 'choice' && tiles && Boolean(flagDescription(flag)) }" :data-flag="flag.key">
       <template #description>
         <span v-for="line in descriptionLines(flag)" :key="line" class="rt-desc-line">{{ line }}</span>
       </template>

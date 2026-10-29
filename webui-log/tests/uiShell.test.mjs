@@ -204,16 +204,19 @@ test('the diagnostic capture is its own page, reached from and returning to the 
 
 test('the system page stacks its five sections in setting rows', () => {
   const page = read('../src/pages/system/SystemPage.vue')
-  const order = ['SystemUpdateSection', 'SystemBackupSection', 'SystemAuditSection', 'SystemUiSection', 'SystemServiceSection']
+  const order = ['SystemUpdateSection', 'SystemAuditSection', 'SystemUiSection', 'SystemServiceSection']
   const positions = order.map((name) => page.indexOf(`<${name} />`))
   assert.ok(positions.every((position) => position > 0), 'every section is mounted')
   assert.deepEqual([...positions].sort((a, b) => a - b), positions, 'in the decided order')
-  const titles = { Update: '版本与更新', Backup: '配置与备份', Audit: '审计日志', Ui: '界面', Service: '服务' }
-  for (const [name, title] of Object.entries(titles)) {
+  // The update file holds two groups: the update tile and 配置与UI (configuration package, backup tile, UI packages).
+  const titles = { Update: ['版本与更新', '配置与UI'], Audit: ['审计日志'], Ui: ['界面'], Service: ['服务'] }
+  for (const [name, list] of Object.entries(titles)) {
     const section = read(`../src/pages/system/System${name}Section.vue`)
-    assert.match(section, new RegExp(`<SettingSection id="[a-z]+" title="${title}">`), name)
+    for (const title of list) assert.match(section, new RegExp(`<SettingSection id="[a-z]+" title="${title}"( tiles)?>`), `${name} ${title}`)
     assert.match(section, /<SettingRow /, name)
   }
+  assert.match(read('../src/pages/system/SystemUpdateSection.vue'), /<SystemBackupSection \/>/, 'the backup tile sits in 配置与UI')
+  assert.match(read('../src/pages/system/SystemBackupSection.vue'), /<SettingRow label="备份配置"/)
 })
 
 test('the rule pages show no internal terms or Go-era names', () => {

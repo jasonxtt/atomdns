@@ -920,30 +920,17 @@ tr.disabled {
 .confirm-pop-bubble {
   width: min(460px, 96vw);
   max-width: 460px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--surface-input);
-  box-shadow: 0 20px 34px rgba(8, 24, 40, 0.28);
-  padding: 14px;
+  border: 0;
+  border-radius: var(--rp-r-2xl);
+  background: var(--panel);
+  box-shadow: var(--rp-elevated);
+  padding: 20px 22px;
   position: relative;
-}
-
-.confirm-pop-bubble::before {
-  content: '';
-  position: absolute;
-  top: -8px;
-  left: 34px;
-  width: 14px;
-  height: 14px;
-  background: var(--surface-input);
-  border-top: 1px solid var(--line);
-  border-left: 1px solid var(--line);
-  transform: rotate(45deg);
 }
 
 .confirm-pop-bubble h4 {
   margin: 0 0 8px;
-  font-size: 1rem;
+  font-size: 1.05rem;
 }
 
 .confirm-pop-bubble p {
@@ -972,10 +959,6 @@ tr.disabled {
     max-width: 320px;
     padding: 12px 12px 14px;
     border-radius: 16px;
-  }
-
-  .confirm-pop-bubble::before {
-    display: none;
   }
 
   .confirm-pop-bubble h4 {
@@ -1180,12 +1163,15 @@ tr.disabled {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .cache-entry {
+  flex: none;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--surface-input);
+  border-radius: var(--radius-md);
+  background: transparent;
   overflow: hidden;
 }
 
@@ -1210,8 +1196,8 @@ tr.disabled {
   margin: 0;
   padding: 10px 12px;
   border-top: 1px solid var(--line);
-  background: #0f172a;
-  color: #e2e8f0;
+  background: var(--rp-hl-low);
+  color: var(--ink-0);
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-all;
@@ -2123,8 +2109,8 @@ label.switch-table *,
   column-gap: 20px;
   row-gap: 2px;
   align-items: center;
-  padding: 14px 0;
-  border-top: 1px solid var(--rp-hl-low);
+  padding: 8px 0;
+  border-top: 1px solid var(--rp-hl-med);
 }
 
 .rt-setting-row:first-child {
@@ -3157,11 +3143,13 @@ a.btn {
   row-gap: 10px;
 }
 
-.rt-setting-stack > .rt-setting-value {
+.rt-setting-stack > .rt-setting-value,
+.rt-setting-choice > .rt-setting-value {
   display: contents;
 }
 
-.rt-setting-stack .rt-setting-label {
+.rt-setting-stack .rt-setting-label,
+.rt-setting-choice .rt-setting-label {
   align-self: center;
 }
 
@@ -3170,15 +3158,19 @@ a.btn {
 }
 
 .rt-setting-stack .rt-flag-mark,
-.rt-setting-stack .rt-setting-note {
+.rt-setting-stack .rt-setting-note,
+.rt-setting-choice .rt-flag-mark,
+.rt-setting-choice .rt-setting-note {
   grid-area: mark;
 }
 
-.rt-setting-stack .btn {
+.rt-setting-stack .btn,
+.rt-setting-choice .btn {
   grid-area: restore;
 }
 
-.rt-setting-stack .rt-segmented {
+.rt-setting-stack .rt-segmented,
+.rt-setting-choice .rt-segmented {
   grid-area: choice;
   display: grid;
   grid-auto-flow: column;
@@ -3186,17 +3178,20 @@ a.btn {
   width: auto;
 }
 
-.rt-setting-stack .rt-segmented button {
+.rt-setting-stack .rt-segmented button,
+.rt-setting-choice .rt-segmented button {
   min-width: 0;
 }
 
 @media (max-width: 760px) {
-  .rt-setting-stack .rt-segmented {
+  .rt-setting-stack .rt-segmented,
+  .rt-setting-choice .rt-segmented {
     grid-auto-flow: row;
     border-radius: 22px;
   }
 
-  .rt-setting-stack .rt-segmented button {
+  .rt-setting-stack .rt-segmented button,
+  .rt-setting-choice .rt-segmented button {
     height: 34px;
   }
 }
@@ -3230,6 +3225,122 @@ a.btn {
 .rt-setting-tiles .rt-setting-value {
   align-self: center;
   max-width: 12rem;
+}
+
+/* A choice with an explanation, as a tile: name and marks, the explanation, then the options across the width. */
+.rt-setting-tiles .rt-setting-choice {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas: "label mark restore" "desc desc desc" "choice choice choice";
+  row-gap: 8px;
+}
+
+/* Tile layouts of a row: "stat" puts the value under the name, "form" under the explanation. */
+.rt-setting-tiles.rt-setting-tiles-compact {
+  display: block;
+}
+
+.rt-setting-tiles-compact > .rt-setting-section-title {
+  margin-bottom: 8px;
+}
+
+.rt-setting-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+  grid-auto-flow: dense;
+  gap: 10px;
+}
+
+.rt-settings-page > .rt-setting-tiles + .rt-setting-tiles {
+  margin-top: 8px;
+}
+
+.rt-setting-tiles-compact .rt-setting-row {
+  padding: 11px 14px;
+}
+
+.rt-setting-tiles .rt-setting-row--stat {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "label" "value" "desc";
+  row-gap: 4px;
+}
+
+.rt-setting-tiles .rt-setting-row--form {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "label" "desc" "value";
+  row-gap: 6px;
+}
+
+.rt-setting-tiles .rt-setting-row--stat .rt-setting-value,
+.rt-setting-tiles .rt-setting-row--form .rt-setting-value {
+  align-self: start;
+  justify-content: flex-start;
+  max-width: none;
+}
+
+.rt-setting-tiles .rt-setting-row--stat .rt-setting-text {
+  font-size: 1.02rem;
+  font-weight: 600;
+}
+
+.rt-setting-tiles .rt-setting-row--form .rt-setting-input {
+  flex: 1 1 110px;
+  width: auto;
+  min-width: 0;
+}
+
+.rt-setting-tiles .rt-setting-row--form .rt-setting-inline {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The rows of one group share a single box. Each row draws its own separators: a short vertical line on
+   its left (12px short of the box's top and bottom) and a full-width one on its top. The -1px margins
+   and the box's overflow:hidden push the first column's and the first line's out of sight. */
+.rt-setting-joined .rt-setting-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--rp-hl-med);
+  border-radius: var(--radius-md);
+}
+
+.rt-setting-joined .rt-setting-row {
+  position: relative;
+  margin: -1px 0 0 -1px;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 0;
+  background: var(--panel);
+}
+
+.rt-setting-joined .rt-setting-row::before,
+.rt-setting-joined .rt-setting-row::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  background: var(--rp-hl-med);
+  pointer-events: none;
+}
+
+.rt-setting-joined .rt-setting-row::before {
+  top: 12px;
+  bottom: 12px;
+  width: 1px;
+}
+
+.rt-setting-joined .rt-setting-row::after {
+  top: 0;
+  right: 0;
+  height: 1px;
+}
+
+/* A section wrapped in a capability check keeps its tiles in the same grid. */
+.rt-setting-tiles .capability-boundary {
+  display: contents;
+}
+
+.rt-setting-tiles .capability-reason {
+  grid-column: 1 / -1;
 }
 
 /* Several parts of one page in one card, told apart by a divider with a small mark in the middle. */

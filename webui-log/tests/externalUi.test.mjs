@@ -45,10 +45,9 @@ test('one build makes the WebUI package: relative URLs, a name-independent direc
   assert.doesNotMatch(script, /\bzip\b/)
 })
 
-test('the system page shows the WebUI version and links to every other mounted UI package', () => {
+test('the system page links to every other mounted UI package', () => {
   const panel = read('../src/pages/system/SystemUpdateSection.vue')
   assert.match(panel, /entry\.path === '\/'/, 'ui/main is the WebUI, not an external package')
-  assert.match(panel, /label="界面版本"/)
   assert.match(panel, /uiEntries\.value\.filter\(\(entry\) => !isWebui\(entry\)\)/)
   assert.match(panel, /health\.value\?\.external_ui/)
   assert.match(panel, /entry\.kind === 'mosdns_ui' && entry\.mounted/)
