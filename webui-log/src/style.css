@@ -2647,6 +2647,16 @@ label.switch-table *,
   margin: 6px 0;
 }
 
+.rt-sub-warning {
+  margin: 6px 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--warn);
+  border-radius: 6px;
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  font-size: 0.875rem;
+}
+
 .rt-sub-wrap table,
 .rt-upstream-table,
 .rt-compact-table table {

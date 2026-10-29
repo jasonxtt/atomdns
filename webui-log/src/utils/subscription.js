@@ -1,15 +1,66 @@
-// Helpers of the online-subscription table (china/non-china domains, china IPs, the two
-// custom sets, AdGuard rules and the subscriptions of a special group).
+// Helpers of the online-subscription table (the base sets, the two custom sets, AdGuard rules
+// and the subscriptions of a special group).
 
-// The five online sets of 分流规则: `type` is the key the rule records carry, `tag` the
-// plugin that serves `/plugins/<tag>/config`.
-export const ROUTING_SUBSCRIPTIONS = Object.freeze([
-  { type: 'geositecn', tag: 'geosite_cn', label: '中国域名' },
-  { type: 'geositenocn', tag: 'geosite_no_cn', label: '非中国域名' },
-  { type: 'geoipcn', tag: 'geoip_cn', label: '中国 IP' },
-  { type: 'cuscn', tag: 'cuscn', label: '直连补充 (cuscn)' },
-  { type: 'cusnocn', tag: 'cusnocn', label: '代理补充 (cusnocn)' }
+// The five online sets of 分流规则, in two groups. `type` is the key the rule records carry,
+// `tag` the plugin that serves `/plugins/<tag>/config`.
+// 自定义订阅: the two sets a user adds to, edits and deletes freely.
+export const CUSTOM_SUBSCRIPTIONS = Object.freeze([
+  { type: 'cuscn', tag: 'cuscn', label: '直连域名' },
+  { type: 'cusnocn', tag: 'cusnocn', label: '代理域名' }
 ])
+
+// 基础规则: the sets that decide the China / non-China split. They can be turned off and
+// pointed elsewhere but never deleted down to zero; `defaults` is the record of the shipped
+// configuration package (srs/<type>.json).
+export const BASE_SUBSCRIPTIONS = Object.freeze([
+  {
+    type: 'geositecn', tag: 'geosite_cn', label: '中国域名',
+    defaults: { name: 'geosite_cn', files: 'srs/geosite-cn.srs', url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/sing/geo/geosite/cn.srs' }
+  },
+  {
+    type: 'geositenocn', tag: 'geosite_no_cn', label: '非中国域名',
+    defaults: { name: 'geosite_no_cn', files: 'srs/geolocation-!cn.srs', url: 'https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/refs/heads/sing/geo/geosite/geolocation-!cn.srs' }
+  },
+  {
+    type: 'geoipcn', tag: 'geoip_cn', label: '中国 IP',
+    defaults: { name: 'geoip_cn', files: 'srs/geoip-cn.srs', url: 'https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/refs/heads/sing/geo/geoip/cn.srs' }
+  }
+])
+
+export const ROUTING_SUBSCRIPTIONS = Object.freeze([...BASE_SUBSCRIPTIONS, ...CUSTOM_SUBSCRIPTIONS])
+
+// What turning a base set off does, shown in the confirmation.
+export const DISABLE_WARNINGS = Object.freeze({
+  geoipcn: '关闭后，列表外域名查到的 IP 无法判断国内外，有 IP 的一律走代理。这是影响最大的一项。',
+  geositecn: '关闭后，国内域名都要先查一次上游再判断，会变慢；非 A/AAAA 请求会全部走国外上游。',
+  geositenocn: '关闭后，境外域名改为按中国 IP 判断，多一次上游查询。'
+})
+
+export function disableWarning(type) {
+  return DISABLE_WARNINGS[type] || ''
+}
+
+// A base set keeps at least one source: its last one has no delete. Other tables delete freely.
+export function canDeleteRule(rules, rule, variant) {
+  if (variant !== 'base') return true
+  return rules.filter((item) => item.type === rule.type).length > 1
+}
+
+// The catalogs of `loadedTypes` with no source at all: the base table shows a row to set each.
+export function emptyCatalogs(rules, catalogs, loadedTypes) {
+  return catalogs.filter((item) => loadedTypes.includes(item.type) && !rules.some((rule) => rule.type === item.type))
+}
+
+// The fields "恢复默认地址" puts back; the name and the local file stay.
+export function defaultAddress(type) {
+  const found = BASE_SUBSCRIPTIONS.find((item) => item.type === type)
+  return found ? { url: found.defaults.url, format: 'auto', category: '' } : null
+}
+
+// Turning a base set off (a saved edit or a switch) is confirmed first.
+export function needsDisableConfirm(variant, wasEnabled, willEnable) {
+  return variant === 'base' && Boolean(wasEnabled) && !willEnable
+}
 
 // The formats a subscription can be downloaded in; `auto` is not sent (the host detects it).
 export const SUBSCRIPTION_FORMATS = Object.freeze([

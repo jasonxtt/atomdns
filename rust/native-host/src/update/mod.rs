@@ -27,8 +27,8 @@ use serde::{Deserialize, Serialize};
 /// The configuration package schema this program requires; bump together with
 /// `REQUIRED_CONFIG_PACKAGE_ID` (and the package build script) when the structure of
 /// the managed configuration files changes. Binary-only releases leave both alone.
-pub(crate) const REQUIRED_CONFIG_SCHEMA: u32 = 4;
-pub(crate) const REQUIRED_CONFIG_PACKAGE_ID: &str = "rust-config-schema-4";
+pub(crate) const REQUIRED_CONFIG_SCHEMA: u32 = 5;
+pub(crate) const REQUIRED_CONFIG_PACKAGE_ID: &str = "rust-config-schema-5";
 /// The `channel` of the configuration package and of the update manifest.
 pub(crate) const CHANNEL: &str = "rust";
 /// The release asset holding the executable (a `tar.gz` with a file named `rtdns`).

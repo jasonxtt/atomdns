@@ -5,7 +5,7 @@ import FlagSwitches from '../../components/rules/FlagSwitches.vue'
 import ListEditor from '../../components/rules/ListEditor.vue'
 import SpecialGroupLinks from '../../components/rules/SpecialGroupLinks.vue'
 import SubscriptionTable from '../../components/rules/SubscriptionTable.vue'
-import { ROUTING_SUBSCRIPTIONS } from '../../utils/subscription'
+import { BASE_SUBSCRIPTIONS, CUSTOM_SUBSCRIPTIONS } from '../../utils/subscription'
 
 // 分流规则 has many lists, so they sit under third-level tabs (`?tab=<id>`); the switches stay on top.
 const TABS = [
@@ -34,7 +34,8 @@ const active = computed(() => TABS.some(tab => tab.id === route.query.tab) ? rou
     </nav>
 
     <template v-if="active === 'subscriptions'">
-      <SubscriptionTable kind="online" title="在线订阅" :catalogs="ROUTING_SUBSCRIPTIONS" hint="中国域名、非中国域名、中国 IP 和两个补充集合，从订阅地址下载并按间隔自动更新。" />
+      <SubscriptionTable kind="online" variant="custom" title="自定义订阅" :catalogs="CUSTOM_SUBSCRIPTIONS" hint="自定义订阅优先于基础规则；同一域名同时命中时，代理域名优先。手动的白名单、灰名单优先级更高。" />
+      <SubscriptionTable kind="online" variant="base" title="基础规则" :catalogs="BASE_SUBSCRIPTIONS" hint="基础规则决定国内外分流的大方向，一般保持默认即可。" />
       <SpecialGroupLinks />
     </template>
     <template v-else-if="active === 'lists'">

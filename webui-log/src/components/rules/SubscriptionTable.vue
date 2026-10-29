@@ -5,30 +5,37 @@ import { loadNativeOnlineCatalogs } from '../../api/nativeManagement'
 import { operationReason, supportsOperation } from '../../api/runtimeCapabilities'
 import { openConfirm } from '../../utils/confirm'
 import { clearTopNotice, setError, setSuccess } from '../../utils/notice'
-import { SUBSCRIPTION_FORMATS, inferFromUrl, isDownloaded, needsCategory, ruleFields, sortRules, withFormat } from '../../utils/subscription'
+import { SUBSCRIPTION_FORMATS, BASE_SUBSCRIPTIONS, canDeleteRule, defaultAddress, disableWarning, emptyCatalogs, inferFromUrl, isDownloaded, needsCategory, needsDisableConfirm, ruleFields, sortRules, withFormat } from '../../utils/subscription'
 import { formatDateTime } from '../../utils/time'
 
 // The one table for online subscriptions and AdGuard rules: name, address, enabled,
 // rule count, last update, manual update, edit / add / delete.
 //   kind 'adguard'  the AdGuard rule list (`/plugins/adguard/rules`)
-//   kind 'online'   the downloadable sets of `catalogs` (`/plugins/<tag>/config`): the five
-//                   sets of 分流规则, or the subscriptions that point at one special group
+//   kind 'online'   the downloadable sets of `catalogs` (`/plugins/<tag>/config`): the sets of
+//                   分流规则, or the subscriptions that point at one special group
+//   variant 'base'  the 基础规则 of 分流规则: no add, no delete of a type's last source, a row
+//                   to set a type that has none, a warning and the default address in the
+//                   editor, a confirmation before one is turned off (the limits are only here)
 const props = defineProps({
   kind: { type: String, required: true },
+  variant: { type: String, default: '' },
   title: { type: String, required: true },
   catalogs: { type: Array, default: () => [] },
   hint: { type: String, default: '' }
 })
 
 const adguard = computed(() => props.kind === 'adguard')
+const base = computed(() => props.variant === 'base')
 const showType = computed(() => !adguard.value && props.catalogs.length > 1)
 const operation = computed(() => (adguard.value ? 'rules.adguard' : 'rules.diversion'))
 const allowed = computed(() => supportsOperation(operation.value))
 
 const rules = ref([])
+const loadedTypes = ref([])
 const loading = ref(false)
 const loadError = ref('')
 const pendingUpdate = ref(false)
+const removing = ref(false)
 let refreshTimer = 0
 
 const editor = reactive({
@@ -57,6 +64,20 @@ const itemPath = (tag, name) => `/plugins/${encodeURIComponent(tag)}/config/${en
 const showCategory = computed(() => needsCategory(editor.format, editor.url))
 const empty = computed(() => (adguard.value ? '暂无 AdGuard 规则' : '暂无订阅'))
 const colSpan = 6
+const WARNING = '更换地址前请确认新规则集与原来是同一类内容，否则会导致大量域名分流错误。'
+
+// The table rows: the base table lists each type in order and, for a type with no source,
+// a placeholder that offers to set the default one.
+const rows = computed(() => {
+  if (!base.value) return rules.value
+  const missing = emptyCatalogs(rules.value, props.catalogs, loadedTypes.value)
+  return props.catalogs.flatMap((item) => {
+    const list = rules.value.filter((rule) => rule.type === item.type)
+    return list.length > 0 || !missing.includes(item) ? list : [{ __placeholder: true, type: item.type, __label: item.label }]
+  })
+})
+const rowKey = (rule) => (rule.__placeholder ? `empty:${rule.type}` : `${rule.__tag || 'adguard'}:${rule.id || rule.name}`)
+const deletable = (rule) => canDeleteRule(rules.value, rule, props.variant)
 
 async function load() {
   if (!allowed.value) return
@@ -77,13 +98,22 @@ async function load() {
         merged.push({ ...rule, type: rule.type || type, __tag: tag, __label: label })
       })
     })
-    rules.value = sortRules(merged)
+    loadedTypes.value = result.catalogs.map((item) => item.type)
+    rules.value = base.value ? sortBase(merged) : sortRules(merged)
   } catch (error) {
     rules.value = []
     loadError.value = `读取失败: ${error.message}`
   } finally {
     loading.value = false
   }
+}
+
+// Base sets keep the order of the catalogs, then the enabled ones first.
+function sortBase(list) {
+  const order = (rule) => props.catalogs.findIndex((item) => item.type === rule.type)
+  return [...list].sort((a, b) => order(a) - order(b)
+    || Number(Boolean(b.enabled)) - Number(Boolean(a.enabled))
+    || String(a.name || '').localeCompare(String(b.name || '')))
 }
 
 // An update runs in the background; the list is read again shortly after.
@@ -104,6 +134,20 @@ function resetEditor() {
   touched.name = false
   touched.files = false
   raw = null
+}
+
+// The row of a base type with no source: add the default one.
+function beginSetDefault(type) {
+  const found = BASE_SUBSCRIPTIONS.find((item) => item.type === type)
+  if (!found) return
+  clearTopNotice()
+  resetEditor()
+  Object.assign(editor, { readOnlyType: true, type, ...found.defaults })
+}
+
+function restoreDefault() {
+  const address = defaultAddress(editor.type)
+  if (address) Object.assign(editor, address)
 }
 
 function beginAdd() {
@@ -170,6 +214,10 @@ async function waitDownloaded(tag, name) {
   return false
 }
 
+function confirmDisable(type) {
+  return openConfirm(`确定关闭这项基础规则吗？${disableWarning(type)}`, { tone: 'danger' })
+}
+
 async function save() {
   editor.saving = true
   try {
@@ -185,6 +233,7 @@ async function save() {
     const payload = diversionPayload()
     const tag = tagOf(editor.type)
     if (!tag) throw new Error(`无效的类型: ${editor.type}`)
+    if (needsDisableConfirm(props.variant, raw ? raw.enabled : true, payload.enabled) && !(await confirmDisable(editor.type))) return
     await putJSON(itemPath(tag, payload.name), withFormat(ruleFields(raw), payload, editor.format, editor.category))
     // A renamed record is a new record: the old one goes.
     if (editor.oldName && editor.oldName !== payload.name) await deleteRequest(itemPath(tag, editor.oldName))
@@ -207,7 +256,11 @@ async function save() {
   }
 }
 
-async function toggle(rule) {
+async function toggle(rule, event) {
+  if (needsDisableConfirm(props.variant, rule.enabled, !rule.enabled) && !(await confirmDisable(rule.type))) {
+    if (event?.target) event.target.checked = true
+    return
+  }
   try {
     if (adguard.value) await putJSON(`/plugins/adguard/rules/${encodeURIComponent(rule.id)}`, { ...ruleFields(rule), enabled: !rule.enabled })
     else await putJSON(itemPath(rule.__tag, rule.name), { ...ruleFields(rule), enabled: !rule.enabled })
@@ -219,14 +272,19 @@ async function toggle(rule) {
 }
 
 async function remove(rule) {
-  if (!(await openConfirm(`确定删除“${rule.name}”吗？`, { tone: 'danger' }))) return
+  // One delete at a time, until the list is read again: a base type's "last source" is judged on it.
+  if (removing.value || !deletable(rule)) return
+  removing.value = true
   try {
+    if (!(await openConfirm(`确定删除“${rule.name}”吗？`, { tone: 'danger' }))) return
     if (adguard.value) await deleteRequest(`/plugins/adguard/rules/${encodeURIComponent(rule.id)}`)
     else await deleteRequest(itemPath(rule.__tag, rule.name))
     setSuccess('已删除')
     await load()
   } catch (error) {
     setError(`删除失败: ${error.message}`)
+  } finally {
+    removing.value = false
   }
 }
 
@@ -279,7 +337,7 @@ onBeforeUnmount(() => {
         <span class="muted rt-list-count">{{ loading ? '读取中…' : `共 ${rules.length} 条` }}</span>
       </div>
       <div class="actions" v-if="allowed">
-        <button class="btn primary" type="button" @click="beginAdd">新增</button>
+        <button v-if="!base" class="btn primary" type="button" @click="beginAdd">新增</button>
         <button class="btn secondary" type="button" :disabled="pendingUpdate || rules.length === 0" @click="updateAll">更新全部</button>
       </div>
     </header>
@@ -301,15 +359,26 @@ onBeforeUnmount(() => {
           </thead>
           <tbody>
             <tr v-if="loading && rules.length === 0"><td :colspan="colSpan" class="empty">读取中…</td></tr>
-            <tr v-else-if="rules.length === 0"><td :colspan="colSpan" class="empty">{{ empty }}</td></tr>
-            <tr v-for="rule in rules" :key="`${rule.__tag || 'adguard'}:${rule.id || rule.name}`" :class="{ disabled: !rule.enabled }">
+            <tr v-else-if="rows.length === 0"><td :colspan="colSpan" class="empty">{{ empty }}</td></tr>
+            <tr v-for="rule in rows" :key="rowKey(rule)" :class="{ disabled: !rule.enabled }">
+              <template v-if="rule.__placeholder">
+                <td class="rt-col-switch"></td>
+                <td>{{ rule.__label }}<span class="muted rt-sub-type"> · 基础</span></td>
+                <td class="muted" :colspan="3">未设置地址</td>
+                <td class="rt-col-actions">
+                  <div class="rt-row-actions">
+                    <button class="btn tiny primary" type="button" @click="beginSetDefault(rule.type)">设置</button>
+                  </div>
+                </td>
+              </template>
+              <template v-else>
               <td class="rt-col-switch">
                 <label class="switch switch-table">
-                  <input type="checkbox" :checked="Boolean(rule.enabled)" :aria-label="`启用 ${rule.name}`" @change="toggle(rule)" />
+                  <input type="checkbox" :checked="Boolean(rule.enabled)" :aria-label="`启用 ${rule.name}`" @change="toggle(rule, $event)" />
                   <span class="slider"></span>
                 </label>
               </td>
-              <td :title="rule.name">{{ rule.name }}<span v-if="showType" class="muted rt-sub-type"> · {{ rule.__label }}</span></td>
+              <td :title="rule.name">{{ rule.name }}<span v-if="showType" class="muted rt-sub-type"> · {{ rule.__label }}</span><span v-if="base" class="muted rt-sub-type"> · 基础</span></td>
               <td class="mono" :title="rule.url">{{ rule.url }}</td>
               <td class="text-right">{{ Number(rule.rule_count || 0).toLocaleString() }}</td>
               <td class="mono" :title="formatDateTime(rule.last_updated)">{{ formatDateTime(rule.last_updated) }}</td>
@@ -317,9 +386,10 @@ onBeforeUnmount(() => {
                 <div class="rt-row-actions">
                   <button class="btn tiny warning" type="button" @click="updateOne(rule)">更新</button>
                   <button class="btn tiny secondary" type="button" @click="beginEdit(rule)">编辑</button>
-                  <button class="btn tiny danger" type="button" @click="remove(rule)">删除</button>
+                  <button v-if="deletable(rule)" class="btn tiny danger" type="button" :disabled="removing" @click="remove(rule)">删除</button>
                 </div>
               </td>
+              </template>
             </tr>
           </tbody>
         </table>
@@ -333,6 +403,7 @@ onBeforeUnmount(() => {
             <h3>{{ editor.editing ? '编辑' : '新增' }}{{ title }}</h3>
             <button class="btn tiny secondary" type="button" aria-label="关闭" @click="editor.open = false">✕</button>
           </header>
+          <p v-if="base" class="rt-sub-warning" role="note">{{ WARNING }}</p>
           <div class="form-grid">
             <template v-if="showType">
               <label>类型</label>
@@ -347,6 +418,10 @@ onBeforeUnmount(() => {
             <template v-if="!adguard">
               <label>本地文件</label>
               <input v-model="editor.files" placeholder="例如 srs/example.srs" @input="touched.files = true" />
+            </template>
+            <template v-if="base">
+              <label>默认地址</label>
+              <button class="btn tiny secondary" type="button" @click="restoreDefault">恢复默认地址</button>
             </template>
             <label>格式</label>
             <select v-model="editor.format" aria-label="订阅格式">
