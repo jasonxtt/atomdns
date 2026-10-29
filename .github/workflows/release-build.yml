@@ -12,7 +12,9 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: the glibc amd64 programs need at least the runner's glibc, and the
+    # production hosts (Debian 13, glibc 2.41) must keep running them.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Set up Rust
