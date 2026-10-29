@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getJSON } from '../../api/http'
 import { getRuntimeCapabilities, operationReason, supportsOperation } from '../../api/runtimeCapabilities'
+import AppIcon from '../../components/AppIcon.vue'
 import FlagSwitches from '../../components/rules/FlagSwitches.vue'
 import SpecialGroupDetail from '../../components/rules/SpecialGroupDetail.vue'
 import { settingsBackedProxy } from '../../utils/nativeSettings'
@@ -91,8 +92,8 @@ onBeforeUnmount(() => window.removeEventListener('mosdns-log-refresh', load))
         <p class="muted rt-list-hint">专属分流组把一部分域名交给指定的上游，可以有自己的监听端口、手动名单和订阅。</p>
         <p v-if="loading && groups.length === 0" class="muted">读取中…</p>
         <p v-else-if="groups.length === 0" class="muted" data-group-empty>还没有专属分流组。</p>
-        <div v-else class="table-wrap adaptive-table-wrap rt-compact-table">
-          <table class="rt-group-table">
+        <div v-else class="flat-table-wrap">
+          <table class="flat-table rt-group-table">
             <thead><tr><th>名称</th><th>端口</th><th>状态</th><th class="text-right">生效上游</th><th class="rt-col-actions">操作</th></tr></thead>
             <tbody>
               <tr v-for="group in groups" :key="group.slot" :class="{ active: String(group.slot) === selected }" :data-group-row="group.slot">
@@ -100,7 +101,7 @@ onBeforeUnmount(() => window.removeEventListener('mosdns-log-refresh', load))
                 <td>{{ group.listen_port || '-' }}</td>
                 <td>{{ routeLabel(group) }}<span v-if="group.upstream_warnings?.length" class="rt-text-warn"> · 有告警</span></td>
                 <td class="text-right">{{ group.effective_upstream_count || 0 }}</td>
-                <td class="row-actions rt-col-actions"><button class="btn tiny secondary" type="button" @click="open(group.slot)">打开</button></td>
+                <td class="row-actions rt-col-actions"><button class="rt-row-icon" type="button" title="打开" :aria-label="`打开 ${group.name}`" @click="open(group.slot)"><AppIcon name="chevron-right" :size="16" /></button></td>
               </tr>
             </tbody>
           </table>

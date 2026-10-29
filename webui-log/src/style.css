@@ -1731,17 +1731,22 @@ label.switch-table *,
 .rt-brand {
   flex: 1 1 0;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   min-width: 0;
   padding-left: 4px;
+}
+
+.rt-brand-mark {
+  flex: none;
+  margin-right: 2px;
 }
 
 .rt-brand strong {
   font-size: 1.3rem;
   font-weight: 700;
   letter-spacing: 0.01em;
-  color: var(--rp-pine);
+  color: var(--ink-0);
 }
 
 .rt-brand-version {
@@ -2599,8 +2604,43 @@ label.switch-table *,
   align-items: center;
 }
 
-.rt-group-table tr.active td {
+.rt-group-table tr.active > td {
   background: var(--side-active-bg);
+}
+
+.rt-group-table tr.active > td:first-child {
+  border-top-left-radius: var(--rp-r-xl);
+  border-bottom-left-radius: var(--rp-r-xl);
+}
+
+.rt-group-table tr.active > td:last-child {
+  border-top-right-radius: var(--rp-r-xl);
+  border-bottom-right-radius: var(--rp-r-xl);
+}
+
+/* A group's detail: the form fields and the two upstream blocks each live in one box. */
+.rt-group-cell {
+  display: block;
+}
+
+.rt-group-cell strong {
+  display: block;
+  margin-bottom: 2px;
+}
+
+.rt-group-cell .rt-group-add .rt-setting-input {
+  flex: 1 1 130px;
+  width: auto;
+  min-width: 0;
+}
+
+/* Notes and errors above a boxed group sit close to its title. */
+.rt-setting-tiles-compact > p {
+  margin: 0 0 8px;
+}
+
+.rt-group-cell .rt-list-hint {
+  margin: 0 0 8px;
 }
 
 .rt-group-links h3 {
@@ -3243,6 +3283,11 @@ a.btn {
   margin-bottom: 8px;
 }
 
+/* The wrapper of a page's switch rows when they are not boxed: transparent to the layout. */
+.rt-setting-rows {
+  display: contents;
+}
+
 .rt-setting-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
@@ -3297,15 +3342,18 @@ a.btn {
    its left (12px short of the box's top and bottom) and a full-width one on its top. The -1px margins
    and the box's overflow:hidden push the first column's and the first line's out of sight. */
 .rt-setting-joined .rt-setting-grid {
-  grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
-  gap: 0;
+  display: flex;
+  flex-wrap: wrap;
   overflow: hidden;
   border: 1px solid var(--rp-hl-med);
   border-radius: var(--radius-md);
 }
 
+/* Cells wrap onto further lines and grow to fill the line they are on, so the box never has a hole. */
 .rt-setting-joined .rt-setting-row {
   position: relative;
+  flex: 1 1 240px;
+  min-width: 0;
   margin: -1px 0 0 -1px;
   padding: 12px 16px;
   border: 0;

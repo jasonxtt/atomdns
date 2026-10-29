@@ -7,6 +7,8 @@ import { openConfirm } from '../../utils/confirm'
 import { upstreamAddressDisplay, upstreamGroupDisplay } from '../../utils/upstreamStats'
 import { clearTopNotice, setError, setSuccess } from '../../utils/notice'
 import { clearDirty, setDirty } from '../../utils/unsaved'
+import AppIcon from '../AppIcon.vue'
+import SettingRow from '../settings/SettingRow.vue'
 import ListEditor from './ListEditor.vue'
 import SubscriptionTable from './SubscriptionTable.vue'
 import UpstreamEditorModal from './UpstreamEditorModal.vue'
@@ -179,37 +181,31 @@ const catalogs = computed(() => (props.group ? [{ type: props.group.key, tag: pr
 
 <template>
   <div class="rt-group-detail" :data-group-detail="group ? group.slot : 'new'">
-    <section class="panel rt-setting-section">
+    <section class="panel rt-setting-section rt-setting-tiles rt-setting-tiles-compact rt-setting-joined">
       <h3 class="rt-setting-section-title">{{ isNew ? '新建专属分流组' : `${group.name}` }}</h3>
       <p v-if="!isNew" class="muted rt-setting-note">{{ routeText }} · 生效 {{ group.effective_upstream_count || 0 }} 个上游</p>
       <p v-if="group?.upstream_warnings?.length" class="rt-setting-error" role="alert">
         <span v-for="warning in group.upstream_warnings" :key="warning" class="rt-block">{{ warning }}</span>
       </p>
       <p v-if="!canManage" class="muted rt-setting-note" role="note">{{ operationReason('groups.manage') }}</p>
-      <div class="rt-setting-row">
-        <div class="rt-setting-label">组名</div>
-        <div class="rt-setting-desc">用来在页面里认出这个组。</div>
-        <div class="rt-setting-value"><input v-model="form.name" class="rt-setting-input" placeholder="例如：移动上游" aria-label="组名" :disabled="!canManage" /></div>
-      </div>
-      <div class="rt-setting-row">
-        <div class="rt-setting-label">监听端口</div>
-        <div class="rt-setting-desc">给这个组单独开一个 DNS 端口；留空则只在 53 端口生效。</div>
-        <div class="rt-setting-value"><input v-model="form.listenPort" class="rt-setting-input rt-setting-input-short" type="number" min="1" max="65535" placeholder="留空" aria-label="监听端口" :disabled="!canManage" /></div>
-      </div>
-      <div class="rt-setting-row">
-        <div class="rt-setting-label">仅自定义端口</div>
-        <div class="rt-setting-desc">开启后，这个组只在自定义端口生效；关闭时 53 端口和自定义端口都生效。</div>
-        <div class="rt-setting-value">
+      <div class="rt-setting-grid">
+        <SettingRow label="组名" layout="form" description="用来在页面里认出这个组。">
+          <input v-model="form.name" class="rt-setting-input" placeholder="例如：移动上游" aria-label="组名" :disabled="!canManage" />
+        </SettingRow>
+        <SettingRow label="监听端口" layout="form" description="给这个组单独开一个 DNS 端口；留空则只在 53 端口生效。">
+          <input v-model="form.listenPort" class="rt-setting-input rt-setting-input-short" type="number" min="1" max="65535" placeholder="留空" aria-label="监听端口" :disabled="!canManage" />
+        </SettingRow>
+        <SettingRow label="仅自定义端口" description="开启后，这个组只在自定义端口生效；关闭时 53 端口和自定义端口都生效。">
           <label class="switch"><input v-model="form.customPortOnly" type="checkbox" aria-label="仅自定义端口生效" :disabled="!canManage || !String(form.listenPort || '').trim()" /><span class="slider"></span></label>
-        </div>
+        </SettingRow>
       </div>
     </section>
 
-    <section class="panel rt-setting-section" data-group-upstreams>
+    <section class="panel rt-setting-section rt-setting-tiles rt-setting-tiles-compact rt-setting-joined" data-group-upstreams>
       <h3 class="rt-setting-section-title">上游</h3>
       <p v-if="!canUpstreams" class="muted rt-setting-note" role="note">{{ operationReason('groups.upstreams') }}</p>
-      <template v-else>
-        <div class="rt-group-block">
+      <div v-else class="rt-setting-grid">
+        <div class="rt-setting-row rt-group-cell">
           <strong>引用已有上游</strong>
           <p class="muted rt-list-hint">引用会实时跟随来源上游组的修改、禁用和删除。</p>
           <div class="rt-group-add">
@@ -230,12 +226,12 @@ const catalogs = computed(() => (props.group ? [{ type: props.group.key, tag: pr
           <ul v-if="form.upstreamSources.length > 0" class="rt-link-list" data-group-sources>
             <li v-for="(source, index) in form.upstreamSources" :key="`${source.kind}-${source.plugin_tag}-${source.upstream_tag || 'group'}`">
               <span>{{ sourceLabel(source) }} <span class="muted">{{ sourceStatus(source) }}</span></span>
-              <button class="btn tiny secondary" type="button" :disabled="!canManage" @click="form.upstreamSources.splice(index, 1)">解绑</button>
+              <button class="rt-row-icon" type="button" title="解绑" :aria-label="`解绑 ${sourceLabel(source)}`" :disabled="!canManage" @click="form.upstreamSources.splice(index, 1)"><AppIcon name="x" :size="16" /></button>
             </li>
           </ul>
           <p v-else class="muted rt-list-hint">暂无引用</p>
         </div>
-        <div class="rt-group-block">
+        <div class="rt-setting-row rt-group-cell">
           <div class="rt-list-head">
             <strong>本组专属上游</strong>
             <button class="btn tiny primary" type="button" :disabled="!canManage" @click="openOwned(-1)">添加上游</button>
@@ -245,14 +241,14 @@ const catalogs = computed(() => (props.group ? [{ type: props.group.key, tag: pr
             <li v-for="(item, index) in form.owned" :key="`${item.tag}-${index}`">
               <span>{{ item.tag || '未设置标识' }} <span class="muted">{{ item.protocol || '-' }} · {{ upstreamAddressDisplay(item) }} · {{ item.enabled ? '已启用' : '已关闭' }}<template v-if="ownedStatus(item).readOnly"> · 只读</template></span></span>
               <span class="rt-upstream-group-actions">
-                <button class="btn tiny secondary" type="button" :disabled="!canManage || ownedStatus(item).readOnly" :title="ownedStatus(item).reason" @click="openOwned(index)">编辑</button>
-                <button class="btn tiny danger" type="button" :disabled="!canManage" @click="form.owned.splice(index, 1)">删除</button>
+                <button class="rt-row-icon" type="button" :disabled="!canManage || ownedStatus(item).readOnly" :title="ownedStatus(item).reason || '编辑'" :aria-label="`编辑 ${item.tag || '上游'}`" @click="openOwned(index)"><AppIcon name="pencil" :size="16" /></button>
+                <button class="rt-row-icon danger" type="button" title="删除" :aria-label="`删除 ${item.tag || '上游'}`" :disabled="!canManage" @click="form.owned.splice(index, 1)"><AppIcon name="trash" :size="16" /></button>
               </span>
             </li>
           </ul>
           <p v-else class="muted rt-list-hint">暂无专属上游</p>
         </div>
-      </template>
+      </div>
     </section>
 
     <div class="actions rt-group-actions">

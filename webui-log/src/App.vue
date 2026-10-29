@@ -4,6 +4,7 @@ import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, watch
 import { useRoute, useRouter } from 'vue-router'
 import { getJSON } from './api/http'
 import AppIcon from './components/AppIcon.vue'
+import BrandMark from './components/BrandMark.vue'
 import CommandSearch from './components/CommandSearch.vue'
 import ConfirmBubbleHost from './components/ConfirmBubbleHost.vue'
 import { NAV_MODULES, expandedAfterRoute, inModule } from './navigation'
@@ -159,6 +160,7 @@ onBeforeUnmount(() => {
   <div class="rt-shell">
     <header class="rt-topbar">
       <div class="rt-brand">
+        <BrandMark />
         <strong>rtdns</strong>
         <span v-if="versionText" class="rt-brand-version">{{ versionText }}</span>
       </div>
