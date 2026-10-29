@@ -1,7 +1,8 @@
 <script setup>
 import { capabilityState, operationReason, supportsOperation } from '../api/runtimeCapabilities'
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { getJSON, getJSONWithHeaders, getText } from '../api/http'
+import AppIcon from '../components/AppIcon.vue'
 import { setError, setSuccess } from '../utils/notice'
 import { formatDateTime } from '../utils/time'
 import {
@@ -86,16 +87,6 @@ const rankingDetail = reactive({
   loading: false,
   logs: []
 })
-const overviewGridRef = ref(null)
-const visibleOverviewRows = ref(7)
-
-const OVERVIEW_MIN_ROWS = 5
-const OVERVIEW_MAX_ROWS = 15
-const OVERVIEW_CARD_CHROME = 44
-const OVERVIEW_TABLE_HEAD = 42
-const OVERVIEW_TABLE_ROW = 42
-const OVERVIEW_VIEWPORT_BOTTOM_GAP = 28
-
 let cpuSample = null
 let cpuFollowUpTimerId = 0
 
@@ -212,15 +203,34 @@ const rankingDetailSummaryCards = computed(() => {
 
   return cards
 })
-const overviewLayoutVars = computed(() => {
-  const rows = visibleOverviewRows.value
-  const listHeight = OVERVIEW_TABLE_HEAD + rows * OVERVIEW_TABLE_ROW
-  const cardHeight = OVERVIEW_CARD_CHROME + listHeight
-  return {
-    '--overview-visible-rows': String(rows),
-    '--overview-list-max-height': `${listHeight}px`,
-    '--overview-card-min-height': `${cardHeight}px`
+// Rows of a ranking card: the bar is the row's value against the largest one in that list.
+function withBars(items, valueOf) {
+  const max = items.reduce((peak, item) => Math.max(peak, Number(valueOf(item)) || 0), 0)
+  return items.map((item) => ({ item, width: max > 0 ? Math.max(2, ((Number(valueOf(item)) || 0) / max) * 100) : 0 }))
+}
+const topDomainBars = computed(() => withBars(topDomains.value, (item) => item.count))
+const topClientBars = computed(() => withBars(topClients.value, (item) => item.count))
+const slowestBars = computed(() => withBars(slowestQueries.value, (item) => item.duration_ms))
+
+// 分流统计 donut: the five largest rules, the rest as one slice; r=50 on a 120 box.
+const DONUT_SLICES = 5
+const DONUT_CIRCUMFERENCE = 2 * Math.PI * 50
+const domainSetDonut = computed(() => {
+  const rows = domainSetRows.value
+  const slices = rows.slice(0, DONUT_SLICES).map((item) => ({ key: item.key, label: getRuleLabel(item.key), count: item.count, percent: item.percent, item }))
+  const rest = rows.slice(DONUT_SLICES)
+  if (rest.length > 0) {
+    const count = rest.reduce((sum, item) => sum + item.count, 0)
+    slices.push({ key: '__other', label: '其他', count, percent: rest.reduce((sum, item) => sum + item.percent, 0), item: null })
   }
+  let offset = 0
+  const segments = slices.map((slice, index) => {
+    const length = (slice.percent / 100) * DONUT_CIRCUMFERENCE
+    const segment = { ...slice, color: `var(--rp-c${index + 1})`, dash: `${length} ${DONUT_CIRCUMFERENCE - length}`, offset: -offset }
+    offset += length
+    return segment
+  })
+  return { total: rows.reduce((sum, item) => sum + item.count, 0), segments }
 })
 const slowDetailActionFields = computed(() => {
   const log = selectedSlowQuery.value
@@ -264,6 +274,7 @@ function distinctCountText(count) {
   return count >= RANK_SCAN_LIMIT ? `${RANK_SCAN_LIMIT}+` : count.toLocaleString('zh-CN')
 }
 
+const STAT_ICONS = { queries: 'activity', latency: 'timer', cache: 'database', clients: 'users', domains: 'globe', cpu: 'cpu', memory: 'memory' }
 const statCards = computed(() => {
   const coverage = stats.coverage || '审计保留记录'
   const memoryMiB = process.residentBytes === null ? null : process.residentBytes / 1024 / 1024
@@ -333,34 +344,12 @@ const upstreamStatSections = computed(() => {
     sections.push({
       key: group,
       title: groupMeta.title,
-      tone: groupMeta.tone,
       rows: enabledRows
     })
   })
 
   return sections
 })
-
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max)
-}
-
-function updateOverviewRows() {
-  const grid = overviewGridRef.value
-  if (!grid || typeof window === 'undefined') {
-    return
-  }
-  if (window.innerWidth <= 1100) {
-    visibleOverviewRows.value = OVERVIEW_MIN_ROWS
-    return
-  }
-
-  const gridRect = grid.getBoundingClientRect()
-  const availableHeight = window.innerHeight - gridRect.top - OVERVIEW_VIEWPORT_BOTTOM_GAP
-  const computedRows = Math.floor((availableHeight - OVERVIEW_CARD_CHROME - OVERVIEW_TABLE_HEAD) / OVERVIEW_TABLE_ROW)
-  visibleOverviewRows.value = clamp(computedRows, OVERVIEW_MIN_ROWS, OVERVIEW_MAX_ROWS)
-}
-
 
 function normalizeIP(ip) {
   return String(ip || '').replace(/^::ffff:/, '').trim()
@@ -802,9 +791,6 @@ async function reloadOverview(showMessage = false) {
     setError(`加载概览失败: ${error.message}`)
   } finally {
     loading.value = false
-    nextTick(() => {
-      updateOverviewRows()
-    })
   }
 }
 
@@ -814,25 +800,20 @@ function handleGlobalRefresh() {
 
 onMounted(() => {
   reloadOverview(false)
-  nextTick(() => {
-    updateOverviewRows()
-  })
   window.addEventListener('mosdns-log-refresh', handleGlobalRefresh)
-  window.addEventListener('resize', updateOverviewRows)
 })
 
 onBeforeUnmount(() => {
   if (cpuFollowUpTimerId) window.clearTimeout(cpuFollowUpTimerId)
   window.removeEventListener('mosdns-log-refresh', handleGlobalRefresh)
-  window.removeEventListener('resize', updateOverviewRows)
 })
 </script>
 
 <template>
-  <section class="overview-page" :style="overviewLayoutVars">
+  <section class="overview-page">
     <div class="rt-stat-grid" data-overview-stats>
       <article v-for="card in statCards" :key="card.key" class="rt-stat" :data-stat="card.key">
-        <span class="rt-stat-label">{{ card.title }}</span>
+        <span class="rt-stat-label"><AppIcon :name="STAT_ICONS[card.key]" :size="18" />{{ card.title }}</span>
         <strong class="rt-stat-value" :class="toneClass(card.tone)">{{ card.value }}</strong>
         <small class="rt-stat-note">{{ card.note }}</small>
       </article>
@@ -853,42 +834,36 @@ onBeforeUnmount(() => {
           <span v-if="integrationErrors.metrics">指标不可用：{{ integrationErrors.metrics }}</span>
           <span v-if="integrationErrors.upstreamConfig">上游配置不可用：{{ integrationErrors.upstreamConfig }}</span>
         </div>
-        <div class="table-wrap upstream-stats-table-wrap">
-          <table class="upstream-stats-table">
+        <div class="flat-table-wrap">
+          <table class="flat-table upstream-stats-table">
             <thead>
               <tr>
-                <th>类型</th>
                 <th>名称</th>
-                <th>地址</th>
                 <th class="text-right" title="平均响应时间（毫秒）">平均 ms</th>
                 <th class="text-right">请求数</th>
                 <th class="text-right">采纳率</th>
-                  <th class="text-right">出错率</th>
+                <th class="text-right">出错率</th>
               </tr>
             </thead>
             <tbody v-if="loading">
               <tr>
-                <td colspan="7" class="empty">加载中...</td>
+                <td colspan="5" class="empty">加载中...</td>
               </tr>
             </tbody>
             <tbody v-else-if="upstreamStatSections.length === 0">
               <tr>
-                <td colspan="7" class="empty">暂无已启用上游统计</td>
+                <td colspan="5" class="empty">暂无已启用上游统计</td>
               </tr>
             </tbody>
             <tbody v-for="section in upstreamStatSections" v-else :key="section.key">
-              <tr class="upstream-stats-group-row" :class="`tone-${section.tone}`">
-                <td colspan="7">
+              <tr class="upstream-stats-group-row">
+                <td colspan="5">
                   <span class="upstream-stats-group-name">{{ section.title }}</span>
-                  <span class="upstream-stats-group-count">({{ section.rows.length }})</span>
+                  <span class="upstream-stats-group-count">{{ section.rows.length }}</span>
                 </td>
               </tr>
               <tr v-for="row in section.rows" :key="row.key">
-                <td :title="row.typeLabel">
-                  <span class="upstream-stats-type-chip">{{ row.typeLabel }}</span>
-                </td>
-                <td class="upstream-stats-name-cell" :title="row.name">{{ row.name }}</td>
-                <td class="mono upstream-stats-address-cell" :title="row.address">{{ row.address }}</td>
+                <td class="upstream-stats-name-cell" :title="`${row.typeLabel} · ${row.address}`">{{ row.name }}</td>
                 <td class="text-right" :class="toneClass(row.latencyTone)" :title="row.avgLatencyText === '-' ? '-' : `${row.avgLatencyText} ms`">
                   {{ row.avgLatencyText }}
                 </td>
@@ -900,14 +875,110 @@ onBeforeUnmount(() => {
           </table>
         </div>
       </section>
-      <section class="panel sub-panel" data-overview-learner>
+      <section class="panel sub-panel rank-card" data-overview-rules>
+        <h3>分流统计</h3>
+        <div v-if="integrationErrors.specialGroups" class="overview-unavailable" role="status">
+          特殊分组名称不可用：{{ integrationErrors.specialGroups }}；以下显示原始标签
+        </div>
+        <p v-if="rankingErrors.rules" class="muted">{{ rankingErrors.rules }}</p>
+        <p v-else-if="domainSetDonut.segments.length === 0" class="muted">暂无数据</p>
+        <div v-else class="donut-card">
+          <div class="donut-wrap">
+            <svg class="donut-svg" viewBox="0 0 120 120" aria-hidden="true">
+              <circle class="donut-track" cx="60" cy="60" r="50" />
+              <circle
+                v-for="segment in domainSetDonut.segments"
+                :key="segment.key"
+                class="donut-segment"
+                cx="60"
+                cy="60"
+                r="50"
+                :stroke="segment.color"
+                :stroke-dasharray="segment.dash"
+                :stroke-dashoffset="segment.offset"
+              />
+            </svg>
+            <div class="donut-center">
+              <strong>{{ domainSetDonut.total.toLocaleString() }}</strong>
+              <span>次</span>
+            </div>
+          </div>
+          <ul class="donut-legend">
+            <li v-for="segment in domainSetDonut.segments" :key="segment.key">
+              <component :is="segment.item ? 'button' : 'div'" class="legend-row" :type="segment.item ? 'button' : undefined" @click="segment.item && openDomainSetDetail(segment.item)">
+                <i class="legend-dot" :style="{ background: segment.color }"></i>
+                <span class="legend-name" :title="`${segment.label} · ${segment.count.toLocaleString()} 次`">{{ segment.label }}</span>
+                <span class="legend-pct">{{ formatPercent(segment.percent) }}</span>
+              </component>
+            </li>
+          </ul>
+        </div>
+      </section>
+    </div>
+
+    <div class="overview-ranks">
+      <section class="panel sub-panel rank-card">
+        <h3>Top 域名</h3>
+        <p v-if="rankingErrors.domain" class="muted">{{ rankingErrors.domain }}</p>
+        <p v-else-if="topDomainBars.length === 0" class="muted">暂无数据</p>
+        <ul v-else class="rank-list">
+          <li v-for="row in topDomainBars" :key="`domain-${row.item.key}`">
+            <button type="button" class="rank-row" @click="openTopDomainDetail(row.item)">
+              <span class="rank-label">{{ row.item.key }}</span>
+              <span class="rank-value">{{ Number(row.item.count || 0).toLocaleString() }}</span>
+              <AppIcon class="rank-go" name="chevron-right" :size="16" />
+              <span class="rank-bar"><i :style="{ width: `${row.width}%` }"></i></span>
+            </button>
+          </li>
+        </ul>
+      </section>
+
+      <section class="panel sub-panel rank-card">
+        <h3>Top 客户端</h3>
+        <div v-if="integrationErrors.aliases" class="overview-unavailable" role="status">
+          客户端别名不可用：{{ integrationErrors.aliases }}；以下显示原始地址
+        </div>
+        <p v-if="rankingErrors.client" class="muted">{{ rankingErrors.client }}</p>
+        <p v-else-if="topClientBars.length === 0" class="muted">暂无数据</p>
+        <ul v-else class="rank-list">
+          <li v-for="row in topClientBars" :key="`client-${row.item.key}`">
+            <button type="button" class="rank-row" @click="openTopClientDetail(row.item)">
+              <span class="rank-label">
+                {{ getClientDisplay(row.item.key) }}
+                <small v-if="hasAlias(row.item.key)" class="muted mono">{{ normalizeIP(row.item.key) }}</small>
+              </span>
+              <span class="rank-value">{{ Number(row.item.count || 0).toLocaleString() }}</span>
+              <AppIcon class="rank-go" name="chevron-right" :size="16" />
+              <span class="rank-bar rank-bar-iris"><i :style="{ width: `${row.width}%` }"></i></span>
+            </button>
+          </li>
+        </ul>
+      </section>
+
+      <section class="panel sub-panel rank-card">
+        <h3>最慢查询</h3>
+        <p v-if="rankingErrors.slowest" class="muted">{{ rankingErrors.slowest }}</p>
+        <p v-else-if="slowestBars.length === 0" class="muted">暂无数据</p>
+        <ul v-else class="rank-list">
+          <li v-for="(row, index) in slowestBars" :key="`slow-${index}-${row.item.trace_id || row.item.query_time}`">
+            <button type="button" class="rank-row" @click="openSlowDetail(row.item)">
+              <span class="rank-label">{{ row.item.query_name }}</span>
+              <span class="rank-value" :title="formatDuration(row.item.duration_ms)">{{ formatCompactDuration(row.item.duration_ms) }} ms</span>
+              <AppIcon class="rank-go" name="chevron-right" :size="16" />
+              <span class="rank-bar rank-bar-gold"><i :style="{ width: `${row.width}%` }"></i></span>
+            </button>
+          </li>
+        </ul>
+      </section>
+
+      <section class="panel sub-panel rank-card" data-overview-learner>
         <h3>学习状态</h3>
         <p v-if="!supportsOperation('lists.remembered')" class="muted">当前配置没有域名学习。</p>
         <p v-else-if="integrationErrors.learner" class="muted">学习状态不可用：{{ integrationErrors.learner }}</p>
         <template v-else-if="learner">
-          <p class="muted">共 {{ learnerTotal.toLocaleString('zh-CN') }} 条 · 启动以来新学 {{ Number(learner.counters?.learned || 0).toLocaleString('zh-CN') }} · 过期 {{ Number(learner.counters?.expired || 0).toLocaleString('zh-CN') }}</p>
-          <div class="table-wrap rt-compact-table">
-            <table>
+          <p class="muted learner-summary">共 {{ learnerTotal.toLocaleString('zh-CN') }} 条 · 启动以来新学 {{ Number(learner.counters?.learned || 0).toLocaleString('zh-CN') }} · 过期 {{ Number(learner.counters?.expired || 0).toLocaleString('zh-CN') }}</p>
+          <div class="flat-table-wrap">
+            <table class="flat-table learner-table">
               <thead>
                 <tr>
                   <th>类别</th>
@@ -926,173 +997,6 @@ onBeforeUnmount(() => {
           </div>
         </template>
         <p v-else class="muted">读取中…</p>
-      </section>
-    </div>
-
-    <div ref="overviewGridRef" class="overview-grid">
-      <section class="panel sub-panel overview-metric-module">
-        <h3>Top 域名</h3>
-        <div class="table-wrap overview-table-fit top-domains-fit module-scroll-list">
-          <table>
-            <thead>
-              <tr>
-                <th>域名</th>
-                <th class="text-right">次数</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-if="rankingErrors.domain">
-                <td colspan="2" class="empty">{{ rankingErrors.domain }}</td>
-              </tr>
-              <tr v-else-if="topDomains.length === 0">
-                <td colspan="2" class="empty">暂无数据</td>
-              </tr>
-              <tr
-                v-for="item in topDomains"
-                :key="`domain-${item.key}`"
-                class="overview-click-row"
-                @click="openTopDomainDetail(item)"
-              >
-                <td>
-                  <div class="overview-row-main-cell">
-                    <span class="overview-row-label">{{ item.key }}</span>
-                    <span class="overview-row-hint">详情</span>
-                  </div>
-                </td>
-                <td class="text-right">{{ Number(item.count || 0).toLocaleString() }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="panel sub-panel overview-metric-module">
-        <h3>Top 客户端</h3>
-        <div v-if="integrationErrors.aliases" class="overview-unavailable" role="status">
-          客户端别名不可用：{{ integrationErrors.aliases }}；以下显示原始地址
-        </div>
-        <div class="table-wrap overview-table-fit top-clients-fit module-scroll-list">
-          <table>
-            <thead>
-              <tr>
-                <th>客户端</th>
-                <th class="text-right">次数</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-if="rankingErrors.client">
-                <td colspan="2" class="empty">{{ rankingErrors.client }}</td>
-              </tr>
-              <tr v-else-if="topClients.length === 0">
-                <td colspan="2" class="empty">暂无数据</td>
-              </tr>
-              <tr
-                v-for="item in topClients"
-                :key="`client-${item.key}`"
-                class="overview-click-row"
-                @click="openTopClientDetail(item)"
-              >
-                <td>
-                  <div class="overview-row-main-cell overview-row-main-cell-client">
-                    <div class="overview-row-meta">
-                      <div class="overview-row-label">{{ getClientDisplay(item.key) }}</div>
-                      <div v-if="hasAlias(item.key)" class="overview-row-subline">
-                        <small class="muted mono">{{ normalizeIP(item.key) }}</small>
-                        <span class="overview-row-hint">详情</span>
-                      </div>
-                    </div>
-                    <span v-if="!hasAlias(item.key)" class="overview-row-hint">详情</span>
-                  </div>
-                </td>
-                <td class="text-right">{{ Number(item.count || 0).toLocaleString() }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="panel sub-panel overview-metric-module">
-        <h3>最慢查询</h3>
-        <div class="table-wrap overview-table-fit slowest-fit module-scroll-list">
-          <table>
-            <thead>
-              <tr>
-                <th>域名</th>
-                <th class="text-right">耗时</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-if="rankingErrors.slowest">
-                <td colspan="2" class="empty">{{ rankingErrors.slowest }}</td>
-              </tr>
-              <tr v-else-if="slowestQueries.length === 0">
-                <td colspan="2" class="empty">暂无数据</td>
-              </tr>
-              <tr
-                v-for="(item, index) in slowestQueries"
-                :key="`slow-${index}-${item.trace_id || item.query_time}`"
-                class="overview-click-row"
-                @click="openSlowDetail(item)"
-              >
-                <td>
-                  <div class="overview-row-main-cell">
-                    <span class="overview-row-label">{{ item.query_name }}</span>
-                    <span class="overview-row-hint">详情</span>
-                  </div>
-                </td>
-                <td class="text-right" :title="formatDuration(item.duration_ms)">
-                  <span class="duration-compact">
-                    <span class="duration-value">{{ formatCompactDuration(item.duration_ms) }}</span>
-                    <span class="duration-unit">ms</span>
-                  </span>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="panel sub-panel overview-metric-module">
-        <h3>分流统计</h3>
-        <div v-if="integrationErrors.specialGroups" class="overview-unavailable" role="status">
-          特殊分组名称不可用：{{ integrationErrors.specialGroups }}；以下显示原始标签
-        </div>
-        <div class="table-wrap overview-table-fit domain-set-fit module-scroll-list">
-          <table>
-            <thead>
-              <tr>
-                <th>规则</th>
-                <th class="text-right">次数</th>
-                <th class="text-right">占比</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-if="rankingErrors.rules">
-                <td colspan="3" class="empty">{{ rankingErrors.rules }}</td>
-              </tr>
-              <tr v-else-if="domainSetRows.length === 0">
-                <td colspan="3" class="empty">暂无数据</td>
-              </tr>
-              <tr
-                v-for="item in domainSetRows"
-                :key="`set-${item.key}`"
-                class="overview-click-row"
-                @click="openDomainSetDetail(item)"
-              >
-                <td>
-                  <div class="overview-row-main-cell">
-                    <span class="domain-set-rule">
-                      <span class="domain-set-name">{{ getRuleLabel(item.key) }}</span>
-                    </span>
-                    <span class="overview-row-hint">详情</span>
-                  </div>
-                </td>
-                <td class="text-right">{{ item.count.toLocaleString() }}</td>
-                <td class="text-right">{{ formatPercent(item.percent) }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
       </section>
     </div>
 
@@ -1306,101 +1210,78 @@ onBeforeUnmount(() => {
   margin: 0;
 }
 
-.upstream-stats-table-wrap {
+.flat-table-wrap {
   overflow-x: auto;
 }
 
-.upstream-stats-table {
+/* No inner panel: the rows sit straight on the card, separated by space and hairlines. */
+.flat-table {
   width: 100%;
-  min-width: 600px;
-  table-layout: fixed;
+  min-width: 0;
 }
 
-.upstream-stats-table th,
-.upstream-stats-table td {
-  padding: 5px 8px;
-  font-size: 0.84rem;
+.flat-table th,
+.flat-table td {
+  padding: 8px;
+  font-size: 0.88rem;
   white-space: nowrap;
 }
 
-/* Type and name are fixed; the address takes what is left and is cut with an ellipsis
-   (the full text is in its title); the four figures share one narrow width. */
+.flat-table th {
+  position: static;
+  background: transparent;
+  box-shadow: none;
+  color: var(--ink-1);
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.flat-table tbody tr,
+.flat-table tbody tr:nth-child(even) {
+  background: transparent;
+}
+
+.flat-table tbody tr:hover {
+  background: var(--rp-hl-low);
+}
+
+.learner-summary {
+  margin: 0 0 8px;
+}
+
+.upstream-stats-table {
+  min-width: 380px;
+  table-layout: fixed;
+}
+
+/* The four figures share the width evenly; the name column is a little wider. */
 .upstream-stats-table th:nth-child(1) {
-  width: 56px;
+  width: 28%;
 }
 
-.upstream-stats-table th:nth-child(2) {
-  width: 112px;
+.upstream-stats-table th:nth-child(n + 2) {
+  width: 18%;
 }
 
-.upstream-stats-table th:nth-child(n + 4) {
-  width: 72px;
-}
-
-.upstream-stats-group-row td {
-  font-weight: 700;
-  border-top: 1px solid var(--line);
-}
-
-.upstream-stats-group-row.tone-domestic td {
-  background: rgba(59, 130, 246, 0.08);
-  color: #1d4ed8;
-}
-
-.upstream-stats-group-row.tone-foreign-fake td {
-  background: rgba(244, 114, 182, 0.08);
-  color: #be185d;
-}
-
-.upstream-stats-group-row.tone-foreign-proxy td {
-  background: rgba(249, 115, 22, 0.08);
-  color: #c2410c;
-}
-
-.upstream-stats-group-row.tone-foreign-ecs td {
-  background: rgba(139, 92, 246, 0.08);
-  color: #7c3aed;
-}
-
-.upstream-stats-group-row.tone-domestic-fake td {
-  background: rgba(16, 185, 129, 0.08);
-  color: #047857;
-}
-
-.upstream-stats-group-row.tone-special td,
-.upstream-stats-group-row.tone-other td {
-  background: rgba(100, 116, 139, 0.08);
+.upstream-stats-group-row td,
+.upstream-stats-group-row:hover td {
+  padding-top: 16px;
+  border-bottom: 0;
+  background: transparent;
   color: var(--ink-0);
-}
-
-.upstream-stats-group-name {
-  display: inline-block;
+  font-size: 0.84rem;
+  font-weight: 600;
 }
 
 .upstream-stats-group-count {
   margin-left: 6px;
-  opacity: 0.78;
+  color: var(--ink-1);
+  font-weight: 400;
 }
 
-.upstream-stats-type-chip {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 40px;
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: rgba(37, 99, 235, 0.1);
-  color: #2563eb;
-  font-size: 0.75rem;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
-
-.upstream-stats-name-cell,
-.upstream-stats-address-cell {
+.upstream-stats-name-cell {
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .overview-unavailable {

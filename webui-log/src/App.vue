@@ -1,15 +1,25 @@
 <script setup>
 import { capabilityState, getRuntimeCapabilities, retryRuntimeCapabilities, supportsOperation } from './api/runtimeCapabilities'
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getJSON } from './api/http'
+import AppIcon from './components/AppIcon.vue'
+import CommandSearch from './components/CommandSearch.vue'
 import ConfirmBubbleHost from './components/ConfirmBubbleHost.vue'
 import { NAV_MODULES, expandedAfterRoute, inModule } from './navigation'
 import { loadAutoRefreshState } from './utils/autoRefresh'
+import { THEME_LABELS, THEME_MODES } from './utils/theme'
 import { installBeforeUnload } from './utils/unsaved'
 
 const route = useRoute()
 const router = useRouter()
+const theme = inject('theme')
+const THEME_ICONS = { system: 'monitor', light: 'sun', dark: 'moon' }
+const themeIcon = computed(() => THEME_ICONS[theme.mode])
+const themeTitle = computed(() => `主题：${THEME_LABELS[theme.mode]}（点击切换）`)
+function cycleTheme() {
+  theme.setMode(THEME_MODES[(THEME_MODES.indexOf(theme.mode) + 1) % THEME_MODES.length])
+}
 
 // A module owns `/<id>` and everything below it (`#/logs/diagnostic` keeps 日志 highlighted).
 const activeModule = computed(() => NAV_MODULES.find(module => inModule(module.id, route.path)) || NAV_MODULES[0])
@@ -150,11 +160,28 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="rt-shell">
-    <aside class="rt-sidebar" aria-label="导航">
+    <header class="rt-topbar">
       <div class="rt-brand">
         <strong>rtdns</strong>
         <span v-if="versionText" class="rt-brand-version">{{ versionText }}</span>
       </div>
+      <CommandSearch />
+      <div class="rt-topbar-actions">
+        <transition name="top-inline-notice-fade">
+          <div v-if="topNotice.open" class="rt-notice" :class="topNotice.tone === 'error' ? 'error' : 'success'" role="status" aria-live="polite">
+            {{ topNotice.message }}
+          </div>
+        </transition>
+        <button class="rt-icon-btn" type="button" title="刷新当前页面数据" aria-label="刷新当前页面数据" @click="triggerGlobalRefresh">
+          <AppIcon name="refresh" />
+        </button>
+        <button class="rt-icon-btn" type="button" :title="themeTitle" :aria-label="themeTitle" @click="cycleTheme">
+          <AppIcon :name="themeIcon" />
+        </button>
+      </div>
+    </header>
+
+    <aside class="rt-sidebar" aria-label="导航">
       <nav class="rt-nav">
         <template v-for="module in NAV_MODULES" :key="module.id">
           <router-link
@@ -163,7 +190,8 @@ onBeforeUnmount(() => {
             class="rt-nav-link rt-nav-module"
             :class="{ active: activeModule.id === module.id }"
           >
-            {{ module.label }}
+            <AppIcon :name="module.icon" />
+            <span>{{ module.label }}</span>
           </router-link>
           <template v-else>
             <button
@@ -175,8 +203,9 @@ onBeforeUnmount(() => {
               :data-nav-toggle="module.id"
               @click="toggleModule(module.id)"
             >
-              <span>{{ module.label }}</span>
-              <span class="rt-nav-caret" aria-hidden="true">{{ expanded[module.id] ? '▾' : '▸' }}</span>
+              <AppIcon :name="module.icon" />
+              <span class="rt-nav-label">{{ module.label }}</span>
+              <AppIcon class="rt-nav-caret" name="chevron" :size="16" />
             </button>
             <div v-show="expanded[module.id]" :id="`rt-nav-items-${module.id}`" class="rt-nav-items">
               <router-link
@@ -186,7 +215,8 @@ onBeforeUnmount(() => {
                 class="rt-nav-link rt-nav-item"
                 active-class="active"
               >
-                {{ item.label }}
+                <AppIcon :name="item.icon" :size="18" />
+                <span>{{ item.label }}</span>
               </router-link>
             </div>
           </template>
@@ -203,7 +233,8 @@ onBeforeUnmount(() => {
             class="rt-mobile-tab"
             :class="{ active: activeModule.id === module.id }"
           >
-            {{ module.label }}
+            <AppIcon :name="module.icon" />
+            <span>{{ module.label }}</span>
           </router-link>
           <button
             v-else
@@ -214,7 +245,8 @@ onBeforeUnmount(() => {
             :data-nav-toggle="module.id"
             @click="toggleModule(module.id)"
           >
-            {{ module.label }} {{ expanded[module.id] ? '▾' : '▸' }}
+            <AppIcon :name="module.icon" />
+            <span>{{ module.label }}</span>
           </button>
         </template>
       </div>
@@ -232,15 +264,7 @@ onBeforeUnmount(() => {
     </nav>
 
     <div class="rt-main">
-      <header class="rt-topbar">
-        <h1 class="rt-page-title">{{ pageTitle }}</h1>
-        <transition name="top-inline-notice-fade">
-          <div v-if="topNotice.open" class="rt-notice" :class="topNotice.tone === 'error' ? 'error' : 'success'" role="status" aria-live="polite">
-            {{ topNotice.message }}
-          </div>
-        </transition>
-        <button class="btn secondary rt-refresh-btn" type="button" title="刷新当前页面数据" @click="triggerGlobalRefresh">⟳ 刷新</button>
-      </header>
+      <h1 class="rt-page-title">{{ pageTitle }}</h1>
 
       <div v-if="capabilityState.status !== 'ready'" role="alert" class="panel">
         {{ capabilityState.status === 'pending' ? '正在读取运行时能力' : capabilityState.error }}
