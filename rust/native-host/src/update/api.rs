@@ -19,8 +19,9 @@ use super::package::{self, Package};
 use super::transaction::{self, StageInput, Transaction};
 use super::{
     CheckEnv, MANIFEST_ASSET, MAX_ARCHIVE_BYTES, MAX_BINARY_BYTES, MAX_CONFIG_PACKAGE_BYTES,
-    MAX_MANIFEST_BYTES, MAX_WEBUI_ARCHIVE_BYTES, RELEASE_ASSET, RELEASE_BINARY,
-    REQUIRED_CONFIG_PACKAGE_ID, REQUIRED_CONFIG_SCHEMA, UpdateStatus, WEBUI_ASSET, manager,
+    MAX_MANIFEST_BYTES, MAX_WEBUI_ARCHIVE_BYTES, RELEASE_BINARY, REQUIRED_CONFIG_PACKAGE_ID,
+    REQUIRED_CONFIG_SCHEMA, UpdateStatus, WEBUI_ASSET, cpu_supports_v3, current_is_v3, manager,
+    pick_program_asset, valid_sha256, wants_musl,
 };
 use crate::config::CompiledConfig;
 use crate::rule_sources::Reply;
@@ -201,9 +202,8 @@ async fn status(ctx: &Context<'_>, force: bool) -> Reply {
 struct ApplyRequest {
     #[serde(default)]
     force: bool,
-    /// Accepted and ignored: the native build has no GOAMD64 levels.
+    /// Switch a baseline install to the x86-64-v3 build (same version is fine).
     #[serde(default)]
-    #[allow(dead_code)]
     prefer_v3: bool,
 }
 
@@ -352,7 +352,8 @@ async fn apply(ctx: &Context<'_>, body: &[u8]) -> Reply {
             Err(_) => return error(502, "检查更新超时"),
         };
     decorate(&mut status, ctx.root);
-    if !status.update_available && !request.force {
+    let switch_to_v3 = request.prefer_v3 && !current_is_v3();
+    if !status.update_available && !request.force && !switch_to_v3 {
         return action(&status, false, "");
     }
     let tag = release.tag_name.clone();
@@ -360,7 +361,17 @@ async fn apply(ctx: &Context<'_>, body: &[u8]) -> Reply {
         status.message.clone_from(&reason);
         error(502, reason)
     };
-    let Some(asset) = release.asset(RELEASE_ASSET) else {
+    let program_asset = match pick_program_asset(
+        &release,
+        request.prefer_v3,
+        cpu_supports_v3(),
+        current_is_v3(),
+        wants_musl(),
+    ) {
+        Ok(name) => name,
+        Err(reason) => return fail(&mut status, reason),
+    };
+    let Some(asset) = release.asset(program_asset) else {
         return fail(
             &mut status,
             format!("未找到适用于 {} 的安装包", super::architecture()),
@@ -399,7 +410,13 @@ async fn apply(ctx: &Context<'_>, body: &[u8]) -> Reply {
         Err(reason) => return fail(&mut status, format!("下载失败: {reason}")),
     };
     // Hashing and unpacking take a moment: not on the thread that answers DNS.
-    let expected = manifest.artifacts[RELEASE_ASSET].sha256.clone();
+    let Some(artifact) = manifest.artifacts.get(program_asset) else {
+        return fail(&mut status, format!("更新清单未包含 {program_asset}"));
+    };
+    if !valid_sha256(&artifact.sha256) {
+        return fail(&mut status, format!("{program_asset} 的 SHA-256 无效"));
+    }
+    let expected = artifact.sha256.clone();
     let extracted = tokio::task::spawn_blocking(move || {
         if !super::sha256_hex(&archive).eq_ignore_ascii_case(expected.trim()) {
             return Err("二进制校验失败: SHA-256 与更新清单不一致".to_owned());
