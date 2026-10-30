@@ -51,30 +51,36 @@
 
    这是对外发布动作，需要先得到负责人确认。
 5. 仅程序改动的发布到第 4 步为止。若本次发布需要新的配置包（结构性改动，`required_config_schema` 与 `config_package_id` 同时提高），
-   配置包 `config_rust_up.zip` 作为**同一个 Release 的资产**，按下面的顺序发版（配置包标识 `channel "rust"`、`rust-config-schema-N`、`config_rust_up.zip` 不随改名变化）。
+   配置包 `config_rust_up.zip` 放在 file 仓库并由清单的 `config.url` 指向（v0.5.0 前是同一 Release 的资产），按下面的顺序发版（配置包标识 `channel "rust"`、`rust-config-schema-N`、`config_rust_up.zip` 不随改名变化）。
 
 ## 带配置包的发版顺序
 
-1. **出包**：在 file 仓库的 `mosdns/config/` 运行 `build_config_rust_up.sh`（`SCHEMA`/`PACKAGE_ID` 必须等于 `update/mod.rs` 的 `REQUIRED_CONFIG_SCHEMA`/`REQUIRED_CONFIG_PACKAGE_ID`），
-   得到 `config_rust_up.zip`；包只作为 Release 资产，不进 file 仓库。把它放在仓库外，**发布用的就是这一份文件**（重新出包会因 zip 时间戳不同而得到不同的 sha256）。
-   核对包内 `manifest.json` 的 `config_schema`、`package_id`，以及托管文件列表（含新增文件、不含 `sub_config/special_groups.yaml`）。
-2. **填元数据**：`sha256sum config_rust_up.zip`，把 `scripts/rust-release-metadata.json` 的 `config.url`
-   （`https://github.com/jasonxtt/rtdns/releases/download/vX.Y.Z/config_rust_up.zip`）与 `config.sha256` 填上，`required_config_schema`/`config_package_id` 同步提高。
-3. **提交**：版本号（`rust/native-host/Cargo.toml`、`rust/Cargo.lock`）与元数据一起提交。
-4. **构建程序与清单**：Release 还没建，`config.url` 此时下不到包，所以用本地文件校验：
+配置包与界面包放在 file 仓库的 `rtdns/` 目录（v0.5.0 起；布局见该目录的 README）：`config/full/config_rust/` 是配置源，`config/full/config_rust.zip` 是全新安装包，
+`config/incremental/config_rust_up.zip` 是在线更新用的增量包，`ui/rtdns-webui.tar.gz` 是最新版的界面包。
+
+1. **出包**：在 file 仓库的 `rtdns/config/incremental/` 运行 `build_config_rust_up.sh`（`SCHEMA`/`PACKAGE_ID` 必须等于 `update/mod.rs` 的 `REQUIRED_CONFIG_SCHEMA`/`REQUIRED_CONFIG_PACKAGE_ID`），
+   得到 `config_rust_up.zip`，核对包内 `manifest.json` 的 `config_schema`、`package_id`，以及托管文件列表（含新增文件、不含 `sub_config/special_groups.yaml`）。
+2. **提交并推送 file 仓库**，记下提交 ID。清单按 sha256 固定这份包，所以地址必须带**提交 ID**（不要用 `main`），已被某个版本引用的包文件不能再改。
+3. **填元数据**：`sha256sum config_rust_up.zip`，把 `scripts/rust-release-metadata.json` 的 `config.url`
+   （`https://raw.githubusercontent.com/jasonxtt/file/<提交 ID>/rtdns/config/incremental/config_rust_up.zip`）与 `config.sha256` 填上，`required_config_schema`/`config_package_id` 同步提高。
+4. **提交**：版本号（`rust/native-host/Cargo.toml`、`rust/Cargo.lock`）与元数据一起提交。
+5. **构建程序与清单**：推送后 `config.url` 已能下载，脚本会自己下载并核对；也可以用本地文件：
 
    ```bash
    RUST_CONFIG_PACKAGE=/path/to/config_rust_up.zip scripts/build-rust-release.sh vX.Y.Z release/rust
    ```
 
    脚本核对该文件的 sha256 与包内 manifest 是否等于元数据，通过后清单带 `config{url,sha256}`。
-5. **建 Release**，一次上传四个资产：程序包、界面包、清单、`config_rust_up.zip`（文件名必须与 `config.url` 末段一致）。
-6. **全新安装包**：用同一份 `rtdns-webui.tar.gz` 在 file 仓库运行 `mosdns/config/build_config_rust_zip.sh <rtdns-webui.tar.gz>` 重新生成 `config_rust.zip`（带 `ui/main/`）并提交 file 仓库。
-   Release 建好后，用 `curl -fsSL <config.url> | sha256sum` 再核对一次与元数据一致。更新器只在 `applied_config_schema < required_config_schema` 时下载配置包。
+6. **建 Release**：程序包、界面包、清单，加全新安装包 `config_rust.zip`（见下一步）。增量包不再是 Release 资产。
+7. **全新安装包与界面**：用同一份 `rtdns-webui.tar.gz` 在 file 仓库运行 `rtdns/config/full/build_config_rust_zip.sh <rtdns-webui.tar.gz>` 重新生成 `config_rust.zip`（带 `ui/main/`），
+   并把 `rtdns-webui.tar.gz` 放进 `rtdns/ui/`，提交 file 仓库。Release 建好后，用 `curl -fsSL <config.url> | sha256sum` 再核对一次与元数据一致。
+   更新器只在 `applied_config_schema < required_config_schema` 时下载配置包。
+
+v0.5.0 起 `config.url` 指向 file 仓库（此前指向 Release 资产）；已发布的 v0.4.x 与 v0.5.0 的清单仍指向各自 Release 里的包，不受影响。
 
 ## v0.5.0 升级须知（2026-10-30；WebUI 换新外观，新增多种平台程序包）
 
-- 配置 schema 仍为 5，**没有新配置包**（元数据里的 `config` 仍指向 v0.4.2 的 `config_rust_up.zip`）：在线更新换程序，并在已安装 `ui/main` 时一并换成新界面，不动配置文件与用户数据。
+- 配置 schema 仍为 5，**没有新配置包**（已发布的 v0.5.0 清单里的 `config` 仍指向 v0.4.2 Release 的 `config_rust_up.zip`；源码里的元数据已改指 file 仓库 `rtdns/config/incremental/` 的同一份文件，下一版起生效）：在线更新换程序，并在已安装 `ui/main` 时一并换成新界面，不动配置文件与用户数据。
 - **界面**：整套 WebUI 换了外观（Rosé Pine 配色、明暗两套主题、侧栏二级菜单、移动端底部导航、Ctrl/Cmd+K 搜索页面）；概览、规则设置各页、日志、系统管理的版式都重排过，功能与接口不变。
   没有 `ui/main` 的部署（纯后端）不受影响；外置界面仍可放在 `ui/<名字>/`。
 - **程序包**：Release 现在带四种程序包，包内都只有一个文件 `rtdns`：

@@ -35,7 +35,7 @@ For the Go/main-style config-update workflow, compatibility is declared by
 - The internal schema is not the user-facing version label; update any UI display mapping separately.
 
 The external package repository is the sibling `file` repository, normally
-`../file/mosdns/config` from these worktrees. Keep binary values, manifests,
+`../file/mosdns/config` (Go) and `../file/rtdns` (Rust: `config/full`, `config/incremental`, `ui`) from these worktrees. Keep binary values, manifests,
 managed-file boundaries, and published packages consistent.
 
 ### Rust (native) config package
@@ -47,7 +47,7 @@ The native host has its own schema and package ID, independent of the Go ones:
 values, a structural change of the managed files bumps both and republishes the package.
 
 - The package is `config_rust_up.zip` (`channel: "rust"`), built from `config_rust/` by
-  `file/mosdns/config/build_config_rust_up.sh`. It manages `config_custom.yaml` and `sub_config/*.yaml`
+  `file/rtdns/config/incremental/build_config_rust_up.sh`. It manages `config_custom.yaml` and `sub_config/*.yaml`
   except the host-generated `special_groups.yaml`; user and runtime data (`webinfo/`, `rule/`, `gen/`,
   `srs/`, `adguard/`, `cache/`, `ui/`, `sub_config/special_groups.yaml`) are never touched.
 - The native host keeps its package state in `webinfo/rust_config_update_state.json`. The Go host's
