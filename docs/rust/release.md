@@ -87,6 +87,14 @@
 
 v0.5.0 起 `config.url` 指向 file 仓库（此前指向 Release 资产）；已发布的 v0.4.x 与 v0.5.0 的清单仍指向各自 Release 里的包，不受影响。
 
+## v0.6.0 升级须知（2026-10-30；项目改名 AtomDNS，配置 schema 仍为 6）
+
+- 程序、crate、环境变量（`ATOMDNS_*`）、指标（`atomdns_*`）、发布资产（`atomdns-*`）和更新来源（`jasonxtt/atomdns`）都改名；WebUI 显示 AtomDNS，左上角换成新图标。**没有新配置包**。
+- 从 rtdns（≤ v0.5.2 且未改名的程序）升级需要手动换一次，见上文“从 rtdns 改名为 atomdns”；已按那个步骤换成 atomdns 的机器可以直接在线更新到 v0.6.0。
+- 全新安装：下载 `config_rust.zip`（配置 + `ui/main/`）和程序包 `atomdns-linux-amd64.tar.gz`，解压配置目录后 `atomdns start -d <目录> -c <目录>/config_custom.yaml`。
+- 配置包里的 `config_custom.yaml` 等文件仍有 `/tmp/mosdns.log` 这类旧名字（托管文件，改动需要新配置包，本版未动）。
+- 资产：四种程序包（在线更新只认 `amd64`）、`atomdns-webui.tar.gz`、清单、全新安装包 `config_rust.zip`。
+
 ## v0.5.2 升级须知（2026-10-30；概览页适配宽屏，仅界面）
 
 - 配置 schema 仍为 6，**没有新配置包**，程序逻辑没有改动：在线更新换程序，并在已安装 `ui/main` 时一并换成新界面。
