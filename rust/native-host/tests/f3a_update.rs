@@ -1061,6 +1061,79 @@ fn a_full_update_replaces_program_config_and_webui_in_the_same_process_and_is_co
     assert_eq!(host.exe_bytes(), program);
 }
 
+/// The v3 package is installed only on request, at the same version, and never by a plain update.
+#[test]
+fn prefer_v3_switches_a_baseline_install_to_the_v3_package_only_on_request() {
+    let host = Host::start("prefer-v3", None);
+    let version = current_version();
+    let baseline = binary().clone();
+    host.publish(&version, &baseline, None);
+    let status = host.api("GET", "/api/v1/update/status", b"").json();
+    let capable = status["amd64_v3_capable"] == true;
+    assert!(status.get("current_is_v3").is_none(), "{status}");
+    // A plain update at the same version does nothing, even when the CPU could run v3.
+    let reply = host.api("POST", "/api/v1/update/apply", b"{}");
+    assert_eq!(reply.status, 200, "{}", reply.text());
+    assert_eq!(reply.json()["restart_required"], false);
+    // No v3 package in the release (or no v3 CPU): refused, nothing touched.
+    let reply = host.api("POST", "/api/v1/update/apply", br#"{"prefer_v3": true}"#);
+    assert_eq!(reply.status, 502, "{}", reply.text());
+    assert_eq!(host.exe_bytes(), baseline);
+    if !capable {
+        return;
+    }
+    assert!(reply.text().contains("v3"), "{}", reply.text());
+    // Add the v3 package to the release and its sha256 to the manifest.
+    let mut v3 = baseline.clone();
+    v3.push(3);
+    let archive = tar_gz("atomdns", &v3);
+    let v3_name = "atomdns-linux-amd64-v3.tar.gz";
+    let manifest_path = format!("/dl/{version}/atomdns-update-manifest.json");
+    let mut manifest = serde_json::from_slice::<serde_json::Value>(&manifest_json(
+        &version,
+        &tar_gz("atomdns", &baseline),
+        None,
+    ))
+    .unwrap();
+    manifest["artifacts"][v3_name] = serde_json::json!({"sha256": sha256(&archive)});
+    host.server.set(
+        &format!("/dl/{version}/{v3_name}"),
+        "application/gzip",
+        archive,
+    );
+    host.server.set(
+        &manifest_path,
+        "application/json",
+        serde_json::to_vec(&manifest).unwrap(),
+    );
+    host.server.list(vec![host.server.release(
+        &version,
+        false,
+        false,
+        &[
+            "atomdns-linux-amd64.tar.gz",
+            v3_name,
+            "atomdns-update-manifest.json",
+        ],
+    )]);
+    let status = host.api("POST", "/api/v1/update/check", b"").json();
+    assert_eq!(
+        status["asset_name"], "atomdns-linux-amd64.tar.gz",
+        "{status}"
+    );
+    let reply = host.api("POST", "/api/v1/update/apply", br#"{"prefer_v3": true}"#);
+    assert_eq!(reply.status, 200, "{}", reply.text());
+    assert_eq!(reply.json()["restart_required"], true);
+    wait_until("the switch is confirmed", 90, || {
+        host.transactions()
+            .iter()
+            .any(|(_, tx)| tx["status"] == "verified")
+    });
+    wait_until("the final program serves", 60, || host.health().is_some());
+    settle_after_guard(&host);
+    assert_eq!(host.exe_bytes(), v3, "the v3 package is installed");
+}
+
 // ===== automatic rollback ================================================================
 
 fn candidate_script(version: &str, on_start: &str) -> Vec<u8> {
