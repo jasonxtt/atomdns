@@ -9,7 +9,9 @@ use serde::Deserialize;
 use crate::config::CompiledConfig;
 use crate::config::flags::{Flag, FlagValue};
 use crate::config::settings::{
-    NO_V4, NO_V6, PluginSwitch, REMEMBER_DIRECT, REMEMBER_PROXY, UpstreamEntry,
+    CACHE_DUMP_INTERVAL_RANGE, CACHE_LAZY_TTL_RANGE, CACHE_SIZE_RANGE, CacheDefaults,
+    LEARNER_TTL_RANGE, LEARNER_WRITE_INTERVAL_RANGE, Learning, NO_V4, NO_V6, PluginSwitch,
+    REMEMBER_DIRECT, REMEMBER_PROXY, UpstreamEntry,
 };
 use crate::rule_sources::Reply;
 use crate::runtime_snapshot::{ApplyFailure, RuntimeControl};
@@ -258,6 +260,17 @@ pub(crate) fn flags_available(config: &CompiledConfig) -> bool {
     config.reload.is_some() && !config.flags.is_empty()
 }
 
+/// The cache numbers are tunable when a file-backed configuration has a `cache`.
+pub(crate) fn cache_settings_available(config: &CompiledConfig) -> bool {
+    config.reload.is_some() && !config.yaml_defaults.caches.is_empty()
+}
+
+/// The learner numbers are tunable when a file-backed configuration has a
+/// `route_learner`.
+pub(crate) fn learning_settings_available(config: &CompiledConfig) -> bool {
+    config.reload.is_some() && !config.yaml_defaults.categories.is_empty()
+}
+
 /// The tags of one plugin kind in the effective report, in order.
 fn objects<'a>(config: &'a CompiledConfig, kind: &str) -> Vec<&'a crate::config::EffectiveItem> {
     config
@@ -299,6 +312,33 @@ pub(crate) async fn handle(
                 _ => not_allowed(),
             }
         }
+        "/api/v1/cache/settings" if !cache_settings_available(config) => return None,
+        "/api/v1/cache/settings" => match method {
+            "GET" => cache_settings_get(config),
+            _ => not_allowed(),
+        },
+        other if other.starts_with("/api/v1/cache/settings/") => {
+            if !cache_settings_available(config) {
+                return None;
+            }
+            let tag = &other["/api/v1/cache/settings/".len()..];
+            match method {
+                "POST" | "DELETE" => match control {
+                    Some(control) => cache_settings_change(control, method, tag, body).await,
+                    None => text(503, "runtime control is unavailable"),
+                },
+                _ => not_allowed(),
+            }
+        }
+        "/api/v1/learning/settings" if !learning_settings_available(config) => return None,
+        "/api/v1/learning/settings" => match method {
+            "GET" => learning_settings_get(config),
+            "POST" | "DELETE" => match control {
+                Some(control) => learning_settings_change(control, method, body).await,
+                None => text(503, "runtime control is unavailable"),
+            },
+            _ => not_allowed(),
+        },
         "/api/v1/overrides" if !overrides_available(config) => return None,
         "/api/v1/domain-generation" if !generation_available(config) => return None,
         "/api/v1/overrides" => match method {
@@ -320,6 +360,287 @@ pub(crate) async fn handle(
         _ => return None,
     };
     Some(reply)
+}
+
+/// One tunable number: the effective value, the YAML one and whether they
+/// differ.
+fn number_json(value: u64, default: u64) -> serde_json::Value {
+    serde_json::json!({"value": value, "default": default, "modified": value != default})
+}
+
+/// The effective numbers of a cache (the settings value, else the YAML one).
+fn cache_numbers(config: &CompiledConfig, tag: &str, yaml: CacheDefaults) -> [u64; 3] {
+    let own = config.settings.caches.get(tag).cloned().unwrap_or_default();
+    [
+        own.size.unwrap_or(yaml.size),
+        own.lazy_cache_ttl.unwrap_or(yaml.lazy_cache_ttl),
+        own.dump_interval.unwrap_or(yaml.dump_interval),
+    ]
+}
+
+fn cache_json(config: &CompiledConfig, tag: &str, yaml: CacheDefaults) -> serde_json::Value {
+    let [size, lazy, dump] = cache_numbers(config, tag, yaml);
+    let label = config
+        .caches
+        .iter()
+        .find(|cache| cache.tag == tag)
+        .map_or("", |cache| cache.label.as_str());
+    serde_json::json!({
+        "tag": tag,
+        "label": label,
+        "size": number_json(size, yaml.size),
+        "lazy_cache_ttl": number_json(lazy, yaml.lazy_cache_ttl),
+        "dump_interval": number_json(dump, yaml.dump_interval),
+    })
+}
+
+/// `GET /api/v1/cache/settings`: every `cache` in configuration order.
+fn cache_settings_get(config: &CompiledConfig) -> Reply {
+    let caches: Vec<_> = config
+        .settings_report
+        .iter()
+        .filter(|item| item.kind == "cache" && item.field == "size")
+        .filter_map(|item| {
+            let yaml = *config.yaml_defaults.caches.get(&item.object)?;
+            Some(cache_json(config, &item.object, yaml))
+        })
+        .collect();
+    json(
+        200,
+        &serde_json::json!({
+            "settings_file": crate::config::settings::SETTINGS_FILE,
+            "caches": caches,
+        }),
+    )
+}
+
+/// A body field: a whole number inside `range`, or `null` (back to the YAML
+/// value).
+fn tuned_number(
+    name: &str,
+    value: &serde_json::Value,
+    (low, high): (u64, u64),
+) -> Result<Option<u64>, String> {
+    match value {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::Number(number) => match number.as_u64() {
+            Some(value) if (low..=high).contains(&value) => Ok(Some(value)),
+            Some(value) => Err(format!(
+                "{name} must be between {low} and {high}, got {value}"
+            )),
+            None => Err(format!("{name} must be a whole number or null")),
+        },
+        _ => Err(format!("{name} must be a whole number or null")),
+    }
+}
+
+/// `POST /api/v1/cache/settings/{tag}` (`{"size"?, "lazy_cache_ttl"?,
+/// "dump_interval"?}`, `null` restores a field) and `DELETE` (restores all).
+/// Every one of the three is part of the cache's identity: a changed value
+/// replaces the cache by an empty one (`reset` names it).
+async fn cache_settings_change(
+    control: &RuntimeControl,
+    method: &str,
+    tag: &str,
+    body: &[u8],
+) -> Reply {
+    let current = control.view();
+    let Some(yaml) = current.config.yaml_defaults.caches.get(tag).copied() else {
+        return text(404, &format!("no cache `{tag}`"));
+    };
+    let mut patch: Vec<(&str, Option<u64>)> = Vec::new();
+    if method == "DELETE" {
+        patch.extend([
+            ("size", None),
+            ("lazy_cache_ttl", None),
+            ("dump_interval", None),
+        ]);
+    } else {
+        let Ok(serde_json::Value::Object(object)) = serde_json::from_slice(body) else {
+            return text(400, "expected a JSON object");
+        };
+        if object.is_empty() {
+            return text(
+                400,
+                "expected at least one of: size, lazy_cache_ttl, dump_interval",
+            );
+        }
+        for (name, value) in &object {
+            let (name, range) = match name.as_str() {
+                "size" => ("size", CACHE_SIZE_RANGE),
+                "lazy_cache_ttl" => ("lazy_cache_ttl", CACHE_LAZY_TTL_RANGE),
+                "dump_interval" => ("dump_interval", CACHE_DUMP_INTERVAL_RANGE),
+                other => return text(400, &format!("unsupported field `{other}`")),
+            };
+            match tuned_number(name, value, range) {
+                Ok(value) => patch.push((name, value)),
+                Err(reason) => return text(400, &reason),
+            }
+        }
+    }
+    if crate::config::flags::update_trial() {
+        return text(503, "配置更新试运行中，暂不能修改缓存设置");
+    }
+    let before = cache_numbers(&current.config, tag, yaml);
+    let mut settings = current.config.settings.clone();
+    let mut tuning = settings.caches.remove(tag).unwrap_or_default();
+    for (name, value) in patch {
+        let (slot, default) = match name {
+            "size" => (&mut tuning.size, yaml.size),
+            "lazy_cache_ttl" => (&mut tuning.lazy_cache_ttl, yaml.lazy_cache_ttl),
+            _ => (&mut tuning.dump_interval, yaml.dump_interval),
+        };
+        // Only differences from the YAML are stored.
+        *slot = value.filter(|value| *value != default);
+    }
+    if !tuning.is_empty() {
+        settings.caches.insert(tag.to_owned(), tuning);
+    }
+    let unchanged = settings == current.config.settings;
+    drop(current);
+    if !unchanged {
+        if let Err(error) = control.apply_settings(settings).await {
+            return failure(error);
+        }
+    }
+    let view = control.view();
+    let reset = !unchanged && cache_numbers(&view.config, tag, yaml) != before;
+    json(
+        200,
+        &serde_json::json!({
+            "cache": cache_json(&view.config, tag, yaml),
+            "reset": if reset { vec![tag] } else { Vec::new() },
+        }),
+    )
+}
+
+fn learning_json(config: &CompiledConfig) -> serde_json::Value {
+    let learning = &config.settings.learning;
+    let yaml_interval = config.yaml_defaults.write_interval.unwrap_or(21_600);
+    serde_json::json!({
+        "settings_file": crate::config::settings::SETTINGS_FILE,
+        "write_interval": number_json(learning.write_interval.unwrap_or(yaml_interval), yaml_interval),
+        "categories": config
+            .yaml_defaults
+            .categories
+            .iter()
+            .map(|(tag, yaml)| {
+                let own = learning.categories.get(tag).cloned().unwrap_or_default();
+                serde_json::json!({
+                    "tag": tag,
+                    "ttl": number_json(own.ttl.unwrap_or(yaml.ttl), yaml.ttl),
+                    "max_entries": number_json(own.max_entries.unwrap_or(yaml.max_entries), yaml.max_entries),
+                })
+            })
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn learning_settings_get(config: &CompiledConfig) -> Reply {
+    json(200, &learning_json(config))
+}
+
+/// `POST /api/v1/learning/settings` (`{"write_interval"?, "categories"?:
+/// {"<tag>": {"ttl"?, "max_entries"?}}}`, `null` restores a value) and
+/// `DELETE` (restores everything). One request is one published generation.
+/// The learned names stay: a lowered `max_entries` keeps the most recently
+/// confirmed ones.
+async fn learning_settings_change(control: &RuntimeControl, method: &str, body: &[u8]) -> Reply {
+    let current = control.view();
+    let mut settings = current.config.settings.clone();
+    if method == "DELETE" {
+        settings.learning = Learning::default();
+    } else if let Err(reply) = patch_learning(&current.config, &mut settings, body) {
+        return reply;
+    }
+    if crate::config::flags::update_trial() {
+        return text(503, "配置更新试运行中，暂不能修改学习设置");
+    }
+    let unchanged = settings == current.config.settings;
+    drop(current);
+    if !unchanged {
+        if let Err(error) = control.apply_settings(settings).await {
+            return failure(error);
+        }
+    }
+    json(200, &learning_json(&control.view().config))
+}
+
+/// Applies a learning request body to `settings`; the error is the HTTP answer.
+fn patch_learning(
+    config: &CompiledConfig,
+    settings: &mut crate::config::settings::Settings,
+    body: &[u8],
+) -> Result<(), Reply> {
+    let Ok(serde_json::Value::Object(object)) = serde_json::from_slice(body) else {
+        return Err(text(400, "expected a JSON object"));
+    };
+    if object.is_empty() {
+        return Err(text(
+            400,
+            "expected at least one of: write_interval, categories",
+        ));
+    }
+    let cap = u64::try_from(crate::route_learner::MAX_ENTRIES_CAP).unwrap_or(u64::MAX);
+    for (name, value) in &object {
+        match name.as_str() {
+            "write_interval" => {
+                let value = tuned_number(name, value, LEARNER_WRITE_INTERVAL_RANGE)
+                    .map_err(|reason| text(400, &reason))?;
+                let yaml = config.yaml_defaults.write_interval;
+                settings.learning.write_interval = value.filter(|value| Some(*value) != yaml);
+            }
+            "categories" => {
+                let Some(map) = value.as_object() else {
+                    return Err(text(
+                        400,
+                        "categories must be an object keyed by category tag",
+                    ));
+                };
+                for (tag, fields) in map {
+                    let Some((_, yaml)) = config
+                        .yaml_defaults
+                        .categories
+                        .iter()
+                        .find(|(name, _)| name == tag)
+                    else {
+                        return Err(text(404, &format!("no route_learner category `{tag}`")));
+                    };
+                    let Some(fields) = fields.as_object() else {
+                        return Err(text(400, &format!("categories.{tag} must be an object")));
+                    };
+                    let mut tuning = settings.learning.categories.remove(tag).unwrap_or_default();
+                    for (field, value) in fields {
+                        let at = format!("categories.{tag}.{field}");
+                        match field.as_str() {
+                            "ttl" => {
+                                let value = tuned_number(&at, value, LEARNER_TTL_RANGE)
+                                    .map_err(|reason| text(400, &reason))?;
+                                tuning.ttl = value.filter(|value| *value != yaml.ttl);
+                            }
+                            "max_entries" => {
+                                let value = tuned_number(&at, value, (1, cap))
+                                    .map_err(|reason| text(400, &reason))?;
+                                tuning.max_entries =
+                                    value.filter(|value| *value != yaml.max_entries);
+                            }
+                            other => {
+                                return Err(text(
+                                    400,
+                                    &format!("unsupported field `{other}` in categories.{tag}"),
+                                ));
+                            }
+                        }
+                    }
+                    if !tuning.is_empty() {
+                        settings.learning.categories.insert(tag.clone(), tuning);
+                    }
+                }
+            }
+            other => return Err(text(400, &format!("unsupported field `{other}`"))),
+        }
+    }
+    Ok(())
 }
 
 fn flag_json(flag: &Flag) -> serde_json::Value {

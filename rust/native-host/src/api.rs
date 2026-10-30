@@ -2664,7 +2664,13 @@ async fn dispatch(
                 .caches
                 .iter()
                 .filter(|item| item.kind == CacheKind::Named)
-                .map(|item| serde_json::json!({"tag":item.tag}))
+                .map(|item| {
+                    if item.label.is_empty() {
+                        serde_json::json!({"tag":item.tag})
+                    } else {
+                        serde_json::json!({"tag":item.tag,"label":item.label})
+                    }
+                })
                 .collect();
             Response::json(&serde_json::json!({"schema_version":1,"caches":caches}))
         }
@@ -3149,6 +3155,23 @@ fn ui_operations(config: &CompiledConfig) -> serde_json::Value {
             "reason": if flags { None::<&str> } else { Some("当前配置没有从文件加载的 feature_flag") }
         }),
     );
+    for (id, supported, reason) in [
+        (
+            "cache.settings",
+            crate::settings_api::cache_settings_available(config),
+            "当前配置没有从文件加载的 cache 插件",
+        ),
+        (
+            "learning.settings",
+            crate::settings_api::learning_settings_available(config),
+            "当前配置没有从文件加载的 route_learner 插件",
+        ),
+    ] {
+        operations.insert(
+            id.to_owned(),
+            serde_json::json!({"supported": supported, "reason": if supported { None } else { Some(reason) }}),
+        );
+    }
     let aliases = config
         .local
         .webinfos

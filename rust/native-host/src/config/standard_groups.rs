@@ -304,6 +304,7 @@ pub(super) fn apply(
     candidate: Option<&[Group]>,
     definitions: &mut Vec<RawPlugin>,
     applied: &mut settings::Applied,
+    tuning: &settings::Settings,
 ) -> Result<Profile, ConfigError> {
     let expected_state = read_state(base)?;
     let mut groups = match candidate {
@@ -561,12 +562,19 @@ pub(super) fn apply(
     let raw = super::parse_yaml(&generated)?;
     let map = super::expect_map(&raw, GENERATED, "generated groups")?;
     let plugins = super::expect_sequence(map.required("plugins", GENERATED)?, GENERATED)?;
+    let first_generated = definitions.len();
     for (index, plugin) in plugins.iter().enumerate() {
         definitions.push(super::decode_plugin(
             plugin,
             &format!("{GENERATED}.plugins[{index}]"),
             base,
         )?);
+    }
+    // The generated group caches are tunable like the configured ones.
+    for plugin in &mut definitions[first_generated..] {
+        if plugin.kind == "cache" {
+            settings::tune_cache(plugin, tuning, &mut applied.items, &mut applied.defaults)?;
+        }
     }
     Ok(Profile {
         base: base.to_path_buf(),
@@ -577,17 +585,31 @@ pub(super) fn apply(
     })
 }
 
+/// The WebUI display name of a group's cache, as a YAML (JSON) string. The
+/// group name is shortened and stripped of control characters so the label
+/// always stays valid.
+fn cache_label(name: &str) -> String {
+    let name: String = name
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(40)
+        .collect();
+    let label = format!("专属分流组「{}」缓存", name.trim());
+    serde_json::to_string(&label).unwrap_or_else(|_| "\"专属分流组缓存\"".to_owned())
+}
+
 fn render(groups: &[Group], resolutions: &BTreeMap<u32, Resolution>) -> String {
     let mut b = String::from("plugins:\n# 由 special_groups API 自动生成。不要手动编辑。\n");
     for g in groups {
         let n = g.slot;
+        let cache_label = cache_label(&g.name);
         let concurrent = resolutions[&n]
             .raw
             .len()
             .clamp(1, super::aliapi::MAX_CONCURRENT);
         let _ = write!(
             b,
-            "  - tag: special_route_{n}\n    type: sd_set_light\n    args:\n      socks5: \"\"\n      local_config: \"srs/special_{n}.json\"\n\n  - tag: special_manual_{n}\n    type: domain_set_light\n    args:\n      files:\n        - \"rule/special_{n}.txt\"\n\n  - tag: cache_special_{n}\n    type: cache\n    args:\n      size: 20000000\n      lazy_cache_ttl: 259200000\n      dump_file: cache/cache_special_{n}.dump\n      dump_interval: 36000\n\n  - tag: special_upstream_{n}\n    type: aliapi\n    args:\n      concurrent: {concurrent}\n      upstreams:\n"
+            "  - tag: special_route_{n}\n    type: sd_set_light\n    args:\n      socks5: \"\"\n      local_config: \"srs/special_{n}.json\"\n\n  - tag: special_manual_{n}\n    type: domain_set_light\n    args:\n      files:\n        - \"rule/special_{n}.txt\"\n\n  - tag: cache_special_{n}\n    type: cache\n    args:\n      label: {cache_label}\n      size: 20000\n      lazy_cache_ttl: 604800\n      dump_file: cache/cache_special_{n}.dump\n      dump_interval: 21600\n\n  - tag: special_upstream_{n}\n    type: aliapi\n    args:\n      concurrent: {concurrent}\n      upstreams:\n"
         );
         if resolutions[&n].raw.is_empty() {
             b.push_str("        - addr: \"223.5.5.5\"\n\n");

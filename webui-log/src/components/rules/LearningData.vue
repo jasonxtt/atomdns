@@ -1,15 +1,18 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { getJSON, getText } from '../../api/http'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { getJSON, getText, postJSON } from '../../api/http'
 import { operationReason, supportsOperation } from '../../api/runtimeCapabilities'
 import { openConfirm } from '../../utils/confirm'
 import { setError, setSuccess } from '../../utils/notice'
 import { formatDateTime } from '../../utils/time'
+import { LEARNING_RANGES, fieldError, formatCount, formatDuration } from '../../utils/tuning'
 import AppIcon from '../AppIcon.vue'
+import DurationInput from './DurationInput.vue'
 
 // What the host has learned: the categories with their counts (and clearing a whole
 // category), and the entries with why and when they were learned. Entries cannot be
-// deleted one by one.
+// deleted one by one. The validity and capacity of every category and the write interval
+// are edited here too (`/api/v1/learning/settings`); changing them never clears anything.
 const PAGE = 50
 const status = ref(null)
 const statusError = ref('')
@@ -34,6 +37,87 @@ function ttlText(seconds) {
   const days = Number(seconds || 0) / 86400
   return days >= 1 ? `${Math.round(days * 10) / 10} 天` : `${Math.round(Number(seconds || 0) / 3600)} 小时`
 }
+
+const tunable = computed(() => supportsOperation('learning.settings'))
+// The saved numbers (with their defaults) and what is typed in the fields.
+const tuning = ref(null)
+const drafts = reactive({})
+const interval = reactive({ server: 0, default: 0, draft: 0 })
+const tuningBusy = ref('')
+
+const serverOf = (tag) => {
+  const found = tuning.value?.categories?.find((item) => item.tag === tag)
+  return found ? { ttl: Number(found.ttl.value), max_entries: Number(found.max_entries.value), defaults: { ttl: Number(found.ttl.default), max_entries: Number(found.max_entries.default) } } : null
+}
+const changedKeys = (tag) => {
+  const server = serverOf(tag)
+  const draft = drafts[tag]
+  return server && draft ? ['ttl', 'max_entries'].filter((key) => draft[key] !== server[key]) : []
+}
+const modifiedCategory = (tag) => {
+  const server = serverOf(tag)
+  return Boolean(server) && (server.ttl !== server.defaults.ttl || server.max_entries !== server.defaults.max_entries)
+}
+const categoryErrors = (tag) => {
+  const draft = drafts[tag]
+  if (!draft) return []
+  return [
+    fieldError(draft.ttl, LEARNING_RANGES.ttl, '有效期', 'duration'),
+    fieldError(draft.max_entries, LEARNING_RANGES.max_entries, '容量上限', 'count')
+  ].filter(Boolean)
+}
+const intervalError = computed(() => fieldError(interval.draft, LEARNING_RANGES.write_interval, '写盘间隔', 'duration'))
+
+async function loadTuning() {
+  if (!tunable.value) return
+  try {
+    const data = await getJSON('/api/v1/learning/settings')
+    tuning.value = data
+    for (const item of data.categories || []) drafts[item.tag] = { ttl: Number(item.ttl.value), max_entries: Number(item.max_entries.value) }
+    interval.server = Number(data.write_interval?.value)
+    interval.default = Number(data.write_interval?.default)
+    interval.draft = interval.server
+  } catch (error) {
+    tuning.value = null
+    if (error.status !== 404) setError(`读取学习参数失败: ${error.message}`)
+  }
+}
+
+async function applyTuning(key, body, success) {
+  tuningBusy.value = key
+  try {
+    await postJSON('/api/v1/learning/settings', body)
+    setSuccess(success)
+    await Promise.all([loadTuning(), loadStatus()])
+  } catch (error) {
+    setError(`保存学习参数失败: ${error.message}`)
+  } finally {
+    tuningBusy.value = ''
+  }
+}
+
+function saveCategory(item) {
+  const keys = changedKeys(item.tag)
+  if (keys.length === 0 || categoryErrors(item.tag).length > 0) return Promise.resolve()
+  const patch = Object.fromEntries(keys.map((key) => [key, drafts[item.tag][key]]))
+  return applyTuning(item.tag, { categories: { [item.tag]: patch } }, `“${item.label}”的参数已保存并立即生效`)
+}
+
+function restoreCategory(item) {
+  return applyTuning(item.tag, { categories: { [item.tag]: { ttl: null, max_entries: null } } }, `“${item.label}”已恢复为配置文件里的参数`)
+}
+
+function saveInterval() {
+  if (interval.draft === interval.server || intervalError.value) return Promise.resolve()
+  return applyTuning('interval', { write_interval: interval.draft }, '写盘间隔已保存并立即生效')
+}
+
+function restoreInterval() {
+  return applyTuning('interval', { write_interval: null }, '写盘间隔已恢复为配置文件里的值')
+}
+
+const counters = computed(() => status.value?.counters || null)
+const lastWrite = computed(() => status.value?.last_write || null)
 
 async function loadStatus() {
   if (!allowed.value) return
@@ -66,7 +150,7 @@ async function loadEntries() {
 
 async function reload() {
   await loadStatus()
-  await loadEntries()
+  await Promise.all([loadEntries(), loadTuning()])
 }
 
 function goto(page) {
@@ -134,21 +218,44 @@ onBeforeUnmount(() => {
     <p v-if="!allowed" class="muted" role="note">{{ operationReason('lists.remembered') }}</p>
     <p v-else-if="statusError" class="muted" role="note">{{ statusError }}</p>
     <template v-else>
+      <div v-if="tuning" class="rt-learning-interval" data-learning-interval>
+        <span class="rt-learning-interval-label">写盘间隔</span>
+        <DurationInput v-model="interval.draft" label="写盘间隔" :disabled="tuningBusy === 'interval'" />
+        <span v-if="interval.server !== interval.default" class="rt-flag-mark" data-learning-modified="interval">已修改</span>
+        <button class="btn primary" type="button" :disabled="tuningBusy === 'interval' || interval.draft === interval.server || Boolean(intervalError)" @click="saveInterval">保存</button>
+        <button v-if="interval.server !== interval.default" class="btn secondary" type="button" :disabled="tuningBusy === 'interval'" @click="restoreInterval">恢复默认</button>
+        <span class="muted rt-setting-note">学到的内容有变化时，每隔这么久写一次磁盘（默认 {{ formatDuration(interval.default) }}）。</span>
+        <p v-if="intervalError" class="rt-setting-error" role="alert">{{ intervalError }}</p>
+      </div>
       <div class="table-wrap rt-compact-table">
         <table class="rt-learning-categories" data-learning-categories>
           <thead>
-            <tr><th>类别</th><th class="text-right">条数</th><th class="text-right">上限</th><th>有效期</th><th>状态</th><th class="rt-col-actions">操作</th></tr>
+            <tr><th>类别</th><th class="text-right">条数</th><th>上限</th><th>有效期</th><th>状态</th><th class="rt-col-actions">操作</th></tr>
           </thead>
           <tbody>
             <tr v-if="categories.length === 0"><td colspan="6" class="empty">暂无类别</td></tr>
             <tr v-for="item in categories" :key="item.tag" :class="{ disabled: !item.enabled }">
               <td>{{ item.label }}</td>
               <td class="text-right">{{ Number(item.entries).toLocaleString() }}</td>
-              <td class="text-right">{{ Number(item.max_entries).toLocaleString() }}</td>
-              <td>{{ ttlText(item.ttl_seconds) }}</td>
+              <td>
+                <template v-if="drafts[item.tag]">
+                  <input v-model.number="drafts[item.tag].max_entries" class="rt-setting-input rt-setting-input-short" type="number" min="1" :disabled="tuningBusy === item.tag" :aria-label="`${item.label} 容量上限`" />
+                </template>
+                <template v-else>{{ Number(item.max_entries).toLocaleString() }}</template>
+              </td>
+              <td>
+                <template v-if="drafts[item.tag]">
+                  <DurationInput v-model="drafts[item.tag].ttl" :label="`${item.label} 有效期`" :disabled="tuningBusy === item.tag" />
+                  <span v-if="modifiedCategory(item.tag)" class="rt-flag-mark" :data-learning-modified="item.tag">已修改</span>
+                  <p v-for="message in categoryErrors(item.tag)" :key="message" class="rt-setting-error" role="alert">{{ message }}</p>
+                </template>
+                <template v-else>{{ ttlText(item.ttl_seconds) }}</template>
+              </td>
               <td>{{ item.enabled ? '学习中' : '已关闭' }}</td>
               <td class="rt-col-actions">
                 <div class="rt-row-actions">
+                  <button v-if="drafts[item.tag]" class="btn primary" type="button" :disabled="tuningBusy === item.tag || changedKeys(item.tag).length === 0 || categoryErrors(item.tag).length > 0" @click="saveCategory(item)">保存</button>
+                  <button v-if="drafts[item.tag] && modifiedCategory(item.tag)" class="btn secondary" type="button" :disabled="tuningBusy === item.tag" @click="restoreCategory(item)">恢复默认</button>
                   <button class="rt-row-icon danger" type="button" title="清空" :aria-label="`清空 ${item.label || item.tag}`" :disabled="busy === item.tag || Number(item.entries) === 0" @click="flush(item)">
                     <AppIcon name="trash" :size="16" />
                   </button>
@@ -158,6 +265,13 @@ onBeforeUnmount(() => {
           </tbody>
         </table>
       </div>
+
+      <p v-if="tuning" class="muted rt-setting-note" role="note">有效期从最后一次确认起算：调小会让部分条目立刻过期，调大让现有条目活得更久；容量调小时保留最近确认的条目。保存后立即生效，不会清空其余内容。</p>
+      <p v-if="counters" class="muted rt-setting-note" data-learning-counters>
+        自启动以来：已学习 {{ formatCount(counters.learned) }} · 已确认 {{ formatCount(counters.confirmed) }} · 已过期 {{ formatCount(counters.expired) }} · 已淘汰 {{ formatCount(counters.evicted) }} · 已清空 {{ formatCount(counters.flushed) }}；
+        <template v-if="lastWrite">上次写盘 {{ formatDateTime(lastWrite.at) }}（{{ formatCount(lastWrite.entries) }} 条）<template v-if="lastWrite.error">，失败：{{ lastWrite.error }}</template></template>
+        <template v-else>尚未写过盘</template>
+      </p>
 
       <div class="rt-list-head rt-learning-filter">
         <div class="rt-list-title"><h3>学习明细</h3><span class="muted rt-list-count" data-entries-total>共 {{ total.toLocaleString() }} 条</span></div>
@@ -186,7 +300,7 @@ onBeforeUnmount(() => {
             <tr v-for="item in entries" :key="`${item.category}:${item.name}`">
               <td class="mono" :title="item.name">{{ item.name }}</td>
               <td>{{ labelOf(item.category) }}</td>
-              <td :title="item.reason">{{ item.reason }}</td>
+              <td :title="item.reason">{{ item.reason_label || item.reason }}</td>
               <td class="mono">{{ formatDateTime(item.first_confirmed) }}</td>
               <td class="mono">{{ formatDateTime(item.last_confirmed) }}</td>
               <td class="mono">{{ formatDateTime(item.expires_at) }}</td>

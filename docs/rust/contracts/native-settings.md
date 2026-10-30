@@ -41,6 +41,37 @@ entries compile; `concurrent = min(enabled count, 20)` for settings-managed list
 Loading errors (start, `check`): unreadable or unparsable file, a version other than 1, an unknown top-level key, a settings key that names no object / the wrong kind, an invalid
 value. A missing or empty file is "no settings". Compiling and `check` never write. (The `native_management` mode that used to bypass the settings API was removed in Phase 6b.)
 
+## Tunable numbers of caches and learners (config schema 6)
+
+`settings.json` also stores differences for the numbers the WebUI tunes, again only where they differ from the YAML:
+
+```json
+{"version":1,
+ "caches":{"cache_all":{"size":50000,"lazy_cache_ttl":259200,"dump_interval":3600}},
+ "learning":{"write_interval":43200,"categories":{"my_realiplist":{"ttl":1209600,"max_entries":50000}}}}
+```
+
+- `caches.<tag>` names a `cache`; fields are optional. `size` (entries) 1,000 – 100,000,000; `lazy_cache_ttl` (seconds an expired answer may still be served, 0 = none) 0 – 4,294,967,295; `dump_interval` (seconds) 60 – 31,536,000.
+  They replace the cache's `size`, `lazy_cache_ttl` and `dump_interval`. All three belong to the cache identity (`same_cache_options`): a changed value **replaces that cache by an empty one** on the next generation (an empty dump is written first, see Commit order below).
+- `learning.write_interval` (seconds, 60 – 31,536,000) applies to every `route_learner`; `learning.categories.<tag>` names a learner category: `ttl` 60 – 315,360,000 seconds, `max_entries` 1 – 262,144.
+  They replace the category's `ttl`/`max_entries` and the learner's `write_interval`. A hot apply keeps the learned names (the learner state is handed over in memory when the categories are the same): entries expire at `last confirmation + ttl` with the new `ttl`,
+  and a category holding more than its new `max_entries` keeps the most recently confirmed names (counted as evicted).
+- Not tunable here, on purpose: marks, labels, sources, `exclude_ip`, `enable_ecs`, `dump_file`, `route_learn` conditions, `target_mapper`, which categories exist and their order.
+- Loading errors: a key naming no `cache` / no category, an unknown field, or a value outside its range (the error names the key, e.g. `caches.cache_all.size`). A stored value equal to the YAML one is never written by the API; one written by hand is accepted and reported as `source=settings`.
+- `check` and `GET /api/v1/settings/effective` add `cache` items (`size`, `lazy_cache_ttl`, `dump_interval` per cache) and `route_learner` items (`write_interval` per learner; `ttl`, `max_entries` per category).
+
+**Downgrade hazard.** `Settings` refuses unknown keys, so a program from before schema 6 does not start with a `caches` or `learning` section in the file. Restore the defaults (API `DELETE`) or remove the two sections before going back.
+
+### API
+
+- `GET /api/v1/cache/settings` -> `{settings_file, caches:[{tag, size:{value,default,modified}, lazy_cache_ttl:{…}, dump_interval:{…}}]}` in configuration order. `POST /api/v1/cache/settings/{tag}` takes any of `size`, `lazy_cache_ttl`, `dump_interval`
+  (a whole number, or `null` to return that field to the YAML value) and answers `{cache, reset:[tag…]}`; `reset` names the cache when the values changed, i.e. when it was replaced by an empty one. `DELETE …/{tag}` restores all three.
+  404 unknown tag, 400 bad field or range, 405 other methods, 503 while a configuration update is being tried out.
+- `GET /api/v1/learning/settings` -> `{settings_file, write_interval:{…}, categories:[{tag, ttl:{…}, max_entries:{…}}]}` in declaration order. `POST` takes `write_interval` and/or `categories:{<tag>:{ttl?, max_entries?}}` (`null` restores); one request publishes at most one generation.
+  `DELETE` restores everything. Same status codes; 404 for an unknown category.
+- A `cache` may carry a display `label` (see [native-cache-lifecycle](native-cache-lifecycle.md)); `GET /api/v1/cache/settings` returns it as `label` (`""` when none). The caches of the special groups (`cache_special_<slot>`, generated with the label `专属分流组「<name>」缓存` and the same defaults as the packaged group caches) are tunable too; settings for a group that no longer exists are ignored, not an error.
+- Capabilities `cache.settings` (a `cache` exists, file-backed) and `learning.settings` (a `route_learner` exists, file-backed). Both are optional for the WebUI: a program without them simply shows no editing.
+
 ## The effective configuration
 
 M1-e group-proxy rule (user approved 2026-10-09): owned special-group upstreams

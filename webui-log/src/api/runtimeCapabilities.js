@@ -87,6 +87,8 @@ export function requestOperation(url, method = 'GET') {
   if (/^\/api\/v[12]\/audit\/(start|stop|enable|disable|clear)$/.test(path)) return 'audit.control'
   if (/^\/api\/v2\/audit\/rank\//.test(path)) return 'query.rank'
   if (/^\/api\/v[12]\/audit\//.test(path)) return 'audit.read'
+  if (path === '/api/v1/cache/settings' || path.startsWith('/api/v1/cache/settings/')) return 'cache.settings'
+  if (path === '/api/v1/learning/settings') return 'learning.settings'
   if (path === '/api/v1/cache/inventory') return 'cache.inventory'
   if (path === '/api/v1/upstream/sources') return 'groups.upstreams'
   if (path.startsWith('/api/v1/special-groups')) return method === 'GET' ? 'groups.read' : 'groups.manage'

@@ -1310,7 +1310,7 @@ fn capability_matrix_is_complete_and_matches_host_eligibility() {
             let ops = payload["ui_operations"]
                 .as_object()
                 .expect("complete operations");
-            assert_eq!(ops.len(), 30);
+            assert_eq!(ops.len(), 32);
             for id in [
                 "system.health",
                 "system.version",
@@ -1345,6 +1345,8 @@ fn capability_matrix_is_complete_and_matches_host_eligibility() {
                 "rules.adguard",
                 "client.aliases",
                 "flags.manage",
+                "cache.settings",
+                "learning.settings",
                 "cache.requery",
                 "lists.remembered",
                 // An in-process test host has no captured restart target (only `main` captures one).
@@ -1369,6 +1371,8 @@ fn capability_matrix_is_complete_and_matches_host_eligibility() {
                 "/plugins/adguard/rules",
                 "/plugins/clientname",
                 "/api/v1/flags",
+                "/api/v1/cache/settings",
+                "/api/v1/learning/settings",
                 "/plugins/requery/status",
                 "/api/v1/domain-generation",
                 "/api/v1/overrides",

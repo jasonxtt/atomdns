@@ -91,6 +91,59 @@ fn generated_groups_race_all_enabled_upstreams_up_to_twenty() {
     }
 }
 
+/// A generated group cache takes the same defaults as the packaged group caches
+/// and a display label from the group name; an awkward name never breaks the load.
+#[test]
+fn generated_group_caches_carry_the_new_defaults_and_a_label_for_any_name() {
+    let tree = Tree::new("group-cache", "", true);
+    let long = "长".repeat(100);
+    for name in [
+        "managed",
+        "带\"引号\"和\\反斜杠",
+        long.as_str(),
+        "line\nbreak",
+    ] {
+        std::fs::write(
+            tree.0.join("webinfo/special_upstream_groups.json"),
+            serde_json::json!([{"slot": 50, "name": name, "owned_upstreams": [
+                {"tag": "peer", "enabled": true, "protocol": "udp", "addr": "127.0.0.1:19000"}
+            ]}])
+            .to_string(),
+        )
+        .unwrap();
+        let config = load_and_compile(&tree.0.join("config.yaml"))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let value = |field: &str| {
+            config
+                .settings_report()
+                .iter()
+                .find(|item| {
+                    item.kind == "cache" && item.object == "cache_special_50" && item.field == field
+                })
+                .unwrap_or_else(|| panic!("{field} of cache_special_50"))
+                .value
+                .clone()
+        };
+        assert_eq!(value("size"), "20000");
+        assert_eq!(value("lazy_cache_ttl"), "604800");
+        assert_eq!(value("dump_interval"), "21600");
+    }
+    // The group cache can be tuned; the values of a group that is gone are left unused.
+    std::fs::write(
+        tree.0.join("webinfo/settings.json"),
+        r#"{"version":1,"caches":{"cache_special_50":{"size":5000},"cache_special_77":{"size":6000}}}"#,
+    )
+    .unwrap();
+    let config = load_and_compile(&tree.0.join("config.yaml")).unwrap();
+    let size = config
+        .settings_report()
+        .iter()
+        .find(|item| item.object == "cache_special_50" && item.field == "size")
+        .map(|item| (item.value.clone(), item.source))
+        .unwrap();
+    assert_eq!(size, ("5000".to_owned(), "settings"));
+}
+
 #[test]
 fn owned_proxy_requires_exactly_one_object_and_never_falls_back() {
     for (name, proxies, reason) in [

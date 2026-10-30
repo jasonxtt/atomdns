@@ -7,6 +7,10 @@ test('catalog uses actual ordered tags including empty catalog', async () => {
   assert.deepEqual(caches.map((cache) => cache.tag), ['zeta', 'alpha'])
   assert.deepEqual(await loadCacheInventory(async () => ({ schema_version: 1, caches: [] })), [])
 })
+test('a cache shows its configured label and falls back to the tag', async () => {
+  const caches = await loadCacheInventory(async () => ({ schema_version: 1, caches: [{ tag: 'cache_cn', label: ' 国内查询缓存 ' }, { tag: 'plain' }, { tag: 'blank', label: '  ' }] }))
+  assert.deepEqual(caches.map((cache) => [cache.tag, cache.name, cache.labelled]), [['cache_cn', '国内查询缓存', true], ['plain', 'plain', false], ['blank', 'blank', false]])
+})
 test('failures, an unsupported catalog and unknown/malformed schema are errors, never a fixed catalog', async () => {
   await assert.rejects(loadCacheInventory(async () => ({ supported: false })), /不一致/)
   for (const status of [400, 401, 403, 404, 500, 501]) {

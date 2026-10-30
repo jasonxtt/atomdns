@@ -104,7 +104,7 @@ onBeforeUnmount(() => window.removeEventListener('mosdns-log-refresh', load))
         <tbody>
           <tr v-if="rows.length === 0"><td colspan="8" class="empty">{{ loadError ? '缓存数据读取失败' : '暂无缓存' }}</td></tr>
           <tr v-for="cache in rows" :key="cache.key">
-            <td>{{ cache.name }}</td>
+            <td>{{ cache.name }}<span v-if="cache.labelled" class="rt-tag-note">{{ cache.tag }}</span></td>
             <td class="text-right">{{ number(cache.query_total) }}</td>
             <td class="text-right">{{ number(cache.hit_total) }}</td>
             <td class="text-right">{{ number(cache.lazy_hit_total) }}</td>
@@ -113,7 +113,7 @@ onBeforeUnmount(() => window.removeEventListener('mosdns-log-refresh', load))
             <td class="text-right"><button class="btn-link" type="button" @click="viewing = cache">{{ number(cache.size_current) }}</button></td>
             <td class="rt-col-actions">
               <div class="rt-row-actions">
-                <button class="rt-row-icon danger" type="button" :title="clearing[cache.tag] ? '清空中…' : '清空'" :aria-label="`清空 ${cache.tag}`" :disabled="Boolean(clearing[cache.tag]) || !supportsOperation('cache.manage')" @click="clearOne(cache)">
+                <button class="rt-row-icon danger" type="button" :title="clearing[cache.tag] ? '清空中…' : '清空'" :aria-label="`清空 ${cache.name}`" :disabled="Boolean(clearing[cache.tag]) || !supportsOperation('cache.manage')" @click="clearOne(cache)">
                   <AppIcon name="trash" :size="16" />
                 </button>
               </div>

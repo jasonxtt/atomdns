@@ -3533,3 +3533,91 @@ a.btn {
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* Tunable numbers: cache parameters and learning validity/capacity. */
+.rt-duration {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rt-cache-advanced {
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--ink-1);
+}
+
+.rt-cache-settings td .rt-flag-mark {
+  margin-top: 4px;
+}
+
+.rt-cache-settings td .rt-setting-note,
+.rt-cache-settings td .rt-setting-error,
+.rt-learning-categories td .rt-setting-error {
+  margin: 4px 0 0;
+  font-size: 0.78rem;
+}
+
+.rt-row-actions .btn {
+  height: 28px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.rt-learning-interval {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.rt-learning-interval-label {
+  font-weight: 600;
+}
+
+.rt-learning-interval .btn {
+  height: 28px;
+  padding: 0 12px;
+}
+
+.rt-cache-settings td > .rt-setting-input {
+  width: 128px;
+}
+
+.rt-cache-settings .rt-row-actions {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rt-learning-categories td,
+.rt-learning-categories th {
+  white-space: nowrap;
+}
+
+.rt-learning-categories td .rt-setting-input-short {
+  width: 84px;
+}
+
+.rt-learning-categories .rt-row-actions {
+  flex-wrap: nowrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.rt-learning-categories td .rt-flag-mark {
+  display: flex;
+  width: fit-content;
+  margin-top: 4px;
+}
+
+.rt-tag-note {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink-1);
+  font-size: 0.75rem;
+  opacity: 0.8;
+}

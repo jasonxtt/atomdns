@@ -1236,3 +1236,377 @@ fn requery_flushes_the_caches_but_never_a_learned_category() {
         task.await.unwrap();
     });
 }
+
+// ----- tunable numbers (cache and learner settings) ----------------------------------
+
+fn settings_file(tree: &Tree) -> serde_json::Value {
+    json(&tree.text("webinfo/settings.json"))
+}
+
+#[test]
+fn the_cache_numbers_are_tuned_through_the_api_and_a_change_replaces_the_cache() {
+    let tree = Tree::new("cache-tuning");
+    let ports = ports();
+    let upstream = Upstream::start();
+    config(&tree, &ports, &upstream, "", "");
+    let host = assemble(compile(&tree));
+    host.block_on(async {
+        let (shutdown, task) = serve(&host).await;
+        let listed = json(&api(ports.api, "GET", "/api/v1/cache/settings", "").await.body);
+        assert_eq!(listed["settings_file"], "webinfo/settings.json");
+        let caches = listed["caches"].as_array().unwrap();
+        assert_eq!(caches.len(), 1);
+        assert_eq!(caches[0]["tag"], "cache");
+        assert_eq!(
+            caches[0]["size"],
+            serde_json::json!({"value": 1024, "default": 1024, "modified": false})
+        );
+        assert_eq!(caches[0]["lazy_cache_ttl"]["value"], 0);
+        assert_eq!(caches[0]["dump_interval"]["value"], 600);
+
+        // The second query is a cache hit.
+        assert_eq!(a(ports.dns, "plain.test").await, 0);
+        assert_eq!(a(ports.dns, "plain.test").await, 0);
+        assert_eq!(upstream.count("plain.test", 1), 1);
+
+        let changed = api(
+            ports.api,
+            "POST",
+            "/api/v1/cache/settings/cache",
+            r#"{"size":5000,"lazy_cache_ttl":604800}"#,
+        )
+        .await;
+        assert_eq!(changed.status, 200, "{}", changed.body);
+        let changed = json(&changed.body);
+        assert_eq!(changed["reset"], serde_json::json!(["cache"]));
+        assert_eq!(changed["cache"]["size"]["value"], 5000);
+        assert_eq!(changed["cache"]["size"]["modified"], true);
+        assert_eq!(changed["cache"]["dump_interval"]["modified"], false);
+        assert_eq!(
+            settings_file(&tree),
+            serde_json::json!({"version": 1, "caches": {"cache": {"size": 5000, "lazy_cache_ttl": 604_800}}})
+        );
+        let effective = json(&api(ports.api, "GET", "/api/v1/settings/effective", "").await.body);
+        assert!(
+            effective["items"].as_array().unwrap().iter().any(|item| item["kind"] == "cache"
+                && item["field"] == "size"
+                && item["value"] == "5000"
+                && item["source"] == "settings"),
+            "{effective}"
+        );
+        // The cache is a new, empty one.
+        assert_eq!(a(ports.dns, "plain.test").await, 0);
+        assert_eq!(upstream.count("plain.test", 1), 2);
+
+        // The same values again change nothing; a value equal to the YAML one
+        // is not stored.
+        let again = json(
+            &api(
+                ports.api,
+                "POST",
+                "/api/v1/cache/settings/cache",
+                r#"{"size":5000}"#,
+            )
+            .await
+            .body,
+        );
+        assert_eq!(again["reset"], serde_json::json!([]));
+        assert_eq!(a(ports.dns, "plain.test").await, 0);
+        assert_eq!(upstream.count("plain.test", 1), 2, "still cached");
+        let back = json(
+            &api(
+                ports.api,
+                "POST",
+                "/api/v1/cache/settings/cache",
+                r#"{"size":1024}"#,
+            )
+            .await
+            .body,
+        );
+        assert_eq!(back["reset"], serde_json::json!(["cache"]));
+        assert_eq!(
+            settings_file(&tree),
+            serde_json::json!({"version": 1, "caches": {"cache": {"lazy_cache_ttl": 604_800}}})
+        );
+
+        // Bad requests change nothing.
+        for (method, path, body, status) in [
+            ("POST", "/api/v1/cache/settings/cache", r#"{"size":10}"#, 400),
+            ("POST", "/api/v1/cache/settings/cache", r#"{"size":"big"}"#, 400),
+            ("POST", "/api/v1/cache/settings/cache", r#"{"size":1.5}"#, 400),
+            ("POST", "/api/v1/cache/settings/cache", r#"{"dump_interval":5}"#, 400),
+            ("POST", "/api/v1/cache/settings/cache", r#"{"bogus":1}"#, 400),
+            ("POST", "/api/v1/cache/settings/cache", "{}", 400),
+            ("POST", "/api/v1/cache/settings/cache", "not json", 400),
+            ("POST", "/api/v1/cache/settings/nothing", r#"{"size":5000}"#, 404),
+            ("GET", "/api/v1/cache/settings/cache", "", 405),
+            ("PUT", "/api/v1/cache/settings", "", 405),
+        ] {
+            let reply = api(ports.api, method, path, body).await;
+            assert_eq!(reply.status, status, "{method} {path} {body}: {}", reply.body);
+        }
+        assert_eq!(
+            settings_file(&tree),
+            serde_json::json!({"version": 1, "caches": {"cache": {"lazy_cache_ttl": 604_800}}})
+        );
+
+        // `null` restores one field; DELETE restores them all.
+        let nulled = json(
+            &api(
+                ports.api,
+                "POST",
+                "/api/v1/cache/settings/cache",
+                r#"{"lazy_cache_ttl":null}"#,
+            )
+            .await
+            .body,
+        );
+        assert_eq!(nulled["cache"]["lazy_cache_ttl"]["modified"], false);
+        assert_eq!(settings_file(&tree), serde_json::json!({"version": 1}));
+        api(
+            ports.api,
+            "POST",
+            "/api/v1/cache/settings/cache",
+            r#"{"dump_interval":3600}"#,
+        )
+        .await;
+        let deleted = json(&api(ports.api, "DELETE", "/api/v1/cache/settings/cache", "").await.body);
+        assert_eq!(deleted["cache"]["dump_interval"]["value"], 600);
+        assert_eq!(deleted["reset"], serde_json::json!(["cache"]));
+        assert_eq!(settings_file(&tree), serde_json::json!({"version": 1}));
+        shutdown.cancel();
+        task.await.unwrap();
+    });
+}
+
+#[test]
+fn the_learner_numbers_are_tuned_through_the_api_and_the_learned_names_stay() {
+    let tree = Tree::new("learner-tuning");
+    let ports = ports();
+    let upstream = Upstream::start();
+    config(&tree, &ports, &upstream, "", "");
+    let host = assemble(compile(&tree));
+    host.block_on(async {
+        let (shutdown, task) = serve(&host).await;
+        let listed = json(&api(ports.api, "GET", "/api/v1/learning/settings", "").await.body);
+        assert_eq!(
+            listed["write_interval"],
+            serde_json::json!({"value": 3600, "default": 3600, "modified": false})
+        );
+        let categories = listed["categories"].as_array().unwrap();
+        assert_eq!(categories.len(), 5);
+        assert_eq!(categories[0]["tag"], "my_sv4list", "declaration order");
+        assert_eq!(categories[0]["ttl"]["value"], 1000);
+        assert_eq!(categories[1]["tag"], "my_realiplist");
+        assert_eq!(categories[1]["ttl"]["default"], 100);
+        assert_eq!(categories[1]["max_entries"]["value"], 20000);
+
+        for name in ["direct1.test", "direct2.test", "direct3.test"] {
+            assert_eq!(a(ports.dns, name).await, 0);
+        }
+        assert_eq!(a(ports.dns, "direct1.test").await, 11);
+
+        let changed = api(
+            ports.api,
+            "POST",
+            "/api/v1/learning/settings",
+            r#"{"write_interval":600,"categories":{"my_realiplist":{"ttl":7200,"max_entries":50},"my_nov6list":{"ttl":120}}}"#,
+        )
+        .await;
+        assert_eq!(changed.status, 200, "{}", changed.body);
+        let changed = json(&changed.body);
+        assert_eq!(changed["write_interval"]["value"], 600);
+        assert_eq!(changed["categories"][1]["ttl"]["modified"], true);
+        assert_eq!(changed["categories"][2]["ttl"]["modified"], false);
+        assert_eq!(
+            settings_file(&tree),
+            serde_json::json!({"version": 1, "learning": {
+                "write_interval": 600,
+                "categories": {
+                    "my_realiplist": {"ttl": 7200, "max_entries": 50},
+                    "my_nov6list": {"ttl": 120}
+                }
+            }})
+        );
+        let status = json(&api(ports.api, "GET", "/plugins/route_learner/status", "").await.body);
+        assert_eq!(status["write_interval_seconds"], 600);
+        let direct = status["categories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|category| category["tag"] == "my_realiplist")
+            .unwrap();
+        assert_eq!(direct["ttl_seconds"], 7200);
+        assert_eq!(direct["max_entries"], 50);
+        assert_eq!(direct["entries"], 3, "what was learned stays");
+        assert_eq!(a(ports.dns, "direct2.test").await, 11);
+
+        // Lowering the capacity keeps that many names.
+        api(
+            ports.api,
+            "POST",
+            "/api/v1/learning/settings",
+            r#"{"categories":{"my_realiplist":{"max_entries":2}}}"#,
+        )
+        .await;
+        let status = json(&api(ports.api, "GET", "/plugins/route_learner/status", "").await.body);
+        let direct = status["categories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|category| category["tag"] == "my_realiplist")
+            .unwrap();
+        assert_eq!(direct["entries"], 2);
+        assert_eq!(status["counters"]["evicted"], 1);
+
+        // Values equal to the YAML ones are not stored; null restores.
+        let restored = api(
+            ports.api,
+            "POST",
+            "/api/v1/learning/settings",
+            r#"{"write_interval":3600,"categories":{"my_realiplist":{"ttl":100,"max_entries":null},"my_nov6list":{"ttl":null}}}"#,
+        )
+        .await;
+        assert_eq!(restored.status, 200, "{}", restored.body);
+        assert_eq!(settings_file(&tree), serde_json::json!({"version": 1}));
+
+        // Bad requests change nothing.
+        api(
+            ports.api,
+            "POST",
+            "/api/v1/learning/settings",
+            r#"{"write_interval":900}"#,
+        )
+        .await;
+        let kept = settings_file(&tree);
+        for (method, body, status) in [
+            ("POST", r#"{"write_interval":10}"#, 400),
+            ("POST", r#"{"categories":{"my_realiplist":{"ttl":10}}}"#, 400),
+            ("POST", r#"{"categories":{"my_realiplist":{"max_entries":0}}}"#, 400),
+            ("POST", r#"{"categories":{"my_realiplist":{"max_entries":262145}}}"#, 400),
+            ("POST", r#"{"categories":{"my_realiplist":{"mark":3}}}"#, 400),
+            ("POST", r#"{"categories":{"my_realiplist":5}}"#, 400),
+            ("POST", r#"{"categories":{"nothing":{"ttl":100}}}"#, 404),
+            ("POST", r#"{"bogus":1}"#, 400),
+            ("POST", "{}", 400),
+            ("PUT", "{}", 405),
+        ] {
+            let reply = api(ports.api, method, "/api/v1/learning/settings", body).await;
+            assert_eq!(reply.status, status, "{method} {body}: {}", reply.body);
+        }
+        assert_eq!(settings_file(&tree), kept);
+        let deleted = api(ports.api, "DELETE", "/api/v1/learning/settings", "").await;
+        assert_eq!(deleted.status, 200);
+        assert_eq!(settings_file(&tree), serde_json::json!({"version": 1}));
+        shutdown.cancel();
+        task.await.unwrap();
+    });
+}
+
+#[test]
+fn caches_and_learning_rules_carry_display_labels() {
+    let tree = Tree::new("labels");
+    let ports = ports();
+    let upstream = Upstream::start();
+    config(&tree, &ports, &upstream, "", "");
+    // The cache and the rule that learns direct names get a label; the other rules do not.
+    let yaml = tree
+        .text("config.yaml")
+        .replace(
+            r#"args: {dump_file: "cache/c.gz"}"#,
+            r#"args: {dump_file: "cache/c.gz", label: "全局缓存·兼容模式"}"#,
+        )
+        .replace(
+            "{tag: learn_direct, type: route_learn, args: {learner: route_learner,",
+            r#"{tag: learn_direct, type: route_learn, args: {label: "探测到国内 IP", learner: route_learner,"#,
+        );
+    tree.write("config.yaml", &yaml);
+    let host = assemble(compile(&tree));
+    host.block_on(async {
+        let (shutdown, task) = serve(&host).await;
+        let inventory = json(
+            &api(ports.api, "GET", "/api/v1/cache/inventory", "")
+                .await
+                .body,
+        );
+        assert_eq!(
+            inventory["caches"][0],
+            serde_json::json!({"tag": "cache", "label": "全局缓存·兼容模式"})
+        );
+        let listed = json(
+            &api(ports.api, "GET", "/api/v1/cache/settings", "")
+                .await
+                .body,
+        );
+        assert_eq!(listed["caches"][0]["label"], "全局缓存·兼容模式");
+
+        assert_eq!(a(ports.dns, "direct1.test").await, 0);
+        assert_eq!(a(ports.dns, "proxy1.test").await, 0);
+        let entries = json(
+            &api(
+                ports.api,
+                "GET",
+                "/plugins/route_learner/entries?limit=50",
+                "",
+            )
+            .await
+            .body,
+        );
+        let find = |name: &str| {
+            entries["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["name"] == name)
+                .unwrap_or_else(|| panic!("{name}: {entries}"))
+                .clone()
+        };
+        assert_eq!(find("direct1.test")["reason"], "learn_direct");
+        assert_eq!(find("direct1.test")["reason_label"], "探测到国内 IP");
+        assert_eq!(find("proxy1.test")["reason"], "learn_proxy");
+        assert_eq!(find("proxy1.test")["reason_label"], "");
+
+        // Renaming a cache never replaces it: the second query is still a hit.
+        assert_eq!(a(ports.dns, "plain.test").await, 0);
+        assert_eq!(a(ports.dns, "plain.test").await, 0);
+        assert_eq!(upstream.count("plain.test", 1), 1);
+        shutdown.cancel();
+        task.await.unwrap();
+    });
+}
+
+#[test]
+fn a_bad_label_is_a_load_error_with_its_path() {
+    let tree = Tree::new("bad-label");
+    let ports = ports();
+    let upstream = Upstream::start();
+    config(&tree, &ports, &upstream, "", "");
+    let base = tree.text("config.yaml");
+    for (from, to, path) in [
+        (
+            r#"args: {dump_file: "cache/c.gz"}"#,
+            r#"args: {dump_file: "cache/c.gz", label: ""}"#,
+            "cache",
+        ),
+        (
+            r#"args: {dump_file: "cache/c.gz"}"#,
+            r#"args: {dump_file: "cache/c.gz", label: 5}"#,
+            "cache",
+        ),
+        (
+            "{tag: learn_direct, type: route_learn, args: {learner: route_learner,",
+            &format!(
+                "{{tag: learn_direct, type: route_learn, args: {{label: \"{}\", learner: route_learner,",
+                "长".repeat(65)
+            ),
+            "route_learn",
+        ),
+    ] {
+        tree.write("config.yaml", &base.replace(from, to));
+        let error = mosdns_native_host::load_and_compile(&tree.path("config.yaml"))
+            .err()
+            .unwrap_or_else(|| panic!("{path}: a bad label must fail"))
+            .to_string();
+        assert!(error.contains("label"), "{path}: {error}");
+    }
+}
