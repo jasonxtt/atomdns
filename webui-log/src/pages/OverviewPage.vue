@@ -1,6 +1,6 @@
 <script setup>
 import { capabilityState, operationReason, supportsOperation } from '../api/runtimeCapabilities'
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { getJSON, getJSONWithHeaders, getText } from '../api/http'
 import AppIcon from '../components/AppIcon.vue'
 import DetailField from '../components/DetailField.vue'
@@ -41,7 +41,9 @@ const stats = reactive({
 })
 const process = reactive({
   cpuPercent: null,
-  residentBytes: null
+  residentBytes: null,
+  startTime: null,
+  sampledAt: 0
 })
 const cacheHit = ref(null)
 const clientCount = ref(null)
@@ -275,7 +277,19 @@ function distinctCountText(count) {
   return count >= RANK_SCAN_LIMIT ? `${RANK_SCAN_LIMIT}+` : count.toLocaleString('zh-CN')
 }
 
-const STAT_ICONS = { queries: 'activity', latency: 'timer', cache: 'database', clients: 'users', domains: 'globe', cpu: 'cpu', memory: 'memory' }
+const STAT_ICONS = { queries: 'activity', latency: 'timer', cache: 'database', clients: 'users', domains: 'globe', uptime: 'power', cpu: 'cpu', memory: 'memory' }
+
+// 运行时间: since the process started, as of the last refresh.
+function uptimeText(startTime, at) {
+  const seconds = at / 1000 - startTime
+  if (!Number.isFinite(seconds) || seconds < 0) return '--'
+  const days = Math.floor(seconds / 86400)
+  const hours = Math.floor((seconds % 86400) / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  if (days > 0) return `${days} 天 ${hours} 小时`
+  if (hours > 0) return `${hours} 小时 ${minutes} 分钟`
+  return `${minutes} 分钟`
+}
 const statCards = computed(() => {
   const coverage = stats.coverage || '审计保留记录'
   const memoryMiB = process.residentBytes === null ? null : process.residentBytes / 1024 / 1024
@@ -286,6 +300,7 @@ const statCards = computed(() => {
     { key: 'cache', title: '缓存命中', value: cacheHit.value === null ? '--' : `${cacheHit.value.toFixed(1)}%`, note: '全部命名缓存的累计计数', tone: cacheHitTone(cacheHit.value) },
     { key: 'clients', title: '客户端数量', value: distinctCountText(clientCount.value), note: coverage, tone: '' },
     { key: 'domains', title: '域名统计', value: domainCount.value === null ? '--' : domainCount.value.toLocaleString('zh-CN'), note: `不同域名 · ${coverage}`, tone: '' },
+    { key: 'uptime', title: '运行时间', value: process.startTime === null ? '--' : uptimeText(process.startTime, process.sampledAt), note: processReason || (process.startTime === null ? '进程启动至今' : `启动于 ${formatDateTime(process.startTime * 1000)}`), tone: '' },
     { key: 'cpu', title: 'CPU 占用', value: process.cpuPercent === null ? '--' : `${process.cpuPercent.toFixed(1)}%`, note: processReason || '单核百分比 · 两次刷新之间', tone: cpuTone(process.cpuPercent) },
     { key: 'memory', title: '内存占用', value: memoryMiB === null ? '--' : `${memoryMiB.toFixed(1)} MiB`, note: processReason || '常驻内存 (RSS)', tone: memoryTone(process.residentBytes) }
   ]
@@ -345,6 +360,7 @@ const upstreamStatSections = computed(() => {
     sections.push({
       key: group,
       title: groupMeta.title,
+      shortTitle: groupMeta.shortTitle || groupMeta.title,
       rows: enabledRows
     })
   })
@@ -681,6 +697,8 @@ function closeRankingDetail() {
 function applyProcessMetrics(metricsText, at) {
   const figures = parseProcessMetrics(metricsText)
   process.residentBytes = figures.residentBytes
+  process.startTime = figures.startTime
+  process.sampledAt = at
   if (figures.cpuSeconds !== null) {
     const sample = { cpuSeconds: figures.cpuSeconds, at }
     const percent = cpuPercent(cpuSample, sample)
@@ -799,14 +817,54 @@ function handleGlobalRefresh() {
   reloadOverview(false)
 }
 
+// The 分组, 类型 and 地址 columns of 上游 DNS 统计 appear only when the card is wide enough for them to
+// fit on one line. Without the 分组 column a group is a heading row above its upstreams.
+const UPSTREAM_COLUMN_STEPS = [
+  { group: true, type: true, address: true },
+  { group: true, type: false, address: true },
+  { group: true, type: false, address: false },
+  { group: false, type: false, address: false }
+]
+const upstreamWrap = ref(null)
+const showUpstreamGroup = ref(false)
+const showUpstreamType = ref(false)
+const showUpstreamAddress = ref(false)
+const upstreamColumnCount = computed(() => 5 + [showUpstreamGroup, showUpstreamType, showUpstreamAddress].filter((flag) => flag.value).length)
+let upstreamObserver = null
+let upstreamWidth = 0
+
+async function fitUpstreamColumns() {
+  const wrap = upstreamWrap.value
+  if (!wrap) return
+  for (const step of UPSTREAM_COLUMN_STEPS) {
+    showUpstreamGroup.value = step.group
+    showUpstreamType.value = step.type
+    showUpstreamAddress.value = step.address
+    await nextTick()
+    if (wrap.scrollWidth <= wrap.clientWidth) return
+  }
+}
+
+watch(upstreamStatSections, () => nextTick(fitUpstreamColumns))
+
 onMounted(() => {
   reloadOverview(false)
   window.addEventListener('mosdns-log-refresh', handleGlobalRefresh)
+  if (typeof ResizeObserver === 'function' && upstreamWrap.value) {
+    upstreamObserver = new ResizeObserver(() => {
+      const width = upstreamWrap.value?.clientWidth || 0
+      if (width === upstreamWidth) return
+      upstreamWidth = width
+      fitUpstreamColumns()
+    })
+    upstreamObserver.observe(upstreamWrap.value)
+  }
 })
 
 onBeforeUnmount(() => {
   if (cpuFollowUpTimerId) window.clearTimeout(cpuFollowUpTimerId)
   window.removeEventListener('mosdns-log-refresh', handleGlobalRefresh)
+  upstreamObserver?.disconnect()
 })
 </script>
 
@@ -835,11 +893,14 @@ onBeforeUnmount(() => {
           <span v-if="integrationErrors.metrics">指标不可用：{{ integrationErrors.metrics }}</span>
           <span v-if="integrationErrors.upstreamConfig">上游配置不可用：{{ integrationErrors.upstreamConfig }}</span>
         </div>
-        <div class="flat-table-wrap">
-          <table class="flat-table upstream-stats-table">
+        <div ref="upstreamWrap" class="flat-table-wrap">
+          <table class="flat-table upstream-stats-table" :class="{ 'upstream-stats-wide': showUpstreamGroup || showUpstreamType || showUpstreamAddress }">
             <thead>
               <tr>
+                <th v-if="showUpstreamGroup">分组</th>
                 <th>名称</th>
+                <th v-if="showUpstreamType">类型</th>
+                <th v-if="showUpstreamAddress">地址</th>
                 <th class="text-right" title="平均响应时间（毫秒）">平均 ms</th>
                 <th class="text-right">请求数</th>
                 <th class="text-right">采纳率</th>
@@ -848,23 +909,26 @@ onBeforeUnmount(() => {
             </thead>
             <tbody v-if="loading">
               <tr>
-                <td colspan="5" class="empty">加载中...</td>
+                <td :colspan="upstreamColumnCount" class="empty">加载中...</td>
               </tr>
             </tbody>
             <tbody v-else-if="upstreamStatSections.length === 0">
               <tr>
-                <td colspan="5" class="empty">暂无已启用上游统计</td>
+                <td :colspan="upstreamColumnCount" class="empty">暂无已启用上游统计</td>
               </tr>
             </tbody>
             <tbody v-for="section in upstreamStatSections" v-else :key="section.key">
-              <tr class="upstream-stats-group-row">
-                <td colspan="5">
+              <tr v-if="!showUpstreamGroup" class="upstream-stats-group-row">
+                <td :colspan="upstreamColumnCount">
                   <span class="upstream-stats-group-name">{{ section.title }}</span>
                   <span class="upstream-stats-group-count">{{ section.rows.length }}</span>
                 </td>
               </tr>
-              <tr v-for="row in section.rows" :key="row.key">
-                <td class="upstream-stats-name-cell" :title="`${row.typeLabel} · ${row.address}`">{{ row.name }}</td>
+              <tr v-for="(row, index) in section.rows" :key="row.key" :class="{ 'upstream-stats-last': index === section.rows.length - 1 }">
+                <td v-if="showUpstreamGroup && index === 0" class="upstream-stats-group-cell" :rowspan="section.rows.length" :title="section.title">{{ section.shortTitle }}</td>
+                <td class="upstream-stats-name-cell":title="`${row.typeLabel} · ${row.address}`">{{ row.name }}</td>
+                <td v-if="showUpstreamType" class="upstream-stats-meta-cell">{{ row.typeLabel }}</td>
+                <td v-if="showUpstreamAddress" class="upstream-stats-meta-cell" :title="row.address">{{ row.address }}</td>
                 <td class="text-right" :class="toneClass(row.latencyTone)" :title="row.avgLatencyText === '-' ? '-' : `${row.avgLatencyText} ms`">
                   {{ row.avgLatencyText }}
                 </td>
@@ -909,6 +973,7 @@ onBeforeUnmount(() => {
               <component :is="segment.item ? 'button' : 'div'" class="legend-row" :type="segment.item ? 'button' : undefined" @click="segment.item && openDomainSetDetail(segment.item)">
                 <i class="legend-dot" :style="{ background: segment.color }"></i>
                 <span class="legend-name" :title="`${segment.label} · ${segment.count.toLocaleString()} 次`">{{ segment.label }}</span>
+                <span class="legend-count">{{ segment.count.toLocaleString() }}</span>
                 <span class="legend-pct">{{ formatPercent(segment.percent) }}</span>
               </component>
             </li>
@@ -1223,6 +1288,59 @@ onBeforeUnmount(() => {
 .upstream-stats-name-cell {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* With the extra columns the table sizes itself to its text; the wrapper measures whether that fits. */
+.upstream-stats-wide {
+  table-layout: auto;
+  min-width: 0;
+}
+
+.upstream-stats-wide td,
+.upstream-stats-wide th {
+  white-space: nowrap;
+}
+
+.upstream-stats-table.upstream-stats-wide th {
+  width: auto;
+}
+
+.upstream-stats-table.upstream-stats-wide th:nth-last-child(-n + 4) {
+  width: 88px;
+}
+
+/* The group's name sits once in the first column, centred over its rows, and a stronger line closes each group. */
+.upstream-stats-group-cell {
+  width: 1%;
+  padding-right: 18px;
+  color: var(--ink-0);
+  font-weight: 600;
+  vertical-align: middle;
+}
+
+.upstream-stats-wide .upstream-stats-last > td,
+.upstream-stats-wide .upstream-stats-group-cell {
+  border-bottom-color: var(--rp-hl-high);
+}
+
+.upstream-stats-table tbody tr:hover > td.upstream-stats-group-cell {
+  background: transparent;
+}
+
+.upstream-stats-table tbody tr:hover > td.upstream-stats-group-cell + td {
+  border-top-left-radius: var(--rp-r-xl);
+  border-bottom-left-radius: var(--rp-r-xl);
+}
+
+.upstream-stats-meta-cell {
+  max-width: 440px;
+  overflow: hidden;
+  color: var(--ink-1);
+  text-overflow: ellipsis;
+}
+
+.upstream-stats-wide .upstream-stats-name-cell {
+  max-width: 220px;
 }
 
 .overview-unavailable {

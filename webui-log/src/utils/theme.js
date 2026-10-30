@@ -25,15 +25,19 @@ function readStoredMode(storage) {
 export function createThemeController({ root, storage, matchMedia } = {}) {
   const query = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : null
   const mode = ref(readStoredMode(storage))
+  const resolved = ref('light')
   const apply = () => {
     const theme = resolveTheme(mode.value, Boolean(query?.matches))
     root?.setAttribute('data-theme', theme)
+    resolved.value = theme
     return theme
   }
   query?.addEventListener?.('change', () => { if (mode.value === 'system') apply() })
   apply()
   return {
     get mode() { return mode.value },
+    // The 'light' or 'dark' in effect now, whatever the mode.
+    get theme() { return resolved.value },
     setMode(next) {
       mode.value = normalizeThemeMode(next)
       try { storage?.setItem(THEME_STORAGE_KEY, mode.value) } catch { /* private mode: keep it for this page */ }

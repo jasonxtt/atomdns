@@ -1,9 +1,9 @@
 const BUILTIN_GROUP_DEFS = [
-  { key: 'domestic', title: '国内直连上游', tone: 'domestic' },
-  { key: 'nocnfake', title: '国外 FakeIP 上游', tone: 'foreign-fake' },
-  { key: 'foreign', title: '国外代理上游', tone: 'foreign-proxy' },
-  { key: 'foreignecs', title: '国外 ECS 上游', tone: 'foreign-ecs' },
-  { key: 'cnfake', title: '国内 FakeIP 上游', tone: 'domestic-fake' }
+  { key: 'domestic', title: '国内直连上游', shortTitle: '国内组', tone: 'domestic' },
+  { key: 'nocnfake', title: '国外 FakeIP 上游', shortTitle: 'FakeIP组', tone: 'foreign-fake' },
+  { key: 'foreign', title: '国外代理上游', shortTitle: '国外组', tone: 'foreign-proxy' },
+  { key: 'foreignecs', title: '国外 ECS 上游', shortTitle: 'ECS组', tone: 'foreign-ecs' },
+  { key: 'cnfake', title: '国内 FakeIP 上游', shortTitle: '国内FakeIP组', tone: 'domestic-fake' }
 ]
 
 const PROTOCOL_LABELS = {

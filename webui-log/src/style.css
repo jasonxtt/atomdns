@@ -1076,6 +1076,7 @@ tr.disabled {
 }
 
 .overview-page {
+  container: overview / inline-size;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -1920,7 +1921,9 @@ label.switch-table *,
 .rt-main {
   grid-area: main;
   min-width: 0;
-  margin: 0 16px 16px 0;
+  /* Content stops growing at 1600px; on a wider window the panel is centred in the space right of the sidebar. */
+  max-width: 1600px;
+  margin: 0 16px 16px max(0px, calc((100vw - var(--rp-sidebar-width) - 1616px) / 2));
   padding: 24px 28px 32px;
   border-radius: var(--rp-r-2xl);
   background: var(--panel);
@@ -1969,11 +1972,24 @@ label.switch-table *,
   margin: 0;
 }
 
+/* Eight cards: 2 × 4, then 4 × 2, then 8 × 1 as the page widens, so no row is ever left short. */
 .rt-stat-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 16px;
+}
+
+@container overview (min-width: 720px) {
+  .rt-stat-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@container overview (min-width: 1500px) {
+  .rt-stat-grid {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+  }
 }
 
 .rt-stat {
@@ -2982,6 +2998,50 @@ button.legend-row:hover {
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
+}
+
+.legend-count {
+  display: none;
+  color: var(--ink-1);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* The 分流统计 card follows its own width, not the window's: the donut moves to the left of the
+   legend, and then the counts appear next to the percentages. */
+.rt-overview-row > .rank-card {
+  align-self: start;
+  container-type: inline-size;
+}
+
+@container (min-width: 380px) {
+  .donut-card {
+    flex-direction: row;
+    align-items: center;
+    gap: 20px;
+  }
+
+  .donut-wrap {
+    align-self: center;
+    width: 150px;
+    height: 150px;
+  }
+}
+
+@container (min-width: 440px) {
+  .donut-wrap {
+    width: 168px;
+    height: 168px;
+  }
+
+  .legend-row {
+    grid-template-columns: 10px minmax(0, 1fr) auto 56px;
+  }
+
+  .legend-count {
+    display: block;
+  }
 }
 
 @media (max-width: 900px) {
