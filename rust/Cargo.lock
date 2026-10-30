@@ -68,6 +68,93 @@ dependencies = [
 ]
 
 [[package]]
+name = "atomdns-cache-core"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "moka",
+]
+
+[[package]]
+name = "atomdns-dns-core"
+version = "0.1.0"
+dependencies = [
+ "atomdns-cache-core",
+]
+
+[[package]]
+name = "atomdns-matcher-core"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "regex",
+]
+
+[[package]]
+name = "atomdns-native-host"
+version = "0.6.0"
+dependencies = [
+ "atomdns-cache-core",
+ "atomdns-dns-core",
+ "atomdns-matcher-core",
+ "atomdns-sequence-core",
+ "atomdns-upstream-core",
+ "base64",
+ "bytes",
+ "flate2",
+ "getrandom 0.4.3",
+ "h2",
+ "hickory-proto",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "rcgen",
+ "ring",
+ "rustix",
+ "rustls",
+ "rustls-native-certs",
+ "ruzstd",
+ "serde",
+ "serde_json",
+ "socket2 0.6.5",
+ "time",
+ "tokio",
+ "tokio-rustls",
+ "url",
+ "yaml_serde",
+]
+
+[[package]]
+name = "atomdns-sequence-core"
+version = "0.1.0"
+dependencies = [
+ "atomdns-dns-core",
+]
+
+[[package]]
+name = "atomdns-upstream-core"
+version = "0.1.0"
+dependencies = [
+ "atomdns-dns-core",
+ "base64",
+ "getrandom 0.4.3",
+ "h2",
+ "h3",
+ "h3-quinn",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "quinn",
+ "rcgen",
+ "rustls",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "url",
+]
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -726,93 +813,6 @@ dependencies = [
  "smallvec",
  "tagptr",
  "uuid",
-]
-
-[[package]]
-name = "atomdns-cache-core"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "moka",
-]
-
-[[package]]
-name = "atomdns-dns-core"
-version = "0.1.0"
-dependencies = [
- "atomdns-cache-core",
-]
-
-[[package]]
-name = "atomdns-matcher-core"
-version = "0.1.0"
-dependencies = [
- "flate2",
- "regex",
-]
-
-[[package]]
-name = "atomdns-native-host"
-version = "0.5.2"
-dependencies = [
- "base64",
- "bytes",
- "flate2",
- "getrandom 0.4.3",
- "h2",
- "hickory-proto",
- "http",
- "http-body-util",
- "hyper",
- "hyper-util",
- "atomdns-cache-core",
- "atomdns-dns-core",
- "atomdns-matcher-core",
- "atomdns-sequence-core",
- "atomdns-upstream-core",
- "rcgen",
- "ring",
- "rustix",
- "rustls",
- "rustls-native-certs",
- "ruzstd",
- "serde",
- "serde_json",
- "socket2 0.6.5",
- "time",
- "tokio",
- "tokio-rustls",
- "url",
- "yaml_serde",
-]
-
-[[package]]
-name = "atomdns-sequence-core"
-version = "0.1.0"
-dependencies = [
- "atomdns-dns-core",
-]
-
-[[package]]
-name = "atomdns-upstream-core"
-version = "0.1.0"
-dependencies = [
- "base64",
- "getrandom 0.4.3",
- "h2",
- "h3",
- "h3-quinn",
- "http-body-util",
- "hyper",
- "hyper-util",
- "atomdns-dns-core",
- "quinn",
- "rcgen",
- "rustls",
- "tokio",
- "tokio-rustls",
- "tokio-util",
- "url",
 ]
 
 [[package]]
