@@ -9,17 +9,16 @@ import CommandSearch from './components/CommandSearch.vue'
 import ConfirmBubbleHost from './components/ConfirmBubbleHost.vue'
 import { NAV_MODULES, expandedAfterRoute, inModule } from './navigation'
 import { loadAutoRefreshState } from './utils/autoRefresh'
-import { THEME_LABELS, THEME_MODES } from './utils/theme'
 import { installBeforeUnload } from './utils/unsaved'
 
 const route = useRoute()
 const router = useRouter()
 const theme = inject('theme')
-const THEME_ICONS = { system: 'monitor', light: 'sun', dark: 'moon' }
-const themeIcon = computed(() => THEME_ICONS[theme.mode])
-const themeTitle = computed(() => `主题：${THEME_LABELS[theme.mode]}（点击切换）`)
-function cycleTheme() {
-  theme.setMode(THEME_MODES[(THEME_MODES.indexOf(theme.mode) + 1) % THEME_MODES.length])
+// The button switches between 浅色 and 深色 and shows the one in effect; 跟随系统 is chosen in 系统管理.
+const themeIcon = computed(() => (theme.theme === 'dark' ? 'moon' : 'sun'))
+const themeTitle = computed(() => (theme.theme === 'dark' ? '当前深色，点击切换为浅色' : '当前浅色，点击切换为深色'))
+function toggleTheme() {
+  theme.setMode(theme.theme === 'dark' ? 'light' : 'dark')
 }
 
 // A module owns `/<id>` and everything below it (`#/logs/diagnostic` keeps 日志 highlighted).
@@ -174,7 +173,7 @@ onBeforeUnmount(() => {
         <button class="rt-icon-btn" type="button" title="刷新当前页面数据" aria-label="刷新当前页面数据" @click="triggerGlobalRefresh">
           <AppIcon name="refresh" />
         </button>
-        <button class="rt-icon-btn" type="button" :title="themeTitle" :aria-label="themeTitle" @click="cycleTheme">
+        <button class="rt-icon-btn" type="button" :title="themeTitle" :aria-label="themeTitle" @click="toggleTheme">
           <AppIcon :name="themeIcon" />
         </button>
       </div>
