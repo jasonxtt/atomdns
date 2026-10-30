@@ -6,14 +6,14 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use mosdns_matcher_core::MixMatcher;
-use mosdns_sequence_core::{
+use atomdns_matcher_core::MixMatcher;
+use atomdns_sequence_core::{
     ExecutableId, ExecutableSpec, ExecutableTarget, ExecutableTargetSpec, ExecutionControl,
     ExecutionError, ExecutionMachine, ExecutionState, ExternalRef, ExternalSpec, MatcherSpecInput,
     ProgramSpec, RuleSpec, SequenceId, SequenceRef, SequenceSpec, ValidatedExecutable,
     ValidatedProgram,
 };
-use mosdns_upstream_core::{Endpoint, ServerIdentity, Transport};
+use atomdns_upstream_core::{Endpoint, ServerIdentity, Transport};
 use serde::de::{self, Deserialize, Deserializer, Error as _, MapAccess, SeqAccess, Visitor};
 use url::Url;
 
@@ -817,7 +817,7 @@ pub fn compile_yaml_with_base(yaml: &str, base_dir: &Path) -> Result<CompiledCon
 }
 
 /// Like [`compile_yaml_with_base`], with a separate configuration root for
-/// relative plugin-argument paths (`rtdns start -d <root>`). `include` paths
+/// relative plugin-argument paths (`atomdns start -d <root>`). `include` paths
 /// still resolve against `base_dir`, the main configuration's directory.
 pub fn compile_yaml_with_roots(
     yaml: &str,
@@ -2553,25 +2553,25 @@ fn compile_definitions(
     let mut sequences = Vec::new();
     let mut fixtures = Vec::new();
     for (tag, config) in &fast_marks {
-        fixtures.push(mosdns_sequence_core::FixtureSpec::new(
+        fixtures.push(atomdns_sequence_core::FixtureSpec::new(
             plugin_fixture_name(tag),
             config.executor(),
         ));
     }
     for (tag, config) in &flow_setters {
-        fixtures.push(mosdns_sequence_core::FixtureSpec::new(
+        fixtures.push(atomdns_sequence_core::FixtureSpec::new(
             plugin_fixture_name(tag),
             config.executor(),
         ));
     }
     for (tag, config) in &tag_setters {
-        fixtures.push(mosdns_sequence_core::FixtureSpec::new(
+        fixtures.push(atomdns_sequence_core::FixtureSpec::new(
             plugin_fixture_name(tag),
             config.executor(),
         ));
     }
     for mapper in &domain_mappers {
-        fixtures.push(mosdns_sequence_core::FixtureSpec::new(
+        fixtures.push(atomdns_sequence_core::FixtureSpec::new(
             plugin_fixture_name(&mapper.tag),
             mapper.executor(),
         ));
@@ -4237,7 +4237,7 @@ fn compile_ecs(plugin: &RawPlugin) -> Result<crate::ecs::EcsPolicy, ConfigError>
 fn compile_sequence(
     plugin: &RawPlugin,
     catalog: &PluginCatalog<'_>,
-    fixtures: &mut Vec<mosdns_sequence_core::FixtureSpec>,
+    fixtures: &mut Vec<atomdns_sequence_core::FixtureSpec>,
 ) -> Result<SequenceSpec, ConfigError> {
     let path = format!("{}.args", plugin.source_path);
     let args = expect_sequence(&plugin.args, &path)?;
@@ -4402,7 +4402,7 @@ fn compile_matcher(
         Some((name, args)) => (name, args.trim()),
         None => (expression, ""),
     };
-    let matcher: Box<dyn mosdns_sequence_core::Matcher> = match name {
+    let matcher: Box<dyn atomdns_sequence_core::Matcher> = match name {
         name if name.starts_with('$') => {
             let tag = name.trim_start_matches('$');
             if tag.is_empty() || !args.is_empty() {
@@ -4518,19 +4518,19 @@ fn compile_matcher(
     Ok(MatcherSpecInput::new(
         matcher,
         reverse,
-        mosdns_sequence_core::DispatchMetadata::None,
+        atomdns_sequence_core::DispatchMetadata::None,
     ))
 }
 
 /// A matcher that always misses, so `!_false` matches everything.
 pub(crate) struct FalseMatcher;
 
-impl mosdns_sequence_core::Matcher for FalseMatcher {
+impl atomdns_sequence_core::Matcher for FalseMatcher {
     fn evaluate(
         &self,
         _state: &ExecutionState,
-    ) -> Result<mosdns_sequence_core::MatchOutcome, mosdns_sequence_core::MatcherError> {
-        Ok(mosdns_sequence_core::MatchOutcome::new(false, None))
+    ) -> Result<atomdns_sequence_core::MatchOutcome, atomdns_sequence_core::MatcherError> {
+        Ok(atomdns_sequence_core::MatchOutcome::new(false, None))
     }
 }
 
@@ -4599,7 +4599,7 @@ fn compile_exec(
     value: &RawValue,
     path: &str,
     catalog: &PluginCatalog<'_>,
-    fixtures: &mut Vec<mosdns_sequence_core::FixtureSpec>,
+    fixtures: &mut Vec<atomdns_sequence_core::FixtureSpec>,
     sequence_tag: &str,
     rule_index: usize,
 ) -> Result<Vec<ExecutableSpec>, ConfigError> {
@@ -4641,7 +4641,7 @@ fn compile_exec_item(
     expression: &str,
     path: &str,
     catalog: &PluginCatalog<'_>,
-    fixtures: &mut Vec<mosdns_sequence_core::FixtureSpec>,
+    fixtures: &mut Vec<atomdns_sequence_core::FixtureSpec>,
     sequence_tag: &str,
     rule_index: usize,
     exec_index: usize,
@@ -4802,46 +4802,46 @@ fn compile_exec_item(
             let config =
                 FastMarkConfig::parse(args).map_err(|reason| ConfigError::new(path, reason))?;
             let fixture_name = quick_fixture_name(path);
-            fixtures.push(mosdns_sequence_core::FixtureSpec::new(
+            fixtures.push(atomdns_sequence_core::FixtureSpec::new(
                 fixture_name.clone(),
                 config.executor(),
             ));
             Ok(ExecutableSpec::Fixture {
-                target: mosdns_sequence_core::FixtureRef::new(fixture_name),
+                target: atomdns_sequence_core::FixtureRef::new(fixture_name),
             })
         }
         "mark" => {
             let config =
                 MarkConfig::parse(args).map_err(|reason| ConfigError::new(path, reason))?;
             let fixture_name = quick_fixture_name(path);
-            fixtures.push(mosdns_sequence_core::FixtureSpec::new(
+            fixtures.push(atomdns_sequence_core::FixtureSpec::new(
                 fixture_name.clone(),
                 config.executor(),
             ));
             Ok(ExecutableSpec::Fixture {
-                target: mosdns_sequence_core::FixtureRef::new(fixture_name),
+                target: atomdns_sequence_core::FixtureRef::new(fixture_name),
             })
         }
         "flow_setter" => {
             let config = FlowSetterConfig::from_quick_args(args)
                 .map_err(|reason| ConfigError::new(path, reason))?;
             let fixture_name = quick_fixture_name(path);
-            fixtures.push(mosdns_sequence_core::FixtureSpec::new(
+            fixtures.push(atomdns_sequence_core::FixtureSpec::new(
                 fixture_name.clone(),
                 config.executor(),
             ));
             Ok(ExecutableSpec::Fixture {
-                target: mosdns_sequence_core::FixtureRef::new(fixture_name),
+                target: atomdns_sequence_core::FixtureRef::new(fixture_name),
             })
         }
         "tag_setter" => {
             let fixture_name = quick_fixture_name(path);
-            fixtures.push(mosdns_sequence_core::FixtureSpec::new(
+            fixtures.push(atomdns_sequence_core::FixtureSpec::new(
                 fixture_name.clone(),
                 TagSetterConfig::new(args).executor(),
             ));
             Ok(ExecutableSpec::Fixture {
-                target: mosdns_sequence_core::FixtureRef::new(fixture_name),
+                target: atomdns_sequence_core::FixtureRef::new(fixture_name),
             })
         }
         "drop_resp" => {
@@ -4849,12 +4849,12 @@ fn compile_exec_item(
                 return Err(ConfigError::new(path, "drop_resp takes no arguments"));
             }
             let fixture_name = quick_fixture_name(path);
-            fixtures.push(mosdns_sequence_core::FixtureSpec::new(
+            fixtures.push(atomdns_sequence_core::FixtureSpec::new(
                 fixture_name.clone(),
                 Box::new(DropRespExecutor),
             ));
             Ok(ExecutableSpec::Fixture {
-                target: mosdns_sequence_core::FixtureRef::new(fixture_name),
+                target: atomdns_sequence_core::FixtureRef::new(fixture_name),
             })
         }
         "sleep" => {
@@ -4963,7 +4963,7 @@ fn compile_exec_item(
                     | PluginKind::TagSetter
                     | PluginKind::DomainMapper,
                 ) => Ok(ExecutableSpec::Fixture {
-                    target: mosdns_sequence_core::FixtureRef::new(plugin_fixture_name(tag)),
+                    target: atomdns_sequence_core::FixtureRef::new(plugin_fixture_name(tag)),
                 }),
                 Some(
                     PluginKind::DomainSet
@@ -5173,7 +5173,7 @@ pub(crate) fn build_forward_target(
         })?;
         if scheme == ForwardScheme::Https {
             let dial = dial_addr.unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], port)));
-            mosdns_upstream_core::DohEndpoint::new(&service, dial).map_err(|error| {
+            atomdns_upstream_core::DohEndpoint::new(&service, dial).map_err(|error| {
                 ConfigError::new(
                     format!("{path}.addr"),
                     format!("invalid https endpoint: {error}"),
@@ -5764,7 +5764,7 @@ fn compile_response_ip(
             inline.push(token.to_owned());
         }
     }
-    let mut prefixes = mosdns_matcher_core::IpPrefixList::new();
+    let mut prefixes = atomdns_matcher_core::IpPrefixList::new();
     let mut budgets = catalog.ip_budgets.borrow_mut();
     let mut inputs = catalog.inputs.borrow_mut();
     let key = path.split(".args[").next().unwrap_or(path).to_owned();
@@ -5790,8 +5790,8 @@ fn compile_response_ip(
 mod tests {
     use std::time::{Duration, Instant};
 
-    use mosdns_sequence_core::{ExecutionControl, ExecutionState};
-    use mosdns_upstream_core::Transport;
+    use atomdns_sequence_core::{ExecutionControl, ExecutionState};
+    use atomdns_upstream_core::Transport;
 
     use super::{ListenerKind, LogLevel, PreferenceFamily, compile_yaml, compile_yaml_with_base};
 
@@ -6043,7 +6043,7 @@ plugins:
         );
 
         let state = ExecutionState::new(
-            mosdns_dns_core::QueryHeader {
+            atomdns_dns_core::QueryHeader {
                 id: 1,
                 qr: false,
                 opcode: 0,
@@ -6054,7 +6054,7 @@ plugins:
                 rd: false,
                 cd: false,
             },
-            mosdns_dns_core::QuestionInfo {
+            atomdns_dns_core::QuestionInfo {
                 qname_wire: vec![0],
                 qtype: 1,
                 qclass: 1,
@@ -6066,7 +6066,7 @@ plugins:
         let step = machine.step().expect("machine should dispatch forward");
         assert!(matches!(
             step,
-            mosdns_sequence_core::MachineStep::Dispatch(dispatch)
+            atomdns_sequence_core::MachineStep::Dispatch(dispatch)
                 if dispatch.executable()
                     == config.forward.as_ref().expect("primary forward").executable
         ));
@@ -6200,7 +6200,7 @@ plugins:
         );
         let config = super::compile_yaml(&yaml)?;
         let state = ExecutionState::new(
-            mosdns_dns_core::QueryHeader {
+            atomdns_dns_core::QueryHeader {
                 id: 1,
                 qr: false,
                 opcode: 0,
@@ -6211,7 +6211,7 @@ plugins:
                 rd: false,
                 cd: false,
             },
-            mosdns_dns_core::QuestionInfo {
+            atomdns_dns_core::QuestionInfo {
                 qname_wire: vec![
                     7, b'b', b'l', b'o', b'c', b'k', b'e', b'd', 4, b't', b'e', b's', b't', 0,
                 ],
@@ -6227,7 +6227,7 @@ plugins:
         // the unconditional forward and dispatches it instead.
         Ok(matches!(
             step,
-            mosdns_sequence_core::MachineStep::Dispatch(_)
+            atomdns_sequence_core::MachineStep::Dispatch(_)
         ))
     }
 
@@ -6305,7 +6305,7 @@ plugins:
         let mut machine = config
             .new_machine(
                 ExecutionState::new(
-                    mosdns_dns_core::QueryHeader {
+                    atomdns_dns_core::QueryHeader {
                         id: 1,
                         qr: false,
                         opcode: 0,
@@ -6316,7 +6316,7 @@ plugins:
                         rd: false,
                         cd: false,
                     },
-                    mosdns_dns_core::QuestionInfo {
+                    atomdns_dns_core::QuestionInfo {
                         qname_wire: vec![0],
                         qtype: 1,
                         qclass: 1,
@@ -6328,7 +6328,7 @@ plugins:
         let step = machine.step().expect("quick machine step");
         assert!(matches!(
             step,
-            mosdns_sequence_core::MachineStep::Dispatch(_)
+            atomdns_sequence_core::MachineStep::Dispatch(_)
         ));
         assert_eq!(machine.state().fast_flags, (1 << 1) | (1 << 2));
         assert_eq!(
@@ -6352,7 +6352,7 @@ plugins:
         let mut machine = config
             .new_machine(
                 ExecutionState::new(
-                    mosdns_dns_core::QueryHeader {
+                    atomdns_dns_core::QueryHeader {
                         id: 2,
                         qr: false,
                         opcode: 0,
@@ -6363,7 +6363,7 @@ plugins:
                         rd: false,
                         cd: false,
                     },
-                    mosdns_dns_core::QuestionInfo {
+                    atomdns_dns_core::QuestionInfo {
                         qname_wire: vec![0],
                         qtype: 1,
                         qclass: 1,
@@ -6375,7 +6375,7 @@ plugins:
         let step = machine.step().expect("named machine step");
         assert!(matches!(
             step,
-            mosdns_sequence_core::MachineStep::Dispatch(_)
+            atomdns_sequence_core::MachineStep::Dispatch(_)
         ));
         assert_eq!(machine.state().fast_flags, (1 << 3) | (1 << 4));
         assert_eq!(

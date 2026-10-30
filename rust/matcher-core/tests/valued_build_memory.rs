@@ -2,7 +2,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
-use mosdns_matcher_core::{ValuedDomainMatcher, ValuedRule};
+use atomdns_matcher_core::{ValuedDomainMatcher, ValuedRule};
 
 struct Count;
 static LIVE: AtomicUsize = AtomicUsize::new(0);

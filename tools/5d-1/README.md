@@ -3,12 +3,12 @@
 VM Linux root, existing Python3/PyYAML, iproute2, util-linux and OpenSSL.
 No downloads, installs, builds or deployment performed by this tool. Build
 the Rust binaries with the repository scripts first (Vue before Rust) and the Go
-reference (`mosdns-go`) with `tools/go-reference/build.sh <dir> mosdns`.
+reference (`mosdns-go`) with `tools/go-reference/build.sh <dir> atomdns`.
 All paths below are private VM directories outside any repository checkout.
 
 ```sh
 python3 tools/5d-1/run.py prepare --work /private/prepared \
-  --inputs /private/inputs --migrate /private/mosdns-settings-migrate
+  --inputs /private/inputs --migrate /private/atomdns-settings-migrate
 python3 tools/5d-1/run.py run --work /private/prepared --mode oracle \
   --output /private/oracle-run --binary /private/mosdns-go
 python3 tools/5d-1/run.py run --work /private/prepared --role go \
@@ -49,7 +49,7 @@ user before native formal measurement. Native tool smoke only:
 
 ```sh
 python3 tools/5d-1/run.py run --work /private/prepared --role native --smoke \
-  --binary /private/mosdns-native --output /private/native-smoke \
+  --binary /private/atomdns-native --output /private/native-smoke \
   --rates 20 --duration 3 --warmup 1 --recovery 3
 ```
 

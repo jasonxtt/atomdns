@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fixed loopback responder ABBA control for measurement overhead, not rtdns."""
+"""Fixed loopback responder ABBA control for measurement overhead, not atomdns."""
 import argparse
 import hashlib
 import json
@@ -30,7 +30,7 @@ def server(output):
 def run(output):
     output.mkdir(mode=0o700,parents=True)
     source=output/'corpus.json';source.write_text(json.dumps([dict(name='calibration.example',type=1,weight=1)]))
-    report=dict(tools_sha256={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in [pathlib.Path(__file__).resolve(),pathlib.Path(fload.__file__)]},scope='measurement calibration only; fixed Python responder, not rtdns',whole_project_accepted=False,runs=[])
+    report=dict(tools_sha256={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in [pathlib.Path(__file__).resolve(),pathlib.Path(fload.__file__)]},scope='measurement calibration only; fixed Python responder, not atomdns',whole_project_accepted=False,runs=[])
     with (output/'server.log').open('w') as log:
         child=subprocess.Popen(['taskset','-c','0','python3',str(pathlib.Path(__file__).resolve()),'--server',str(output)],stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
         try:

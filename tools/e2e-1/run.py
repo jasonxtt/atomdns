@@ -22,7 +22,7 @@ def run(args):
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
     args.work.mkdir(mode=0o700)
-    service = subprocess.check_output(["systemctl", "show", "mosdns", "-p", "MainPID", "-p", "ActiveState"])
+    service = subprocess.check_output(["systemctl", "show", "atomdns", "-p", "MainPID", "-p", "ActiveState"])
     (args.work / "service-before.txt").write_bytes(service)
     prepare(args.work, args.inputs, args.migrate, args.names)
     if args.corpus:
@@ -91,7 +91,7 @@ def run(args):
             command(["ip", "netns", "delete", ns])
         for stream in logs:
             stream.close()
-        after = subprocess.check_output(["systemctl", "show", "mosdns", "-p", "MainPID", "-p", "ActiveState"])
+        after = subprocess.check_output(["systemctl", "show", "atomdns", "-p", "MainPID", "-p", "ActiveState"])
         (args.work / "cleanup.json").write_text(json.dumps({"processes_exited": all(p.poll() is not None for p in owned), "namespaces_deleted": namespaces, "original_service_unchanged": service == after}, indent=2))
         if after != service:
             raise RuntimeError("original service identity changed")

@@ -3,12 +3,12 @@
 #[test]
 fn memory_validation_synthetic_retention() {
     use std::hash::{Hash, Hasher};
-    let capacity: usize = std::env::var("RTDNS_MEMORY_AUDIT_CAPACITY")
+    let capacity: usize = std::env::var("ATOMDNS_MEMORY_AUDIT_CAPACITY")
         .unwrap_or_else(|_| "100000".into())
         .parse()
         .unwrap();
     assert!(matches!(capacity, 0 | 100_000 | 400_000));
-    let profile = std::env::var("RTDNS_MEMORY_AUDIT_PROFILE").unwrap_or_else(|_| "shared".into());
+    let profile = std::env::var("ATOMDNS_MEMORY_AUDIT_PROFILE").unwrap_or_else(|_| "shared".into());
     assert!(matches!(profile.as_str(), "shared" | "ttl" | "unique"));
     let observer = observer(true, capacity);
     let mut digest = std::collections::hash_map::DefaultHasher::new();

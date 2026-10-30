@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Repeatable rule-set memory measurement for the native host and Go mosdns.
+"""Repeatable rule-set memory measurement for the native host and Go atomdns.
 
 Builds a configuration from a production snapshot (outside the repository):
 every plugin of `sub_config/rule_set.yaml` except `rewrite`, the plugins of
@@ -22,7 +22,7 @@ during steps 1-3 and reports latency percentiles, overall and while a rebuild
 runs. Readings are kB from /proc/<pid>/status.
 
 Usage:
-  measure-rule-memory.py --binary ./mosdns --snapshot DIR --work DIR \
+  measure-rule-memory.py --binary ./atomdns --snapshot DIR --work DIR \
       [--label NAME] [--rebuilds 6] [--settle 5] [--final-wait 30] [--qps 0] \
       [--env KEY=VALUE ...]
 The work directory is deleted and recreated. Prints one JSON object.

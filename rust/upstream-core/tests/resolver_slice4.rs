@@ -6,7 +6,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use mosdns_upstream_core::{
+use atomdns_upstream_core::{
     AddressFamily, BootstrapEndpoint, BootstrapResolver, Clock, ExchangeContext, ResolutionPolicy,
     ResolutionTarget, ResolvedUpstream, ResolverComposition, ResolverError, ServerIdentity,
     Transport, TransportCancellation, resolve_numeric,
@@ -223,7 +223,7 @@ fn resolution_and_handoff_share_one_original_deadline() {
             wire.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
             wire
         };
-        let request = mosdns_upstream_core::ExchangeRequest::new(&query).expect("request");
+        let request = atomdns_upstream_core::ExchangeRequest::new(&query).expect("request");
 
         // The handoff reuses the caller's own absolute deadline verbatim; the
         // resolver granted no fresh budget.

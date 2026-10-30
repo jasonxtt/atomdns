@@ -6,7 +6,7 @@ Read `docs/ai/config-notes.md` before changing configuration generation, upgrade
 
 ## Compatibility contract
 
-- Preserve MosDNS YAML syntax, plugin type names, arguments, and sequence semantics while implementations move to Rust.
+- Preserve AtomDNS YAML syntax, plugin type names, arguments, and sequence semantics while implementations move to Rust.
 - Preserve the canonical `special_groups` name and its routing, upstream binding, online/local rule, and audit behavior.
 - The maintained Vue UI at `/` remains a stable control surface (the compatibility UI at `/log` exists in the Go host only; the Rust-native host does not serve it). Saving in the UI must continue to affect generated config and runtime behavior.
 - Keep existing HTTP paths, response shapes, Prometheus names, audit fields, state files, and cache dump format unless a separately approved migration explicitly versions them.

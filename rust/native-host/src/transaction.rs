@@ -30,7 +30,7 @@ where
     let worker = BLOCKING_IO_WORKER.get_or_init(|| {
         let (sender, receiver) = sync_channel::<IoJob>(1);
         std::thread::Builder::new()
-            .name("mosdns-blocking-io".into())
+            .name("atomdns-blocking-io".into())
             .spawn(move || {
                 while let Ok(job) = receiver.recv() {
                     ON_BLOCKING_IO_WORKER.with(|inside| inside.set(true));
@@ -74,7 +74,7 @@ mod tests {
             let peak = peak.clone();
             jobs.push(std::thread::spawn(move || {
                 blocking_io(move || {
-                    assert_eq!(std::thread::current().name(), Some("mosdns-blocking-io"));
+                    assert_eq!(std::thread::current().name(), Some("atomdns-blocking-io"));
                     let now = active.fetch_add(1, Ordering::SeqCst) + 1;
                     peak.fetch_max(now, Ordering::SeqCst);
                     std::thread::sleep(std::time::Duration::from_millis(2));

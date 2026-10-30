@@ -98,7 +98,7 @@ struct Control {
     /// The stop came from a termination signal, which overrides a pending restart.
     signal_stop: Cell<bool>,
     observer: Arc<QueryObserver>,
-    shutdown: RefCell<Option<mosdns_upstream_core::TransportCancellation>>,
+    shutdown: RefCell<Option<atomdns_upstream_core::TransportCancellation>>,
 }
 
 pub(crate) struct ManagementLease(RuntimeControl);
@@ -131,7 +131,7 @@ impl Drop for ManagementLease {
 }
 
 // Wait until host shutdown is requested; an absent token cannot cancel work.
-async fn wait_for_shutdown(token: Option<mosdns_upstream_core::TransportCancellation>) {
+async fn wait_for_shutdown(token: Option<atomdns_upstream_core::TransportCancellation>) {
     if let Some(token) = token {
         token.cancelled().await;
     } else {
@@ -433,7 +433,7 @@ impl RuntimeControl {
                 .shutdown
                 .borrow()
                 .as_ref()
-                .is_some_and(mosdns_upstream_core::TransportCancellation::is_cancelled)
+                .is_some_and(atomdns_upstream_core::TransportCancellation::is_cancelled)
         {
             self.0.admitting.set(true);
         }
@@ -450,7 +450,7 @@ impl RuntimeControl {
             .shutdown
             .borrow()
             .as_ref()
-            .is_some_and(mosdns_upstream_core::TransportCancellation::is_cancelled)
+            .is_some_and(atomdns_upstream_core::TransportCancellation::is_cancelled)
         {
             "stopping"
         } else if !self.0.started.get() {
@@ -841,7 +841,7 @@ impl RuntimeControl {
         Ok(generation)
     }
 
-    fn shutdown_token(&self) -> Option<mosdns_upstream_core::TransportCancellation> {
+    fn shutdown_token(&self) -> Option<atomdns_upstream_core::TransportCancellation> {
         self.0.shutdown.borrow().clone()
     }
 
@@ -1229,7 +1229,7 @@ impl RuntimeControl {
 
     pub(crate) fn start(
         &self,
-        shutdown: &mosdns_upstream_core::TransportCancellation,
+        shutdown: &atomdns_upstream_core::TransportCancellation,
     ) -> ListenerUpdates {
         *self.0.shutdown.borrow_mut() = Some(shutdown.clone());
         self.0.started.set(true);
@@ -1598,7 +1598,7 @@ mod admission_tests {
                 "{:?}",
                 panicked.err()
             );
-            let stop = mosdns_upstream_core::TransportCancellation::new();
+            let stop = atomdns_upstream_core::TransportCancellation::new();
             let updates = control.start(&stop);
             let slow = path.clone();
             let compiling = tokio::task::spawn_local({
@@ -1644,7 +1644,7 @@ mod admission_tests {
             crate::HostAssembly::from_config(crate::load_and_compile(&path).unwrap()).unwrap();
         host.block_on(async {
             let control = host.control();
-            let stop = mosdns_upstream_core::TransportCancellation::new();
+            let stop = atomdns_upstream_core::TransportCancellation::new();
             let updates = control.start(&stop);
             // Hold the mailbox unpolled to expose the publication/cancel window.
             let old_config = control.view().config.clone();
@@ -1732,7 +1732,7 @@ mod admission_tests {
                 let owner = snapshot.forwards.forward(executable).unwrap();
                 assert_eq!(
                     owner.upstream().lifecycle_state(),
-                    mosdns_upstream_core::LifecycleState::Closed,
+                    atomdns_upstream_core::LifecycleState::Closed,
                     "both generations must close transports despite cache cleanup failures"
                 );
             }

@@ -19,7 +19,7 @@ state/scope copy and binds an independent `ExecutionControl`.
 `NativeCache::{snapshot_bounded,merge_prepared}` avoid a shadow cache or ABI change.
 GET `/api/v1/cache/inventory` returns `{schema_version:1,caches:[{tag}]}` in named
 config order; a cache with a `label` argument (display name, 1–64 characters, no
-control characters, not part of the cache identity) also carries `label`. GET `/metrics` exposes only the four `mosdns_cache_*` cache families.
+control characters, not part of the cache identity) also carries `label`. GET `/metrics` exposes only the four `atomdns_cache_*` cache families.
 GET `/plugins/{tag}/{show,dump,save,flush}`; POST `/plugins/{tag}/load_dump`.
 Existing domain_set show/save/post stays mounted independently.
 

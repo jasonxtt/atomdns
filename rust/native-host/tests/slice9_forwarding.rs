@@ -1,4 +1,4 @@
-use mosdns_native_host::compile_yaml;
+use atomdns_native_host::compile_yaml;
 
 fn yaml(entries: &str, args: &str, exec: &str) -> String {
     format!(
@@ -109,8 +109,8 @@ fn query_qtype(packet: &[u8]) -> u16 {
 
 #[test]
 fn multi_entry_listener_selects_ip_answer_and_accounts_each_started_entry() {
-    use mosdns_native_host::{HostAssembly, UdpServer};
-    use mosdns_upstream_core::TransportCancellation;
+    use atomdns_native_host::{HostAssembly, UdpServer};
+    use atomdns_upstream_core::TransportCancellation;
     use std::time::Duration;
     let a = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let b = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -163,7 +163,7 @@ fn multi_entry_listener_selects_ip_answer_and_accounts_each_started_entry() {
             let _ = peer.await;
         }
         assert_eq!(
-            mosdns_dns_core::observe_answer_addresses(&buffer[..n]).unwrap(),
+            atomdns_dns_core::observe_answer_addresses(&buffer[..n]).unwrap(),
             vec!["192.0.2.19".parse::<std::net::IpAddr>().unwrap()]
         );
     });
@@ -197,14 +197,14 @@ fn multi_entry_listener_selects_ip_answer_and_accounts_each_started_entry() {
     assert_eq!(diagnostics.selected.as_ref().unwrap().peer, b_address);
     assert_eq!(
         diagnostics.selected.as_ref().unwrap().transport,
-        mosdns_native_host::UpstreamTransport::Udp
+        atomdns_native_host::UpstreamTransport::Udp
     );
 }
 
 #[test]
 fn udp_truncation_reuses_one_entry_and_finishes_over_tcp() {
-    use mosdns_native_host::{HostAssembly, UdpServer};
-    use mosdns_upstream_core::TransportCancellation;
+    use atomdns_native_host::{HostAssembly, UdpServer};
+    use atomdns_upstream_core::TransportCancellation;
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -263,7 +263,7 @@ fn udp_truncation_reuses_one_entry_and_finishes_over_tcp() {
         udp_task.await.unwrap();
         tcp_task.await.unwrap();
         assert_eq!(
-            mosdns_dns_core::observe_answer_addresses(&buffer[..length]).unwrap(),
+            atomdns_dns_core::observe_answer_addresses(&buffer[..length]).unwrap(),
             vec!["192.0.2.19".parse::<std::net::IpAddr>().unwrap()]
         );
     });
@@ -275,18 +275,18 @@ fn udp_truncation_reuses_one_entry_and_finishes_over_tcp() {
     assert_eq!(diagnostics.attempts.len(), 1);
     assert_eq!(
         diagnostics.attempts[0].transport,
-        Some(mosdns_native_host::UpstreamTransport::Tcp)
+        Some(atomdns_native_host::UpstreamTransport::Tcp)
     );
     assert_eq!(
         diagnostics.selected.as_ref().unwrap().transport,
-        mosdns_native_host::UpstreamTransport::Tcp
+        atomdns_native_host::UpstreamTransport::Tcp
     );
 }
 
 #[test]
 fn native_http_log_exposes_versioned_upstream_diagnostics() {
-    use mosdns_native_host::{HostAssembly, HostOptions};
-    use mosdns_upstream_core::TransportCancellation;
+    use atomdns_native_host::{HostAssembly, HostOptions};
+    use atomdns_upstream_core::TransportCancellation;
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -307,7 +307,7 @@ fn native_http_log_exposes_versioned_upstream_diagnostics() {
         "log:\n  level: error\napi:\n  http: 127.0.0.1:{api_port}\nplugins:\n  - tag: upstream\n    type: forward\n    args:\n      upstreams:\n        - {{tag: primary, addr: 'udp://{upstream_address}'}}\n  - tag: entry\n    type: sequence\n    args:\n      - exec: $upstream\n  - tag: listener\n    type: udp_server\n    args:\n      entry: entry\n      listen: 127.0.0.1:{dns_port}\n      enable_audit: true\n"
     );
     let host = HostAssembly::with_options(
-        mosdns_native_host::compile_yaml(&source).unwrap(),
+        atomdns_native_host::compile_yaml(&source).unwrap(),
         HostOptions::default(),
     )
     .unwrap();
@@ -406,8 +406,8 @@ fn hostname_forward_requires_numeric_bootstrap_or_dial_and_rejects_unsupported_o
 
 #[test]
 fn hostname_forward_uses_controlled_bootstrap_and_target_peers() {
-    use mosdns_native_host::{HostAssembly, UdpServer};
-    use mosdns_upstream_core::TransportCancellation;
+    use atomdns_native_host::{HostAssembly, UdpServer};
+    use atomdns_upstream_core::TransportCancellation;
     use std::time::Duration;
 
     let bootstrap = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -473,7 +473,7 @@ fn hostname_forward_uses_controlled_bootstrap_and_target_peers() {
             .expect("bootstrap fixture drain")
             .unwrap();
         assert_eq!(
-            mosdns_dns_core::observe_answer_addresses(&buffer[..length]).unwrap(),
+            atomdns_dns_core::observe_answer_addresses(&buffer[..length]).unwrap(),
             vec!["192.0.2.19".parse::<std::net::IpAddr>().unwrap()]
         );
         tokio::time::timeout(Duration::from_secs(3), target_task)
@@ -573,9 +573,9 @@ fn secure_yaml(scheme: &str, dial: std::net::SocketAddr) -> String {
     )
 }
 
-async fn query_host(host: &mosdns_native_host::HostAssembly) -> Vec<u8> {
-    use mosdns_native_host::UdpServer;
-    use mosdns_upstream_core::TransportCancellation;
+async fn query_host(host: &atomdns_native_host::HostAssembly) -> Vec<u8> {
+    use atomdns_native_host::UdpServer;
+    use atomdns_upstream_core::TransportCancellation;
     use std::time::Duration;
 
     let server = UdpServer::bind(host, "127.0.0.1:0".parse().unwrap())
@@ -869,7 +869,7 @@ async fn serve_doh_h2_concurrent(
 #[test]
 #[allow(clippy::too_many_lines)]
 fn native_secure_forwarding_proves_dot_and_doh_h1_h2_with_synthetic_ca() {
-    use mosdns_native_host::{HostAssembly, HostOptions};
+    use atomdns_native_host::{HostAssembly, HostOptions};
 
     let fixture = std::sync::Arc::new(secure_fixture());
     let cases = [
@@ -888,7 +888,7 @@ fn native_secure_forwarding_proves_dot_and_doh_h1_h2_with_synthetic_ca() {
             _ => unreachable!(),
         };
         let host = HostAssembly::with_options(
-            mosdns_native_host::compile_yaml(&secure_yaml(scheme, dial)).unwrap(),
+            atomdns_native_host::compile_yaml(&secure_yaml(scheme, dial)).unwrap(),
             HostOptions::default().with_tls_roots(root_store(&fixture)),
         )
         .unwrap();
@@ -902,7 +902,7 @@ fn native_secure_forwarding_proves_dot_and_doh_h1_h2_with_synthetic_ca() {
             let response = query_host(&host).await;
             fixture_task.await.unwrap();
             assert_eq!(
-                mosdns_dns_core::observe_answer_addresses(&response).unwrap(),
+                atomdns_dns_core::observe_answer_addresses(&response).unwrap(),
                 vec![
                     format!("192.0.2.{marker}")
                         .parse::<std::net::IpAddr>()
@@ -911,9 +911,9 @@ fn native_secure_forwarding_proves_dot_and_doh_h1_h2_with_synthetic_ca() {
             );
         });
         let expected_transport = if protocol == "dot" {
-            mosdns_native_host::UpstreamTransport::Tls
+            atomdns_native_host::UpstreamTransport::Tls
         } else {
-            mosdns_native_host::UpstreamTransport::Https
+            atomdns_native_host::UpstreamTransport::Https
         };
         let snapshot = host.audit_snapshot();
         let diagnostics = snapshot.records[0].upstream_diagnostics.as_ref().unwrap();
@@ -923,7 +923,7 @@ fn native_secure_forwarding_proves_dot_and_doh_h1_h2_with_synthetic_ca() {
         );
         assert_eq!(
             diagnostics.attempts[0].outcome,
-            mosdns_native_host::UpstreamAttemptOutcome::Response
+            atomdns_native_host::UpstreamAttemptOutcome::Response
         );
     }
 }
@@ -931,8 +931,8 @@ fn native_secure_forwarding_proves_dot_and_doh_h1_h2_with_synthetic_ca() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn secure_concurrency_preserves_dot_fresh_h1_pool_and_h2_streams() {
-    use mosdns_native_host::{HostAssembly, HostOptions};
-    use mosdns_upstream_core::TransportCancellation;
+    use atomdns_native_host::{HostAssembly, HostOptions};
+    use atomdns_upstream_core::TransportCancellation;
     use std::time::{Duration, Instant};
 
     let fixture = std::sync::Arc::new(secure_fixture());
@@ -948,7 +948,7 @@ fn secure_concurrency_preserves_dot_fresh_h1_pool_and_h2_streams() {
             _ => unreachable!(),
         };
         let host = HostAssembly::with_options(
-            mosdns_native_host::compile_yaml(&secure_yaml(scheme, dial)).unwrap(),
+            atomdns_native_host::compile_yaml(&secure_yaml(scheme, dial)).unwrap(),
             HostOptions::default().with_tls_roots(root_store(&fixture)),
         )
         .unwrap();

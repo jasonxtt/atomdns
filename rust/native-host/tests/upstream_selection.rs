@@ -7,8 +7,8 @@
 use std::fmt::Write;
 use std::time::{Duration, Instant};
 
-use mosdns_native_host::{HostAssembly, HostOptions, UdpServer, compile_yaml};
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_native_host::{HostAssembly, HostOptions, UdpServer, compile_yaml};
+use atomdns_upstream_core::TransportCancellation;
 
 #[derive(Clone, Copy, Debug)]
 enum Reply {
@@ -131,7 +131,7 @@ fn race_within(
             let _ = peer.await;
         }
         let response = &buffer[..length];
-        let outcome = if mosdns_dns_core::observe_answer_addresses(response)
+        let outcome = if atomdns_dns_core::observe_answer_addresses(response)
             .unwrap()
             .is_empty()
         {

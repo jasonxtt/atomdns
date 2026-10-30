@@ -28,9 +28,9 @@ const externalEntries = computed(() => uiEntries.value.filter((entry) => !isWebu
 const currentDirectory = typeof window !== 'undefined' ? new URL('./', window.location.href).pathname : '/'
 const packageUrl = (entry) => entry.path || `/${encodeURIComponent(entry.name)}/`
 // Compatible UI packages other than the one being viewed.
-const mountedPackages = computed(() => externalEntries.value.filter((entry) => entry.kind === 'mosdns_ui' && entry.mounted && packageUrl(entry) !== currentDirectory))
+const mountedPackages = computed(() => externalEntries.value.filter((entry) => entry.kind === 'atomdns_ui' && entry.mounted && packageUrl(entry) !== currentDirectory))
 // Packages the host refused (incompatible, broken manifest, ...), with the reason.
-const refusedPackages = computed(() => externalEntries.value.filter((entry) => entry.kind === 'mosdns_ui' && !entry.mounted))
+const refusedPackages = computed(() => externalEntries.value.filter((entry) => entry.kind === 'atomdns_ui' && !entry.mounted))
 
 function normalizeVersion(value) {
   if (!value) {
@@ -216,18 +216,18 @@ async function reloadAll() {
 
 onMounted(() => {
   reloadAll()
-  window.addEventListener('mosdns-log-refresh', reloadAll)
+  window.addEventListener('atomdns-log-refresh', reloadAll)
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('mosdns-log-refresh', reloadAll)
+  window.removeEventListener('atomdns-log-refresh', reloadAll)
   stopRestartWatch()
 })
 </script>
 
 <template>
   <SettingSection id="update" title="版本与更新" tiles>
-    <SettingRow label="程序版本" layout="stat" :description="processInfo.startTime ? `启动于 ${new Date(processInfo.startTime * 1000).toLocaleString('zh-CN', { hour12: false })}` : '当前运行的 rtdns'">
+    <SettingRow label="程序版本" layout="stat" :description="processInfo.startTime ? `启动于 ${new Date(processInfo.startTime * 1000).toLocaleString('zh-CN', { hour12: false })}` : '当前运行的 AtomDNS'">
       <span class="rt-setting-text">{{ supportsOperation('system.version') ? (health?.version || '读取中') : operationReason('system.version') }}</span>
       <span v-if="supportsOperation('metrics.process')" class="muted rt-setting-note">已运行 {{ uptimeText }}</span>
     </SettingRow>

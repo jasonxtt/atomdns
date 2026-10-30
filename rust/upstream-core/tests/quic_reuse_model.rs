@@ -33,14 +33,13 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use h3::quic::{ConnectionErrorIncoming, StreamErrorIncoming};
-use mosdns_upstream_core::quic::DoqEndpoint;
-use mosdns_upstream_core::quic_reuse::{
+use atomdns_upstream_core::quic::DoqEndpoint;
+use atomdns_upstream_core::quic_reuse::{
     EntryHealth, EntryInitializer, EntryPhase, EntryTerminal, EntryTransport, H3ErrorObservation,
     H3ErrorShape, InitializeFuture, PINNED_ERROR_CLASSIFICATION_TABLE, classify_h3_request_outcome,
     h3_error_shape_for_observation, pinned_error_class,
 };
-use mosdns_upstream_core::quic_reuse::{
+use atomdns_upstream_core::quic_reuse::{
     H3CancellationAction, H3RequestPhase, ImmediateInitializer, MAX_CONNECTIONS_PER_OWNER,
     MAX_STREAMS_PER_CONNECTION, ManualClock, ModelBarrier, ModelSeams, QUIC_IDLE_TIMEOUT,
     QuicErrorClass, QuicErrorOutcome, QuicExchangePhase, QuicProtocol, QuicReuseKey,
@@ -49,10 +48,11 @@ use mosdns_upstream_core::quic_reuse::{
     classify_quinn_read_error, classify_quinn_read_to_end_error, classify_quinn_write_error,
     h3_cancellation_decision, h3_cancellation_effect, side_effect_of,
 };
-use mosdns_upstream_core::{
+use atomdns_upstream_core::{
     CloseCompletion, DohEndpoint, ExchangeContext, ExchangeControl, Lifecycle, ServerIdentity,
     SideEffectState, StreamLease, TlsPolicy, TransportCancellation, UpstreamError,
 };
+use h3::quic::{ConnectionErrorIncoming, StreamErrorIncoming};
 use quinn::{
     ApplicationClose, ConnectionClose, ConnectionError, ReadError, ReadToEndError, VarInt,
     WriteError,
@@ -626,7 +626,7 @@ fn r0b_h3_observation_model_distinguishes_stream_and_connection_evidence() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn r0b_table_covers_the_pinned_vocabulary() {
-    use mosdns_upstream_core::quic_reuse::QuicErrorClass::{EntryTerminal, StreamLocal};
+    use atomdns_upstream_core::quic_reuse::QuicErrorClass::{EntryTerminal, StreamLocal};
 
     // Every row cites its pinned source and carries exactly one class, and
     // the table has no ambiguous identity: the key is the full
@@ -769,7 +769,7 @@ fn r0b_table_covers_the_pinned_vocabulary() {
         ("DohProtocolError", "IncompleteBody"),
     ] {
         assert_eq!(
-            pinned_error_class("mosdns-upstream-core", error_type, item),
+            pinned_error_class("atomdns-upstream-core", error_type, item),
             Some(StreamLocal),
             "{error_type}::{item}"
         );
@@ -1211,7 +1211,7 @@ fn stage_two_only_gate_rejects_a_registered_but_unadmitted_exchange() {
         // released.
         assert_eq!(
             h.owner.begin_close(),
-            mosdns_upstream_core::CloseTransition::BeganClosing
+            atomdns_upstream_core::CloseTransition::BeganClosing
         );
         let close_task = tokio::spawn({
             let owner = Arc::clone(&h.owner);
@@ -1234,7 +1234,7 @@ fn stage_two_only_gate_rejects_a_registered_but_unadmitted_exchange() {
         close_barrier.release();
         assert_eq!(
             bounded(close_task).await.expect("the close waiter joins"),
-            mosdns_upstream_core::CloseResult::Closed,
+            atomdns_upstream_core::CloseResult::Closed,
             "the real close protocol completes after the rejection"
         );
     });
@@ -1271,7 +1271,7 @@ fn post_close_admission_race_leaves_no_residue() {
         // crate-internally in `close_protocol_tests`.
         assert_eq!(
             h.owner.begin_close(),
-            mosdns_upstream_core::CloseTransition::BeganClosing
+            atomdns_upstream_core::CloseTransition::BeganClosing
         );
         let close_task = tokio::spawn({
             let owner = Arc::clone(&h.owner);
@@ -1302,14 +1302,14 @@ fn post_close_admission_race_leaves_no_residue() {
         );
         assert_eq!(
             bounded(close_task).await.expect("the close waiter joins"),
-            mosdns_upstream_core::CloseResult::Closed,
+            atomdns_upstream_core::CloseResult::Closed,
             "the real close protocol drains after terminal"
         );
         assert_eq!(h.owner.entry_count(), 0);
         assert_eq!(h.owner.in_flight_exchanges(), 0);
         assert_eq!(
             h.owner.lifecycle_state(),
-            mosdns_upstream_core::LifecycleState::Closed
+            atomdns_upstream_core::LifecycleState::Closed
         );
     });
 }
@@ -1367,7 +1367,7 @@ fn init_vs_owner_close_hands_the_late_resource_to_teardown() {
         // lifecycle and handed its late resource to teardown.
         assert_eq!(
             h.owner.begin_close(),
-            mosdns_upstream_core::CloseTransition::BeganClosing
+            atomdns_upstream_core::CloseTransition::BeganClosing
         );
         assert!(h.owner.is_accepting(), "stage two has not linearized yet");
 
@@ -1409,7 +1409,7 @@ fn init_vs_owner_close_hands_the_late_resource_to_teardown() {
         );
         assert_eq!(
             bounded(close_task).await.expect("the close waiter joins"),
-            mosdns_upstream_core::CloseResult::Closed,
+            atomdns_upstream_core::CloseResult::Closed,
             "the real close protocol drains after terminal"
         );
         assert!(transport.is_closed());
@@ -1482,7 +1482,7 @@ fn aborted_at_barrier_with_no_surviving_caller_reaches_terminal() {
         assert_eq!(record.terminal(), None);
         assert_eq!(
             h.owner.lifecycle_state(),
-            mosdns_upstream_core::LifecycleState::Closing
+            atomdns_upstream_core::LifecycleState::Closing
         );
         assert_eq!(h.owner.in_flight_exchanges(), 1);
         assert!(!h.owner.is_accepting());
@@ -1571,11 +1571,11 @@ fn begin_close_without_stage_two_already_fails_publication() {
         // Only stage one of the two-stage close runs.
         assert_eq!(
             h.owner.begin_close(),
-            mosdns_upstream_core::CloseTransition::BeganClosing
+            atomdns_upstream_core::CloseTransition::BeganClosing
         );
         assert_eq!(
             h.owner.lifecycle_state(),
-            mosdns_upstream_core::LifecycleState::Closing
+            atomdns_upstream_core::LifecycleState::Closing
         );
         assert!(h.owner.is_accepting(), "stage two has not linearized yet");
 
@@ -1610,7 +1610,7 @@ fn begin_close_without_stage_two_already_fails_publication() {
         );
         assert_eq!(
             bounded(close_task).await.expect("the close waiter joins"),
-            mosdns_upstream_core::CloseResult::Closed
+            atomdns_upstream_core::CloseResult::Closed
         );
         assert_eq!(record.resource_closes(), 1);
         assert!(h.owner.observe(&key).is_none());
@@ -1831,7 +1831,7 @@ fn owner_close_cancels_streams_and_waits_for_exchange_registrations() {
         );
         assert_eq!(
             bounded(close_task).await.expect("the close waiter joins"),
-            mosdns_upstream_core::CloseResult::Closed
+            atomdns_upstream_core::CloseResult::Closed
         );
         assert_eq!(record.resource_closes(), 1);
         assert!(factory.last().is_closed());

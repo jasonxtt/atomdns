@@ -91,7 +91,7 @@ A missing, unreadable, oversized or non-`A`/`B` file keeps the YAML default and 
 before as well). Under schema 2 such a value made both rules of an A/B pair miss; that state no longer exists. A declaration whose kind/options do not fit its row is
 left alone; switch10/11/14/15 are not read.
 
-**Update trial**: while the update guard tries the new program out (`MOSDNS_UPDATE_GUARD_TXN` set), the migrated values are used in memory only, nothing is written,
+**Update trial**: while the update guard tries the new program out (`ATOMDNS_UPDATE_GUARD_TXN` set), the migrated values are used in memory only, nothing is written,
 and the flag routes answer 503; the guard's final start (without the variable) writes them. An automatic rollback therefore finds `settings.json` unchanged,
 which matters because the schema-2 program refuses an unknown `flags` key. `check` never writes. A manual downgrade to v0.2.2 must first remove `flags` from
 `settings.json` ([release.md](../release.md)); deleting `settings.json` or its `flags` key makes the next start migrate the (stale) switch files again.

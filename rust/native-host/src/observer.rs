@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use std::time::{Duration, SystemTime};
 
-use mosdns_sequence_core::ExecutableId;
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_sequence_core::ExecutableId;
+use atomdns_upstream_core::TransportCancellation;
 
 mod retention;
 use retention::AuditRetention;
@@ -1003,7 +1003,7 @@ pub(crate) struct ExecutionCheckpoint {
     in_flight_upstream: Option<String>,
     completed_observation: Option<TerminalObservation>,
     /// The step trace of a running diagnostic capture, set at admission.
-    step_trace: Option<Rc<dyn mosdns_sequence_core::StepTrace>>,
+    step_trace: Option<Rc<dyn atomdns_sequence_core::StepTrace>>,
     /// The trace id behind `step_trace`, for per-attempt capture lines.
     capture_trace_id: Option<Rc<str>>,
 }
@@ -1013,7 +1013,7 @@ impl ExecutionCheckpoint {
         self.capture_trace_id.clone()
     }
 
-    pub(crate) fn step_trace(&self) -> Option<Rc<dyn mosdns_sequence_core::StepTrace>> {
+    pub(crate) fn step_trace(&self) -> Option<Rc<dyn atomdns_sequence_core::StepTrace>> {
         self.step_trace.clone()
     }
 
@@ -1565,7 +1565,7 @@ impl QueryObserver {
         self: &std::sync::Arc<Self>,
         client_addr: SocketAddr,
         transport: QueryTransport,
-        question: &mosdns_dns_core::QuestionInfo,
+        question: &atomdns_dns_core::QuestionInfo,
         cancellation: TransportCancellation,
     ) -> Result<AdmittedQueryGuard, AdmissionError> {
         self.try_admit_on_listener(true, client_addr, transport, question, cancellation)
@@ -1576,7 +1576,7 @@ impl QueryObserver {
         listener_audit: bool,
         client_addr: SocketAddr,
         transport: QueryTransport,
-        question: &mosdns_dns_core::QuestionInfo,
+        question: &atomdns_dns_core::QuestionInfo,
         cancellation: TransportCancellation,
     ) -> Result<AdmittedQueryGuard, AdmissionError> {
         let enabled = listener_audit && self.audit_enabled.load(Ordering::SeqCst);
@@ -1616,7 +1616,7 @@ impl QueryObserver {
         self: &std::sync::Arc<Self>,
         client_addr: SocketAddr,
         transport: QueryTransport,
-        question: &mosdns_dns_core::QuestionInfo,
+        question: &atomdns_dns_core::QuestionInfo,
         cancellation: TransportCancellation,
     ) -> AdmittedQueryGuard {
         self.try_admit(client_addr, transport, question, cancellation)
@@ -1895,13 +1895,13 @@ impl QueryTrace {
     }
 }
 
-impl mosdns_sequence_core::StepTrace for QueryTrace {
+impl atomdns_sequence_core::StepTrace for QueryTrace {
     fn matcher(
         &self,
         sequence: &str,
         name: &str,
         matched: bool,
-        state: &mosdns_sequence_core::ExecutionState,
+        state: &atomdns_sequence_core::ExecutionState,
     ) {
         use crate::capture::Field;
         let qname = render_qname(&state.query.question.qname_wire);
@@ -1917,7 +1917,7 @@ impl mosdns_sequence_core::StepTrace for QueryTrace {
         );
     }
 
-    fn plugin(&self, sequence: &str, name: &str, state: &mosdns_sequence_core::ExecutionState) {
+    fn plugin(&self, sequence: &str, name: &str, state: &atomdns_sequence_core::ExecutionState) {
         use crate::capture::Field;
         let qname = render_qname(&state.query.question.qname_wire);
         crate::capture::record(
@@ -2039,7 +2039,7 @@ mod tests {
     use std::sync::atomic::Ordering;
     use std::time::{Duration, SystemTime};
 
-    use mosdns_upstream_core::TransportCancellation;
+    use atomdns_upstream_core::TransportCancellation;
 
     use super::{
         AuditRecord, CacheStatus, FailureProvenance, INITIAL_AUDIT_RECORD_CAPACITY,
@@ -2258,7 +2258,7 @@ mod tests {
     #[test]
     fn terminal_capture_uses_the_runtime_state_at_terminalization() {
         let observer = std::sync::Arc::new(observer(true, 4));
-        let question = mosdns_dns_core::QuestionInfo {
+        let question = atomdns_dns_core::QuestionInfo {
             qname_wire: vec![3, b'o', b'l', b'd', 0],
             qtype: 1,
             qclass: 1,
@@ -2326,7 +2326,7 @@ mod tests {
             (vec![1, b'a', 1, b'b', 0], "a.b."),
             (vec![4, b'.', b'\\', 0, 255, 0], "\\.\\\\\\000\\255."),
         ] {
-            let question = mosdns_dns_core::QuestionInfo {
+            let question = atomdns_dns_core::QuestionInfo {
                 qname_wire: wire,
                 qtype: 1,
                 qclass: 1,
@@ -2391,7 +2391,7 @@ mod tests {
     fn dropped_send_preserves_completed_facts_from_boxed_observation() {
         let observer = std::sync::Arc::new(observer(true, 4));
         let cancellation = TransportCancellation::new();
-        let question = mosdns_dns_core::QuestionInfo {
+        let question = atomdns_dns_core::QuestionInfo {
             qname_wire: vec![3, b'w', b'1', 0],
             qtype: 1,
             qclass: 1,
@@ -2451,7 +2451,7 @@ mod tests {
     #[test]
     fn unfinished_admission_is_finalized_once_using_its_cancellation_scope() {
         let observer = std::sync::Arc::new(observer(true, 2));
-        let question = mosdns_dns_core::QuestionInfo {
+        let question = atomdns_dns_core::QuestionInfo {
             qname_wire: vec![3, b'a', b'.', b'\\', 0],
             qtype: 1,
             qclass: 1,
@@ -2507,7 +2507,7 @@ mod tests {
     #[test]
     fn unfinished_execution_preserves_known_facts_and_marks_unresolved_facts() {
         let observer = std::sync::Arc::new(observer(true, 4));
-        let question = mosdns_dns_core::QuestionInfo {
+        let question = atomdns_dns_core::QuestionInfo {
             qname_wire: vec![3, b'w', b'2', 0],
             qtype: 1,
             qclass: 1,

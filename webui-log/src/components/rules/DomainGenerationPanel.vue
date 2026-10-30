@@ -60,9 +60,9 @@ async function toggle(profile, event) {
 
 onMounted(() => {
   load()
-  window.addEventListener('mosdns-log-refresh', load)
+  window.addEventListener('atomdns-log-refresh', load)
 })
-onBeforeUnmount(() => window.removeEventListener('mosdns-log-refresh', load))
+onBeforeUnmount(() => window.removeEventListener('atomdns-log-refresh', load))
 </script>
 
 <template>

@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use mosdns_native_host::settings_migrate::{Options, run};
+use atomdns_native_host::settings_migrate::{Options, run};
 
 struct Tree(PathBuf);
 

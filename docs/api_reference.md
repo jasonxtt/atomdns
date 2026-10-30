@@ -1,6 +1,6 @@
-# mosdns API 参考文档
+# atomdns API 参考文档
 
-> 本文档为 AI Agent 与 mosdns v0.3.0 交互的完整接口规范。
+> 本文档为 AI Agent 与 atomdns v0.3.0 交互的完整接口规范。
 
 ## 基础信息
 
@@ -213,7 +213,7 @@ POST /api/v1/overrides
 
 **响应 (200)**
 ```json
-{"message": "Global overrides saved. Please restart mosdns to apply changes."}
+{"message": "Global overrides saved. Please restart atomdns to apply changes."}
 ```
 
 ---
@@ -394,7 +394,7 @@ GET /api/v1/update/status
   "latest_version": "0.1.14",
   "release_url": "https://github.com/...",
   "architecture": "linux/amd64",
-  "asset_name": "mosdns-linux-amd64",
+  "asset_name": "atomdns-linux-amd64",
   "download_url": "https://github.com/...",
   "asset_signature": "...",
   "current_signature": "...",
@@ -452,7 +452,7 @@ POST /api/v1/config/export
 **请求体**
 ```json
 {
-  "dir": "/cus/mosdns"
+  "dir": "/cus/atomdns"
 }
 ```
 
@@ -461,7 +461,7 @@ POST /api/v1/config/export
 **Header**
 ```
 Content-Type: application/zip
-Content-Disposition: attachment; filename="mosdns_backup_{timestamp}.zip"
+Content-Disposition: attachment; filename="atomdns_backup_{timestamp}.zip"
 ```
 
 ### 8.2 在线更新配置
@@ -473,7 +473,7 @@ POST /api/v1/config/update_from_url
 ```json
 {
   "url": "https://raw.githubusercontent.com/.../config.zip",
-  "dir": "/cus/mosdns"
+  "dir": "/cus/atomdns"
 }
 ```
 

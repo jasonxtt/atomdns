@@ -3,11 +3,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use base64::Engine as _;
-use mosdns_upstream_core::secure::{DohEndpoint, TlsPolicy};
-use mosdns_upstream_core::{
+use atomdns_upstream_core::secure::{DohEndpoint, TlsPolicy};
+use atomdns_upstream_core::{
     DohReuseOwner, ExchangeContext, ExchangeRequest, MAX_DOH_CONNECTIONS, TransportCancellation,
 };
+use base64::Engine as _;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
@@ -338,7 +338,7 @@ fn both_protocols_keep_the_same_socks_route_for_every_reused_connection() {
             let proxy = Proxy::start(peer.address).await;
             // A direct dial to127.0.0.2 cannot reach this127.0.0.1 listener.
             let destination = std::net::SocketAddr::from(([127, 0, 0, 2], peer.address.port()));
-            let route = mosdns_upstream_core::socks5::Route::new(&proxy.address.to_string(), None);
+            let route = atomdns_upstream_core::socks5::Route::new(&proxy.address.to_string(), None);
             let endpoint = DohEndpoint::new("https://dns.example/dns-query", destination)
                 .expect("endpoint")
                 .with_socks5(route);
@@ -374,12 +374,12 @@ fn one_shot_h2_keeps_non_default_authority_through_socks() {
         let destination = std::net::SocketAddr::from(([127, 0, 0, 2], peer.address.port()));
         let endpoint = DohEndpoint::new("https://dns.example:8443/dns-query", destination)
             .unwrap()
-            .with_socks5(mosdns_upstream_core::socks5::Route::new(
+            .with_socks5(atomdns_upstream_core::socks5::Route::new(
                 &proxy.address.to_string(),
                 None,
             ));
         let upstream =
-            mosdns_upstream_core::secure::DohUpstream::new(endpoint, peer.policy.clone()).unwrap();
+            atomdns_upstream_core::secure::DohUpstream::new(endpoint, peer.policy.clone()).unwrap();
         for id in [31, 32] {
             let wire = query(id);
             let response = upstream
@@ -395,7 +395,7 @@ fn one_shot_h2_keeps_non_default_authority_through_socks() {
             assert_eq!(response.request_id(), id);
             assert_eq!(
                 response.http_version(),
-                Some(mosdns_upstream_core::secure::SecureHttpVersion::Http2)
+                Some(atomdns_upstream_core::secure::SecureHttpVersion::Http2)
             );
         }
         assert_eq!(peer.requests.load(Ordering::SeqCst), 2);
@@ -415,7 +415,7 @@ fn h2_reuse_keeps_non_default_authority_through_socks() {
         let destination = std::net::SocketAddr::from(([127, 0, 0, 2], peer.address.port()));
         let endpoint = DohEndpoint::new("https://dns.example:8443/dns-query", destination)
             .unwrap()
-            .with_socks5(mosdns_upstream_core::socks5::Route::new(
+            .with_socks5(atomdns_upstream_core::socks5::Route::new(
                 &proxy.address.to_string(),
                 None,
             ));
@@ -529,8 +529,8 @@ fn cancelling_one_request_keeps_other_requests_and_h2_connection_alive() {
             let result = cancelled.await.expect("cancelled task");
             assert!(matches!(
                 result,
-                Err(mosdns_upstream_core::secure::SecureError::Transport(
-                    mosdns_upstream_core::UpstreamError::Cancelled(_)
+                Err(atomdns_upstream_core::secure::SecureError::Transport(
+                    atomdns_upstream_core::UpstreamError::Cancelled(_)
                 ))
             ));
             assert_eq!(
@@ -584,9 +584,9 @@ fn full_h1_pool_waits_only_until_original_deadline_without_sending() {
             .await;
         assert!(matches!(
             result,
-            Err(mosdns_upstream_core::secure::SecureError::Transport(
-                mosdns_upstream_core::UpstreamError::DeadlineExceeded(
-                    mosdns_upstream_core::SideEffectState::NotSent
+            Err(atomdns_upstream_core::secure::SecureError::Transport(
+                atomdns_upstream_core::UpstreamError::DeadlineExceeded(
+                    atomdns_upstream_core::SideEffectState::NotSent
                 )
             ))
         ));
@@ -630,7 +630,7 @@ fn h2_goaway_and_peer_disconnect_allow_bounded_reconnection() {
 async fn exchange(
     owner: Arc<DohReuseOwner>,
     id: u16,
-) -> Result<u16, mosdns_upstream_core::secure::SecureError> {
+) -> Result<u16, atomdns_upstream_core::secure::SecureError> {
     let wire = query(id);
     owner
         .exchange(

@@ -60,7 +60,7 @@ function startAutoRefresh() {
     return
   }
   autoRefreshTimerId = window.setInterval(() => {
-    window.dispatchEvent(new CustomEvent('mosdns-log-refresh'))
+    window.dispatchEvent(new CustomEvent('atomdns-log-refresh'))
   }, Math.max(5, autoRefreshState.intervalSeconds) * 1000)
 }
 
@@ -74,7 +74,7 @@ function handleVisibilityChange() {
 }
 
 function triggerGlobalRefresh() {
-  window.dispatchEvent(new CustomEvent('mosdns-log-refresh'))
+  window.dispatchEvent(new CustomEvent('atomdns-log-refresh'))
 }
 
 async function handleOpenLogFilter(event) {
@@ -85,7 +85,7 @@ async function handleOpenLogFilter(event) {
   }
   await router.push('/logs')
   await nextTick()
-  window.dispatchEvent(new CustomEvent('mosdns-open-log-filter-ready', {
+  window.dispatchEvent(new CustomEvent('atomdns-open-log-filter-ready', {
     detail: {
       value: text,
       exact: Boolean(detail.exact)
@@ -134,23 +134,23 @@ function loadHealth() {
 onMounted(async () => {
   try { await getRuntimeCapabilities() } catch { /* Keep retryable discovery visible and optional children unmounted. */ }
   loadHealth()
-  window.addEventListener('mosdns-capabilities-ready', loadHealth)
+  window.addEventListener('atomdns-capabilities-ready', loadHealth)
   startAutoRefresh()
   removeBeforeUnload = installBeforeUnload()
-  window.addEventListener('mosdns-auto-refresh-update', handleAutoRefreshUpdate)
-  window.addEventListener('mosdns-top-notice', handleTopNoticeEvent)
-  window.addEventListener('mosdns-open-log-filter', handleOpenLogFilter)
+  window.addEventListener('atomdns-auto-refresh-update', handleAutoRefreshUpdate)
+  window.addEventListener('atomdns-top-notice', handleTopNoticeEvent)
+  window.addEventListener('atomdns-open-log-filter', handleOpenLogFilter)
   document.addEventListener('visibilitychange', handleVisibilityChange)
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('mosdns-capabilities-ready', loadHealth)
+  window.removeEventListener('atomdns-capabilities-ready', loadHealth)
   stopAutoRefresh()
   removeBeforeUnload()
   clearTopNotice()
-  window.removeEventListener('mosdns-auto-refresh-update', handleAutoRefreshUpdate)
-  window.removeEventListener('mosdns-top-notice', handleTopNoticeEvent)
-  window.removeEventListener('mosdns-open-log-filter', handleOpenLogFilter)
+  window.removeEventListener('atomdns-auto-refresh-update', handleAutoRefreshUpdate)
+  window.removeEventListener('atomdns-top-notice', handleTopNoticeEvent)
+  window.removeEventListener('atomdns-open-log-filter', handleOpenLogFilter)
   document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 </script>
@@ -160,7 +160,7 @@ onBeforeUnmount(() => {
     <header class="rt-topbar">
       <div class="rt-brand">
         <BrandMark />
-        <strong>rtdns</strong>
+        <strong>AtomDNS</strong>
         <span v-if="versionText" class="rt-brand-version">{{ versionText }}</span>
       </div>
       <CommandSearch />

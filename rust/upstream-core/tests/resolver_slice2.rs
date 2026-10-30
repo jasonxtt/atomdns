@@ -7,7 +7,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use mosdns_upstream_core::{
+use atomdns_upstream_core::{
     AddressFamily, BootstrapEndpoint, BootstrapResolver, Clock, ResolutionPolicy, ResolutionTarget,
     ResolverError, TransportCancellation,
 };
@@ -60,8 +60,8 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
         .block_on(future)
 }
 
-fn context(deadline: Duration) -> mosdns_upstream_core::ExchangeContext {
-    mosdns_upstream_core::ExchangeContext::new(
+fn context(deadline: Duration) -> atomdns_upstream_core::ExchangeContext {
+    atomdns_upstream_core::ExchangeContext::new(
         Instant::now() + deadline,
         TransportCancellation::new(),
     )
@@ -166,7 +166,7 @@ fn caller_cancellation_is_reported_as_cancelled() {
     let resolver = resolver("127.0.0.1:1".parse().expect("addr"));
     let cancellation = TransportCancellation::new();
     cancellation.cancel();
-    let expired = mosdns_upstream_core::ExchangeContext::new(
+    let expired = atomdns_upstream_core::ExchangeContext::new(
         Instant::now() + Duration::from_secs(10),
         cancellation,
     );
@@ -211,25 +211,25 @@ fn close_shutdown_is_observable_and_idempotent() {
     let resolver = resolver("127.0.0.1:1".parse().expect("addr"));
     assert_eq!(
         resolver.lifecycle_state(),
-        mosdns_upstream_core::LifecycleState::Open
+        atomdns_upstream_core::LifecycleState::Open
     );
     assert_eq!(
         resolver.begin_close(),
-        mosdns_upstream_core::CloseTransition::BeganClosing
+        atomdns_upstream_core::CloseTransition::BeganClosing
     );
     assert_eq!(
         resolver.begin_close(),
-        mosdns_upstream_core::CloseTransition::AlreadyClosing
+        atomdns_upstream_core::CloseTransition::AlreadyClosing
     );
     let error = block_on(resolver.resolve(context(Duration::from_secs(10)))).expect_err("closed");
     assert_eq!(error, ResolverError::Closed);
     assert_eq!(
         block_on(resolver.close()),
-        mosdns_upstream_core::CloseResult::Closed
+        atomdns_upstream_core::CloseResult::Closed
     );
     assert_eq!(
         resolver.lifecycle_state(),
-        mosdns_upstream_core::LifecycleState::Closed
+        atomdns_upstream_core::LifecycleState::Closed
     );
     assert_eq!(resolver.in_flight_resolutions(), 0);
 }

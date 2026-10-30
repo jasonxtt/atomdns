@@ -25,7 +25,7 @@ pub(crate) fn payload_limit(query: &[u8]) -> usize {
         }
         end += usize::from(label);
     }
-    mosdns_dns_core::extract_edns_at(query, end + 4)
+    atomdns_dns_core::extract_edns_at(query, end + 4)
         .ok()
         .flatten()
         .map_or(512, |opt| usize::from(opt.udp_size).max(512))
@@ -46,7 +46,7 @@ pub(crate) fn prepare_response(
             let Some(header) = header else {
                 return Err(error);
             };
-            let (_, question) = mosdns_dns_core::parse_query(original_query)
+            let (_, question) = atomdns_dns_core::parse_query(original_query)
                 .map_err(|_| ProtoError::from("invalid admitted UDP question"))?;
             let mut output = Vec::with_capacity(12 + question.qname_wire.len() + 4);
             output.extend_from_slice(&header);
@@ -201,7 +201,7 @@ mod tests {
 
     fn check(name: &str, wire: Vec<u8>, limit: usize) -> (Vec<u8>, bool) {
         let result = limit_response(wire.clone(), limit).unwrap();
-        if let Ok(oracle) = std::env::var("MOSDNS_UDP_TRUNCATION_ORACLE") {
+        if let Ok(oracle) = std::env::var("ATOMDNS_UDP_TRUNCATION_ORACLE") {
             let mut child = Command::new(oracle)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
@@ -228,7 +228,7 @@ mod tests {
                 expected["tc"].as_bool().unwrap(),
                 "{name}: TC"
             );
-            if let Ok(path) = std::env::var("MOSDNS_UDP_TRUNCATION_REPORT") {
+            if let Ok(path) = std::env::var("ATOMDNS_UDP_TRUNCATION_REPORT") {
                 let row = serde_json::json!({"case":name,"rust_bytes":result.0.len(),"go_bytes":expected["size"],
                     "byte_equal":hex(&result.0)==expected["wire"].as_str().unwrap(),"fields_equal":true,
                     "budget":limit,"tc":result.0[2]&2!=0});
@@ -419,7 +419,7 @@ mod tests {
         wire.extend_from_slice(&[0, 0, 5, 0, 1, 0, 0, 0, 60, 2, 88]);
         wire.extend_from_slice(&[255; 600]);
         assert!(wire.len() > 512);
-        assert!(mosdns_dns_core::validate_response(&wire).is_ok());
+        assert!(atomdns_dns_core::validate_response(&wire).is_ok());
         assert!(Message::from_vec(&wire).is_err());
         let mut expected = wire[..12].to_vec();
         expected[2] |= 2;

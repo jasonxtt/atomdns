@@ -2,8 +2,8 @@ use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
-use mosdns_dns_core::ResponseHeader;
-use mosdns_upstream_core::{
+use atomdns_dns_core::ResponseHeader;
+use atomdns_upstream_core::{
     CloseCompletion, CloseResult, CloseTransition, ExchangeContext, ExchangeRequest,
     ExchangeResponse, LifecycleState, SideEffectState, Transport, TransportCancellation, Upstream,
     UpstreamError,
@@ -18,8 +18,8 @@ fn block_on<F: Future>(future: F) -> F::Output {
         .block_on(future)
 }
 
-fn endpoint(transport: Transport) -> mosdns_upstream_core::Endpoint {
-    mosdns_upstream_core::Endpoint::new(
+fn endpoint(transport: Transport) -> atomdns_upstream_core::Endpoint {
+    atomdns_upstream_core::Endpoint::new(
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 53),
         transport,
     )
@@ -229,14 +229,14 @@ fn error_side_effects_preserve_the_last_tracked_state() {
 fn header_helper_exposes_only_header_metadata() {
     let mut response = vec![0x12, 0x34, 0x82, 0x00, 0, 0, 0, 0, 0, 0, 0, 0];
     let header: ResponseHeader =
-        mosdns_dns_core::inspect_response_header(&response).expect("response header");
+        atomdns_dns_core::inspect_response_header(&response).expect("response header");
     assert_eq!(header.id, 0x1234);
     assert!(header.qr);
     assert!(header.truncated);
 
     response[2] = 0;
     assert_eq!(
-        mosdns_dns_core::inspect_response_header(&response),
-        Err(mosdns_dns_core::HeaderError::NotResponse)
+        atomdns_dns_core::inspect_response_header(&response),
+        Err(atomdns_dns_core::HeaderError::NotResponse)
     );
 }

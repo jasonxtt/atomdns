@@ -1,6 +1,6 @@
 //! Conservative, monotone successor effects over the validated execution graph.
 use crate::config::{CompiledConfig, ConfigError, NativeTarget};
-use mosdns_sequence_core::{ExecutableId, ExecutableTarget, SequenceId, ValidatedExecutable};
+use atomdns_sequence_core::{ExecutableId, ExecutableTarget, SequenceId, ValidatedExecutable};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Default, Eq, PartialEq)]

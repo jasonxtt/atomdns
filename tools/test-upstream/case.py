@@ -1,4 +1,4 @@
-"""One isolated rtdns test case connected only to the fixture bridge."""
+"""One isolated atomdns test case connected only to the fixture bridge."""
 import fcntl
 import json
 import os
@@ -21,7 +21,7 @@ from run import existing_service_state
 def cleanup_link(name):
     value=next((v for v in links() if v['ifname']==name),None)
     if value is None:return
-    if value.get('ifalias')!='rtdns-test-case':raise RuntimeError('test interface ownership changed')
+    if value.get('ifalias')!='atomdns-test-case':raise RuntimeError('test interface ownership changed')
     try:command(['ip','link','del',name])
     except subprocess.CalledProcessError:
         # netns deletion destroys its veth asynchronously. Only the proven
@@ -57,7 +57,7 @@ class Case(Env):
             if any(v['ifname'] in {self.host_link,self.peer_link} for v in links()):raise ValueError('test interface name occupied')
             command(['ip','netns','add',self.ns]);self.created=True
             command(['ip','link','add',self.host_link,'type','veth','peer','name',self.peer_link]);self.network_ready=True
-            command(['ip','link','set',self.host_link,'alias','rtdns-test-case'])
+            command(['ip','link','set',self.host_link,'alias','atomdns-test-case'])
             command(['ip','link','set',self.host_link,'master',BRIDGE]);command(['ip','link','set',self.host_link,'mtu','9000']);command(['ip','link','set',self.host_link,'up'])
             command(['ip','link','set',self.peer_link,'netns',self.ns])
             command(['ip','-n',self.ns,'link','set','lo','up']);command(['ip','-n',self.ns,'link','set',self.peer_link,'mtu','9000'])
@@ -70,12 +70,12 @@ class Case(Env):
             self.host=self.spawn(0,['unshare','--mount','--propagation','private','sh','-c','mount --bind "$1" /tmp; shift; exec "$@"','fixture-case',self.root/'tmp',self.binary.resolve(),'start','-d',self.root,'-c','config_custom.yaml'],'host.log')
             deadline=time.monotonic()+90
             while True:
-                if self.host.poll() is not None:raise RuntimeError('rtdns exited before ready')
+                if self.host.poll() is not None:raise RuntimeError('atomdns exited before ready')
                 try:
                     status,text,_=self.api('GET','/api/v2/audit/stats',timeout=1)
                     if status==200:break
                 except subprocess.CalledProcessError:pass
-                if time.monotonic()>deadline:raise RuntimeError('rtdns readiness timeout')
+                if time.monotonic()>deadline:raise RuntimeError('atomdns readiness timeout')
                 time.sleep(.1)
             status,_,_=self.api('POST','/api/v1/audit/start',{})
             if status!=200:raise RuntimeError('audit start failed')
@@ -89,7 +89,7 @@ class Case(Env):
     def __exit__(self,*exc):
         try:
             # Existing harness kills/waits all owned process groups, checks namespace
-            # emptiness, deletes it and protects the pre-existing mosdns service.
+            # emptiness, deletes it and protects the pre-existing atomdns service.
             if self.output_created and hasattr(self,'before'):super().__exit__(*exc)
             if self.network_ready:cleanup_link(self.host_link)
             if hasattr(self,'identity_before'):

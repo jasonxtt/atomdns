@@ -18,10 +18,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use mosdns_matcher_core::{
+use atomdns_matcher_core::{
     IpPrefixList, ValuedDomainMatcher, decode_domain_srs, decode_domain_srs_plain, decode_ip_srs,
 };
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_upstream_core::TransportCancellation;
 use serde::Serialize;
 
 use crate::config::providers::{
@@ -1858,7 +1858,7 @@ pub(crate) async fn on_build_thread<T: Send + 'static>(
     let worker = WORKER.get_or_init(|| {
         let (sender, receiver) = std::sync::mpsc::channel::<BuildJob>();
         std::thread::Builder::new()
-            .name("mosdns-rule-build".into())
+            .name("atomdns-rule-build".into())
             .spawn(move || {
                 while let Ok(job) = receiver.recv() {
                     job();
@@ -2252,7 +2252,7 @@ mod tests {
             .unwrap();
             let text = std::fs::read_to_string(&file).unwrap();
             assert!(
-                text.starts_with("# rtdns: converted from text https://example.com/list.conf\n")
+                text.starts_with("# atomdns: converted from text https://example.com/list.conf\n")
             );
             let spec = spec(Schema::Sd, &root);
             let entry = source("a", file.to_str().unwrap(), regexp);
@@ -2526,7 +2526,7 @@ mod tests {
                 store_dat(Kind::Sd, &domains, &file, regexp, Format::Auto, "", url).unwrap();
             assert_eq!(count, Some(if regexp { 3 } else { 2 }));
             let text = std::fs::read_to_string(&file).unwrap();
-            assert!(text.starts_with("# rtdns: converted from mrs https://example.com/cn.mrs\n"));
+            assert!(text.starts_with("# atomdns: converted from mrs https://example.com/cn.mrs\n"));
             let entry = source("a", file.to_str().unwrap(), regexp);
             let (rules, _) = providers::load_sd(&spec(Schema::Sd, &root), &[entry], None);
             assert_eq!(rules.len(), if regexp { 3 } else { 2 });

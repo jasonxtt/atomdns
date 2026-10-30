@@ -46,17 +46,17 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use fixtures::FixtureSet;
-use hyper::body::{Buf as _, Bytes};
-use mosdns_upstream_core::quic::{Doh3Upstream, H3_ALPN};
-use mosdns_upstream_core::secure::{
+use atomdns_upstream_core::quic::{Doh3Upstream, H3_ALPN};
+use atomdns_upstream_core::secure::{
     DohEndpoint, DohProtocolError, SecureError, SecureHttpVersion, SecureResponse, SecureTransport,
     TlsPolicy,
 };
-use mosdns_upstream_core::{
+use atomdns_upstream_core::{
     CloseResult, CloseTransition, ExchangeContext, ExchangeRequest, SideEffectState,
     TransportCancellation, UpstreamError,
 };
+use fixtures::FixtureSet;
+use hyper::body::{Buf as _, Bytes};
 use quinn::crypto::rustls::{HandshakeData, QuicServerConfig};
 use rustls::ServerConfig;
 use tokio::sync::oneshot;

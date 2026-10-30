@@ -19,8 +19,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use mosdns_native_host::{BoundHost, HostAssembly, HostOptions, PersistGate, RuleTiming};
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_native_host::{BoundHost, HostAssembly, HostOptions, PersistGate, RuleTiming};
+use atomdns_upstream_core::TransportCancellation;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -217,7 +217,8 @@ fn base_tree(name: &str, socks5: &str) -> (Tree, Ports) {
 }
 
 fn host(tree: &Tree, timing: RuleTiming) -> HostAssembly {
-    let config = mosdns_native_host::load_and_compile(&tree.path("config.yaml")).expect("compiles");
+    let config =
+        atomdns_native_host::load_and_compile(&tree.path("config.yaml")).expect("compiles");
     HostAssembly::with_options(config, HostOptions::default().with_rule_timing(timing))
         .expect("assembles")
 }
@@ -1226,7 +1227,7 @@ fn https_downloads_verify_the_server_certificate() {
     for trusted in [true, false] {
         let (tree, ports) = base_tree(if trusted { "tls-ok" } else { "tls-bad" }, "");
         let config =
-            mosdns_native_host::load_and_compile(&tree.path("config.yaml")).expect("compiles");
+            atomdns_native_host::load_and_compile(&tree.path("config.yaml")).expect("compiles");
         let mut options = HostOptions::default().with_rule_timing(fast());
         if trusted {
             options = options.with_tls_roots(roots.clone());

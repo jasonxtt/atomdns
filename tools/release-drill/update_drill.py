@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """VM-only drill of the online update v0.2.1 -> v0.2.2 with a configuration package (schema 1 -> 2)
-(task 10-23-rtdns-release-v0.2.2).
+(task 10-23-atomdns-release-v0.2.2).
 
-Starts the REAL v0.2.1 release program as a systemd unit named `rtdns` (Restart=always,
+Starts the REAL v0.2.1 release program as a systemd unit named `atomdns` (Restart=always,
 RestartSec=120) on the `config_rust` tree of the file repository at 0412666 (schema 1) plus the
 package state of the production root, with user data (proxy override, upstream overrides to a fake
 upstream, a special group made through the API, a user rule and a switch file). A fake GitHub API on
-127.0.0.1 (MOSDNS_UPDATE_API_URL) offers the v0.2.2 candidate and the configuration package.
+127.0.0.1 (ATOMDNS_UPDATE_API_URL) offers the v0.2.2 candidate and the configuration package.
 Everything runs in a loopback-only network namespace created and removed by this script: no public
 network, no clash with other services of the machine, only RFC 5737/3849 addresses.
 
     update_drill.py --work DIR --repo DIR --v021-dir DIR --release-dir DIR --config-zip FILE --config-tar FILE
 
-  --v021-dir     the v0.2.1 release assets (rtdns-linux-amd64.tar.gz + rtdns-update-manifest.json)
+  --v021-dir     the v0.2.1 release assets (atomdns-linux-amd64.tar.gz + atomdns-update-manifest.json)
   --release-dir  the v0.2.2 output of scripts/build-rust-release.sh (with RUST_CONFIG_PACKAGE)
   --config-zip   the config_rust_up.zip that the metadata names (schema 2)
   --config-tar   the schema 1 config_rust tree as a tar (file repository 0412666)
@@ -98,11 +98,11 @@ class Host(base.Host):
         base.refuse_existing_unit()
         self.exe.parent.mkdir(parents=True, exist_ok=True)
         base.UNIT_FILE.write_text(
-            "[Unit]\nDescription=rtdns release drill (temporary)\nAfter=network.target\n\n"
+            "[Unit]\nDescription=atomdns release drill (temporary)\nAfter=network.target\n\n"
             "[Service]\nType=simple\nPrivateTmp=true\n"
             f"NetworkNamespacePath=/run/netns/{self.netns}\n"
-            f"Environment=MOSDNS_UPDATE_API_URL={self.site.api_url}\n"
-            "Environment=MOSDNS_UPDATE_HEALTH_TIMEOUT_SECS=60\n"
+            f"Environment=ATOMDNS_UPDATE_API_URL={self.site.api_url}\n"
+            "Environment=ATOMDNS_UPDATE_HEALTH_TIMEOUT_SECS=60\n"
             f"ExecStart={self.exe} start -d {self.root} -c {self.root}/config_custom.yaml\n"
             "Restart=always\nRestartSec=120\n\n[Install]\nWantedBy=multi-user.target\n")
         base.UNIT_OWNED = True
@@ -226,17 +226,17 @@ def drill(args):
     program_021 = work / "unpacked-v0.2.1"
     program_021.mkdir(parents=True)
     run(["tar", "-xzf", v021 / ASSET, "-C", program_021])
-    sha_021 = sha256(program_021 / "rtdns")
+    sha_021 = sha256(program_021 / "atomdns")
     program_022 = work / "unpacked-v0.2.2"
     program_022.mkdir()
     run(["tar", "-xzf", release / ASSET, "-C", program_022])
-    sha_022 = sha256(program_022 / "rtdns")
-    for path, tag in ((program_021 / "rtdns", "v0.2.1"), (program_022 / "rtdns", "v0.2.2")):
+    sha_022 = sha256(program_022 / "atomdns")
+    for path, tag in ((program_021 / "atomdns", "v0.2.1"), (program_022 / "atomdns", "v0.2.2")):
         say(f"0 {tag} binary", run([path, "version"]).strip() == tag, f"reports {tag}")
 
     host.install_unit()
     host.prepare_root(args.config_tar)
-    shutil.copy2(program_021 / "rtdns", host.exe)
+    shutil.copy2(program_021 / "atomdns", host.exe)
     managed = pkg["managed_files"]
 
     # --- start v0.2.1 and create the user data ---------------------------------------------------
@@ -288,7 +288,7 @@ def drill(args):
     # --- 3 unhealthy candidate rolled back ------------------------------------------------------------
     broken = work / "broken"
     broken.mkdir()
-    script = broken / "rtdns"
+    script = broken / "atomdns"
     script.write_text("#!/bin/sh\ncase \"$1\" in\n  version) echo v0.2.2;;\n  check) exit 0;;\n  start) exit 3;;\nesac\n")
     script.chmod(0o755)
     env = dict(os.environ, PREBUILT=str(script), RUST_CONFIG_PACKAGE=str(config_zip))

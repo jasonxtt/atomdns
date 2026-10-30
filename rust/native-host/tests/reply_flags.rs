@@ -1,9 +1,9 @@
 use std::time::Duration;
 
+use atomdns_native_host::{HostAssembly, HostOptions, TcpServer, UdpServer, compile_yaml};
+use atomdns_upstream_core::TransportCancellation;
 use hickory_proto::op::{Message, Query};
 use hickory_proto::rr::{Name, RecordType};
-use mosdns_native_host::{HostAssembly, HostOptions, TcpServer, UdpServer, compile_yaml};
-use mosdns_upstream_core::TransportCancellation;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 

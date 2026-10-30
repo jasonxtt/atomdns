@@ -1,6 +1,6 @@
+use atomdns_matcher_core::IpPrefixList;
+use atomdns_upstream_core::TransportCancellation;
 use hickory_proto::op::Message;
-use mosdns_matcher_core::IpPrefixList;
-use mosdns_upstream_core::TransportCancellation;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::future::Future;
@@ -8,8 +8,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use mosdns_cache_core::{CacheConfig, CacheError, NativeCache};
-use mosdns_dns_core::{
+use atomdns_cache_core::{CacheConfig, CacheError, NativeCache};
+use atomdns_dns_core::{
     QueryError, ResponseError, ResponseMetadata, ResponseQuestion, observe_response_metadata,
     patch_response_id_ra, validate_response,
 };
@@ -269,7 +269,7 @@ impl NativeCacheAdapter {
         };
         if foreground {
             self.owner.hits.set(self.owner.hits.get().saturating_add(1));
-            if lookup.state == mosdns_cache_core::LookupState::Lazy {
+            if lookup.state == atomdns_cache_core::LookupState::Lazy {
                 self.owner
                     .lazy_hits
                     .set(self.owner.lazy_hits.get().saturating_add(1));
@@ -282,7 +282,7 @@ impl NativeCacheAdapter {
                 .attachment
                 .as_ref()
                 .and_then(|attachment| {
-                    attachment.downcast_ref::<mosdns_sequence_core::ResponseOrigin>()
+                    attachment.downcast_ref::<atomdns_sequence_core::ResponseOrigin>()
                 })
                 .cloned(),
             response,
@@ -422,7 +422,7 @@ impl NativeCacheAdapter {
     fn prepare_import(
         &self,
         bytes: &[u8],
-    ) -> Result<Vec<mosdns_cache_core::PreparedNativeEntry>, CacheAdapterError> {
+    ) -> Result<Vec<atomdns_cache_core::PreparedNativeEntry>, CacheAdapterError> {
         let wall = self.clock.wall_seconds()?;
         let now = self.clock.now_seconds()?;
         if wall < 0 {
@@ -475,7 +475,7 @@ impl NativeCacheAdapter {
             };
             entry.times = [convert(stored)?, convert(msg)?, convert(cache)?];
             let expired = cache <= wall || (msg <= wall && self.lazy_ttl == 0);
-            let item = mosdns_cache_core::PreparedNativeEntry::new(entry)?;
+            let item = atomdns_cache_core::PreparedNativeEntry::new(entry)?;
             if !expired {
                 prepared.push(item);
             }
@@ -695,7 +695,7 @@ impl NativeCacheAdapter {
     /// Returns an owned live snapshot with original wall and runtime timestamps.
     pub fn snapshot(
         &self,
-    ) -> Result<Vec<mosdns_cache_core::NativeSnapshotEntry>, CacheAdapterError> {
+    ) -> Result<Vec<atomdns_cache_core::NativeSnapshotEntry>, CacheAdapterError> {
         Ok(self.cache.snapshot(self.clock.now_seconds()?))
     }
 
@@ -872,7 +872,10 @@ fn persist_dump(
         .parent()
         .ok_or_else(|| std::io::Error::other("dump target has no parent"))?;
     let number = DUMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let temporary = parent.join(format!(".mosdns-cache-{}-{number}.tmp", std::process::id()));
+    let temporary = parent.join(format!(
+        ".atomdns-cache-{}-{number}.tmp",
+        std::process::id()
+    ));
     let mut created = false;
     let result = (|| {
         if fault == PersistFault::WriteTemp {
@@ -1175,10 +1178,10 @@ impl CacheCatalog {
 /// One request-owned cache publication token. Dropping it is the normal path
 /// for cancellation, failed execution, malformed responses, and local errors.
 pub struct CacheHit {
-    pub origin: Option<mosdns_sequence_core::ResponseOrigin>,
+    pub origin: Option<atomdns_sequence_core::ResponseOrigin>,
     pub response: Vec<u8>,
     pub domain_set: String,
-    pub state: mosdns_cache_core::LookupState,
+    pub state: atomdns_cache_core::LookupState,
 }
 
 pub struct PendingStore {
@@ -1207,7 +1210,7 @@ impl PendingStore {
         self,
         response: &[u8],
         domain_set: &str,
-        origin: Option<mosdns_sequence_core::ResponseOrigin>,
+        origin: Option<atomdns_sequence_core::ResponseOrigin>,
     ) -> Result<bool, CacheAdapterError> {
         if self.adapter.owner.blocked.get()
             || self.adapter.owner.failed.get()
@@ -1229,7 +1232,7 @@ impl PendingStore {
         if !eligible_response(&metadata, &self.question) || validate_response(response).is_err() {
             return Ok(false);
         }
-        let addresses = mosdns_dns_core::observe_answer_addresses(response)?;
+        let addresses = atomdns_dns_core::observe_answer_addresses(response)?;
         if addresses
             .iter()
             .any(|ip| self.adapter.exclusions.contains(*ip))
@@ -1258,7 +1261,7 @@ impl PendingStore {
         } else {
             response.to_vec()
         };
-        let ttl = mosdns_dns_core::observe_response_ttl(&clean)?;
+        let ttl = atomdns_dns_core::observe_response_ttl(&clean)?;
         let retention = retention_seconds(&metadata, ttl.minimal_ttl, ttl.record_count);
         let stored_at = self.adapter.clock.now_seconds()?;
         let wall = self.adapter.clock.wall_seconds()?;
@@ -1284,7 +1287,7 @@ impl PendingStore {
                 add(stored_at, cache_ttl)?,
             ],
             Some([wall, add(wall, retention)?, add(wall, cache_ttl)?]),
-            origin.map(mosdns_cache_core::NativeAttachment::new),
+            origin.map(atomdns_cache_core::NativeAttachment::new),
         )?;
         self.adapter.owner.revision.set(next_revision);
         Ok(true)
@@ -1304,8 +1307,8 @@ fn query_key_and_id(
 fn query_key_question(
     query: &[u8],
     enabled: bool,
-) -> Result<Option<(Vec<u8>, mosdns_dns_core::QueryHeader, ResponseQuestion)>, CacheAdapterError> {
-    let (header, question) = mosdns_dns_core::parse_query(query).map_err(|error| match error {
+) -> Result<Option<(Vec<u8>, atomdns_dns_core::QueryHeader, ResponseQuestion)>, CacheAdapterError> {
+    let (header, question) = atomdns_dns_core::parse_query(query).map_err(|error| match error {
         QueryError::Parse(_) | QueryError::Unsupported(_) => CacheAdapterError::InvalidQuery,
     })?;
     if question.qclass != CLASS_IN {
@@ -1472,7 +1475,7 @@ mod persistence_tests {
             let cache = NativeCacheAdapter::with_options_and_clock(8, 3600, Rc::new(clock.clone()))
                 .unwrap();
             let (query, response) = query_response();
-            let entry = mosdns_cache_core::NativeSnapshotEntry {
+            let entry = atomdns_cache_core::NativeSnapshotEntry {
                 attachment: None,
                 key: cache.key_for_query(&query).unwrap().unwrap(),
                 response: response.clone(),
@@ -1486,7 +1489,7 @@ mod persistence_tests {
                 .unwrap();
             assert_eq!(
                 cache.lookup_entry(&query).unwrap().unwrap().state,
-                mosdns_cache_core::LookupState::Lazy
+                atomdns_cache_core::LookupState::Lazy
             );
 
             let old = CacheCatalog::from_adapters(vec![cache.clone()]);
@@ -1523,7 +1526,7 @@ mod persistence_tests {
             assert_eq!(cache.pending_refreshes(), 0);
             assert_eq!(
                 cache.lookup_entry(&query).unwrap().unwrap().state,
-                mosdns_cache_core::LookupState::Lazy,
+                atomdns_cache_core::LookupState::Lazy,
                 "the retired response remains unchanged"
             );
             assert!(!published.get());

@@ -8,7 +8,7 @@ extension matrix's warm-up (the first 1000 queries of a cold host) was once abov
 one short follow-up stage, many times, in the same isolated environment, and
 optionally records a `perf` (software cpu-clock) profile of the native host.
 
-    python3 tools/5d-2/warmup_profile.py run --work prepared --binary mosdns-native --role native \
+    python3 tools/5d-2/warmup_profile.py run --work prepared --binary atomdns-native --role native \
         --output wp-native-1 --seed 501 [--perf]
     python3 tools/5d-2/warmup_profile.py summary wp-native-1 wp-native-2 wp-go-1 ...
 """

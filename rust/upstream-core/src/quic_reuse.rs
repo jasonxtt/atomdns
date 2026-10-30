@@ -137,8 +137,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+use atomdns_dns_core::{inspect_response_header, validate_response};
 use hyper::body::Buf;
-use mosdns_dns_core::{inspect_response_header, validate_response};
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
@@ -955,42 +955,42 @@ pub const PINNED_ERROR_CLASSIFICATION_TABLE: &[PinnedErrorClassRow] = &[
     },
     // ---- this crate's own response/framing validation ---------------------
     PinnedErrorClassRow {
-        vocabulary: "mosdns-upstream-core",
+        vocabulary: "atomdns-upstream-core",
         error_type: "SecureError",
         item: "DoqProtocolTrailingResponse",
         citation: "rust/upstream-core/src/secure/error.rs:478",
         class: QuicErrorClass::StreamLocal,
     },
     PinnedErrorClassRow {
-        vocabulary: "mosdns-upstream-core",
+        vocabulary: "atomdns-upstream-core",
         error_type: "SecureError",
         item: "DoqProtocolMissingResponseFin",
         citation: "rust/upstream-core/src/secure/error.rs:490",
         class: QuicErrorClass::StreamLocal,
     },
     PinnedErrorClassRow {
-        vocabulary: "mosdns-upstream-core",
+        vocabulary: "atomdns-upstream-core",
         error_type: "SecureError",
         item: "DoqProtocolNonzeroResponseId",
         citation: "rust/upstream-core/src/secure/error.rs:501",
         class: QuicErrorClass::StreamLocal,
     },
     PinnedErrorClassRow {
-        vocabulary: "mosdns-upstream-core",
+        vocabulary: "atomdns-upstream-core",
         error_type: "DohProtocolError",
         item: "PeerStreamTerminated",
         citation: "rust/upstream-core/src/secure/error.rs:359",
         class: QuicErrorClass::StreamLocal,
     },
     PinnedErrorClassRow {
-        vocabulary: "mosdns-upstream-core",
+        vocabulary: "atomdns-upstream-core",
         error_type: "DohProtocolError",
         item: "ResponseHeadTooLarge",
         citation: "rust/upstream-core/src/secure/error.rs:321",
         class: QuicErrorClass::StreamLocal,
     },
     PinnedErrorClassRow {
-        vocabulary: "mosdns-upstream-core",
+        vocabulary: "atomdns-upstream-core",
         error_type: "DohProtocolError",
         item: "IncompleteBody",
         citation: "rust/upstream-core/src/secure/error.rs:334",

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Writes rtdns-update-manifest.json for a release: the sha256 of every
-# rtdns-*.tar.gz in the artifact directory (the program and the WebUI, both required), the configuration schema/package ID the
+# Writes atomdns-update-manifest.json for a release: the sha256 of every
+# atomdns-*.tar.gz in the artifact directory (the program and the WebUI, both required), the configuration schema/package ID the
 # program requires (read from the Rust source and checked against the release metadata),
 # and the configuration package URL + sha256 once the package is published. The asset
 # names must equal the constants of the updater (RELEASE_ASSET, MANIFEST_ASSET).
@@ -15,9 +15,9 @@ METADATA="${RUST_RELEASE_METADATA:-${ROOT_DIR}/scripts/rust-release-metadata.jso
 SOURCE="${ROOT_DIR}/rust/native-host/src/update/mod.rs"
 VERSION="${1:?version tag is required (vX.Y.Z)}"
 ARTIFACT_DIR="${2:?artifact directory is required}"
-RELEASE_ASSET="rtdns-linux-amd64.tar.gz"
-WEBUI_ASSET="rtdns-webui.tar.gz"
-MANIFEST_ASSET="rtdns-update-manifest.json"
+RELEASE_ASSET="atomdns-linux-amd64.tar.gz"
+WEBUI_ASSET="atomdns-webui.tar.gz"
+MANIFEST_ASSET="atomdns-update-manifest.json"
 OUTPUT="${3:-${ARTIFACT_DIR}/${MANIFEST_ASSET}}"
 
 if ! [[ "${VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -36,10 +36,10 @@ while IFS= read -r file; do
   name="$(basename "${file}")"
   digest="$(hash_file "${file}")"
   artifacts="$(jq --arg name "${name}" --arg digest "${digest}" '. + {($name): {sha256: $digest}}' <<<"${artifacts}")"
-done < <(find "${ARTIFACT_DIR}" -maxdepth 1 -type f -name 'rtdns-*.tar.gz' | LC_ALL=C sort)
+done < <(find "${ARTIFACT_DIR}" -maxdepth 1 -type f -name 'atomdns-*.tar.gz' | LC_ALL=C sort)
 
 if [ "$(jq 'length' <<<"${artifacts}")" -eq 0 ]; then
-  echo "no rtdns-*.tar.gz found in ${ARTIFACT_DIR}" >&2
+  echo "no atomdns-*.tar.gz found in ${ARTIFACT_DIR}" >&2
   exit 1
 fi
 for name in "${RELEASE_ASSET}" "${WEBUI_ASSET}"; do

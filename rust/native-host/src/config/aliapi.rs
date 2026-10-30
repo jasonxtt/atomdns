@@ -17,7 +17,7 @@ use super::{
     RawNumber, RawPlugin, RawValue, build_forward_target, expect_bool, expect_map, expect_sequence,
     expect_string, hex_identity, parse_numeric_text,
 };
-use mosdns_upstream_core::Endpoint;
+use atomdns_upstream_core::Endpoint;
 
 /// The most upstreams one `aliapi` query may race.
 pub(crate) const MAX_CONCURRENT: usize = 20;

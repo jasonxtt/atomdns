@@ -9,11 +9,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use mosdns_native_host::{
+use atomdns_native_host::{
     CheckFindingKind, HostAssembly, ListenerKind, check_config, check_config_in, compile_yaml,
     compile_yaml_with_roots, load_and_compile,
 };
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_upstream_core::TransportCancellation;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const SHAPE: &str = "tests/fixtures/m1_0/config_all_shape";
@@ -190,7 +190,7 @@ fn the_binary_accepts_dash_d_and_reads_a_relative_config_from_it() {
     std::fs::copy(dir.path().join("cfg/config.yaml"), &data_config).unwrap();
     std::fs::copy(dir.path().join("cfg/inc.yaml"), data.join("inc.yaml")).unwrap();
     let run = |args: &[&str]| {
-        let output = Command::new(env!("CARGO_BIN_EXE_rtdns"))
+        let output = Command::new(env!("CARGO_BIN_EXE_atomdns"))
             .args(args)
             .current_dir(std::env::temp_dir())
             .output()
@@ -546,7 +546,7 @@ fn run_with_log(level: &str, file_line: &str) -> (String, std::process::Output) 
             listener("udp", "udp_server", &format!("127.0.0.1:{dns}"), "")
         ),
     );
-        let mut command = Command::new(env!("CARGO_BIN_EXE_rtdns"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_atomdns"));
         command
             .args(["start", "-d"])
             .arg(dir.path())
@@ -610,7 +610,7 @@ fn a_fatal_startup_error_reaches_both_stderr_and_the_log_file() {
             listener("tcp", "tcp_server", &format!("127.0.0.1:{port}"), "")
         ),
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_rtdns"))
+    let output = Command::new(env!("CARGO_BIN_EXE_atomdns"))
         .args(["start", "-d"])
         .arg(dir.path())
         .args(["-c", "config.yaml"])
@@ -639,7 +639,7 @@ fn log_file_is_appended_not_truncated() {
             listener("udp", "udp_server", &format!("127.0.0.1:{port}"), "")
         ),
     );
-        let mut command = Command::new(env!("CARGO_BIN_EXE_rtdns"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_atomdns"));
         command
             .args(["start", "-d"])
             .arg(dir.path())
@@ -711,7 +711,7 @@ fn a_configuration_naming_native_management_is_refused_with_a_clear_message() {
             "{value}: {error}"
         );
 
-        let output = Command::new(env!("CARGO_BIN_EXE_rtdns"))
+        let output = Command::new(env!("CARGO_BIN_EXE_atomdns"))
             .args(["check", "-c"])
             .arg(&config)
             .output()
@@ -721,7 +721,7 @@ fn a_configuration_naming_native_management_is_refused_with_a_clear_message() {
         assert!(stdout.contains(MANAGEMENT_REMOVED), "{value}: {stdout}");
         assert!(stdout.contains("SUMMARY "), "{value}: {stdout}");
 
-        let output = Command::new(env!("CARGO_BIN_EXE_rtdns"))
+        let output = Command::new(env!("CARGO_BIN_EXE_atomdns"))
             .args(["start", "-c"])
             .arg(&config)
             .output()

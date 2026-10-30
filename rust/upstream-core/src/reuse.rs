@@ -836,7 +836,7 @@ impl ReuseOwner {
 
         // A response shorter than the header or with QR clear cannot be
         // attributed to this exchange as a response.
-        let header = match mosdns_dns_core::inspect_response_header(&body) {
+        let header = match atomdns_dns_core::inspect_response_header(&body) {
             Ok(header) => header,
             Err(_) => {
                 return Attempt::Terminal(Some(stream), UpstreamError::MalformedResponse);
@@ -848,7 +848,7 @@ impl ReuseOwner {
             return Attempt::Terminal(Some(stream), UpstreamError::ResponseMismatch);
         }
         // Only a complete, dns-core-valid response may be returned.
-        if mosdns_dns_core::validate_response(&body).is_err() {
+        if atomdns_dns_core::validate_response(&body).is_err() {
             return Attempt::Terminal(Some(stream), UpstreamError::MalformedResponse);
         }
 
@@ -1746,7 +1746,7 @@ mod tests {
         let mut ca_params = CertificateParams::default();
         ca_params
             .distinguished_name
-            .push(DnType::CommonName, "mosdns-reuse-commit-root");
+            .push(DnType::CommonName, "atomdns-reuse-commit-root");
         ca_params.not_before = date_time_ymd(2024, 1, 1);
         ca_params.not_after = date_time_ymd(2036, 1, 1);
         ca_params.is_ca = IsCa::Ca(BasicConstraints::Constrained(0));

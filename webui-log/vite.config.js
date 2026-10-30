@@ -12,14 +12,14 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const version = process.env.UI_VERSION || 'dev'
 const outDir = path.resolve(__dirname, 'dist')
-const devProxyTarget = process.env.MOSDNS_DEV_TARGET || 'http://127.0.0.1'
+const devProxyTarget = process.env.ATOMDNS_DEV_TARGET || 'http://127.0.0.1'
 
 export default defineConfig({
   base: './',
   plugins: [
     vue(),
     {
-      name: 'rtdns-version-stamp',
+      name: 'atomdns-version-stamp',
       closeBundle() {
         const indexPath = path.join(outDir, 'index.html')
         if (!fs.existsSync(indexPath)) {

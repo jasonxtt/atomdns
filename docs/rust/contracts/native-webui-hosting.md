@@ -1,6 +1,6 @@
 # Native WebUI hosting and runtime capabilities
 
-This contract belongs to the opt-in pure Rust `mosdns-native-host`. It does not
+This contract belongs to the opt-in pure Rust `atomdns-native-host`. It does not
 select the production/default binary or close the full native migration gate.
 
 ## Same-origin hosting
@@ -22,7 +22,7 @@ MIME and `nosniff`; no listing, no SPA fallback, no ETags.
 
 **Without a usable `ui/main`** (absent, a symbolic link, or refused by its manifest) only
 `GET`/`HEAD /` answers, with `404` and a short `text/html` page: no WebUI is installed, unpack
-`rtdns-webui.tar.gz` into `<config root>/ui/main/` and restart; the reason is added when
+`atomdns-webui.tar.gz` into `<config root>/ui/main/` and restart; the reason is added when
 `ui/main` was refused. Every other non-API path is a plain 404, and the API, `/metrics` and
 the other `ui/<name>/` mounts are unaffected. That is the pure-backend (headless) setup.
 
@@ -47,10 +47,10 @@ failures produce bounded diagnostics, without filenames/content disclosure.
 `webui-log/dist/` (`index.html`, `app.js`, `app.css`, `chunks/`, `assets/`, `ui-manifest.json`) with
 **relative** resource URLs (`base: './'`), so the same package works as `ui/main` at `/` and as any
 `ui/<name>` at `/<name>/` (API calls are same-origin absolute paths); `npm run build:package` also
-writes `release/rtdns-webui.tar.gz` (the package files at the top level: the release asset). Online
+writes `release/atomdns-webui.tar.gz` (the package files at the top level: the release asset). Online
 updates replace `ui/main` with the release's package when, and only when, `ui/main` exists
 ([native-update](native-update.md)); other `ui/<name>` directories are never touched. Directory
-names follow the rules above. A **mosdns UI package** is a directory that carries a
+names follow the rules above. A **atomdns UI package** is a directory that carries a
 `ui-manifest.json`:
 
 ```json
@@ -66,10 +66,10 @@ degrades by `/api/v1/capabilities`). **Compatible ⇔ `requires_api_level ≤ HO
 `api_level ≥ MIN_UI_API_LEVEL`.** The manifest check applies **only to directories that have a
 manifest**, `ui/main` included. At startup the registry looks in each pinned `ui/<name>` directory for
 `ui-manifest.json` (beneath-only, no symlinks, a regular file of at most 64 KiB):
-- **no manifest** → not a mosdns UI package: the directory is mounted as a generic static mount
+- **no manifest** → not a atomdns UI package: the directory is mounted as a generic static mount
   (other static pages an operator put there keep working), and health notes
-  "非 mosdns UI 包（无 manifest）" (`kind: "static"`);
-- **manifest, compatible, `index.html` a regular file** → mounted (`kind: "mosdns_ui"`, with its version);
+  "非 atomdns UI 包（无 manifest）" (`kind: "static"`);
+- **manifest, compatible, `index.html` a regular file** → mounted (`kind: "atomdns_ui"`, with its version);
 - **manifest present but unreadable / not JSON / wrong schema / invalid version / incompatible level /
   `index.html` missing** → **not mounted** (`/<name>/` is 404; for `ui/main`, `/` shows the "no WebUI"
   page with the reason) with a fixed, content-free reason.
@@ -90,9 +90,9 @@ requests do not acquire query/mutation leases or create DNS audit/metric events.
 
 ## Version and readiness
 
-`mosdns version` prints only the product version and newline, exits zero before
+`atomdns version` prints only the product version and newline, exits zero before
 config/runtime construction, and rejects extra arguments. Bare Cargo defaults
-to `dev`; explicit `MOSDNS_BUILD_VERSION` is nonempty and cannot contain CR/LF.
+to `dev`; explicit `ATOMDNS_BUILD_VERSION` is nonempty and cannot contain CR/LF.
 Health GET `/api/v1/system/health` shares this exact version. JSON fields are
 `ready`, `runtime:"rust"`, `version`, `state`, `required_config_schema:null`,
 `applied_config_schema:null`, `config_management_enabled:false`, and
@@ -100,11 +100,11 @@ Health GET `/api/v1/system/health` shares this exact version. JSON fields are
 special-group files that could not be removed yet; empty normally, never affects
 `ready`; see native-special-groups.md), `external_ui`
 (an array, sorted by name, at most 64 entries, one per directory under `ui/`:
-`{"name", "path", "mounted", "kind": "mosdns_ui"|"static"|"unusable", "ui_version", "built_at", "reason"}`;
+`{"name", "path", "mounted", "kind": "atomdns_ui"|"static"|"unusable", "ui_version", "built_at", "reason"}`;
 `path` is `/` for `main` (the WebUI) and `/<name>/` otherwise (v0.4.0);
-`reason` explains a refusal, or notes that a manifest-less directory is not a mosdns UI package; the
+`reason` explains a refusal, or notes that a manifest-less directory is not a atomdns UI package; the
 WebUI shows `main`'s `ui_version` as 界面版本 on the system page, a link to `/<name>/` for **every**
-other mounted compatible mosdns UI package (not the one being viewed) and the reason of each refused
+other mounted compatible atomdns UI package (not the one being viewed) and the reason of each refused
 one; never affects `ready`) and `udp_receive_buffers` (one
 `{listen, bytes}` per live UDP listener: the kernel receive buffer it was
 granted, `null` when unreadable; see "UDP receive buffer and apply pause"
@@ -179,7 +179,7 @@ in between are lost. The measured gap is in the F-1 validation record.
 **Process metrics (`metrics.process`)** — the process section of `GET /metrics` (Prometheus text,
 read from `/proc/self`): `process_cpu_seconds_total`, `process_start_time_seconds`,
 `process_resident_memory_bytes`, `process_virtual_memory_bytes`, `process_open_fds`,
-`process_max_fds`, and the native gauge `mosdns_process_threads`. Go-runtime figures
+`process_max_fds`, and the native gauge `atomdns_process_threads`. Go-runtime figures
 (`go_gc_*`, `go_goroutines`, `go_info`, `go_memstats_*`) and the system network counters of the
 reference's `process_network_*` do not exist in this runtime and are **not emitted**; the WebUI
 shows only the available figures. The start time is the
@@ -253,8 +253,8 @@ unbounded), string values cut at 256 characters; the oldest line is dropped firs
 `capture buffer limit reached: N older lines dropped` leads the next read.
 
 **`/metrics` upstream series** — for every `aliapi` upstream **with a `tag`** (as in the reference),
-from startup at zero: `mosdns_aliapi_query_total`, `_error_total`, `_upstream_winner_total`
-(counters) and `mosdns_aliapi_response_latency_millisecond` (histogram: `_bucket{le=…}` with the
+from startup at zero: `atomdns_aliapi_query_total`, `_error_total`, `_upstream_winner_total`
+(counters) and `atomdns_aliapi_response_latency_millisecond` (histogram: `_bucket{le=…}` with the
 bounds `1,5,10,20,50,100,200,500,1000,2000,5000,+Inf`, `_sum`, `_count`), labelled `addr` (the
 configured address text), `metrics_tag` (the plugin tag) and `tag` (the upstream tag). Units are
 counts and whole milliseconds (truncated, as the reference). Semantics: `query_total` counts every
@@ -263,13 +263,13 @@ counts failed and timed-out attempts; a canceled or dropped attempt is neither a
 latency observation (the reference lets losers finish, so they would count there); the latency
 histogram observes successful attempts only; `winner_total` counts attempts whose response became
 their group's final response. Counters stay monotonic across configuration changes (the reference
-resets an upstream's counters when its group is rebuilt). The `mosdns_cache_*` series and the
+resets an upstream's counters when its group is rebuilt). The `atomdns_cache_*` series and the
 process figures are unchanged.
 
-*Not provided* (no matching native event, and nothing reads them): `mosdns_aliapi_inflight_queries`
+*Not provided* (no matching native event, and nothing reads them): `atomdns_aliapi_inflight_queries`
 (attempts are tallied when a query ends, so attempts in flight are not visible), and
-`mosdns_aliapi_conn_opened_total` / `_conn_closed_total`; the `mosdns_forward_*` and
-`mosdns_metrics_collector_*` families (`config_rust` uses neither plugin); the `go_*` runtime series.
+`atomdns_aliapi_conn_opened_total` / `_conn_closed_total`; the `atomdns_forward_*` and
+`atomdns_metrics_collector_*` families (`config_rust` uses neither plugin); the `go_*` runtime series.
 They are not emitted as zeros.
 
 **`/debug/pprof` — compatibility decision.** The native host does **not** serve the Go profiler
@@ -339,7 +339,7 @@ unchanged. Client-count rank truncation is not changed by this increment.
 
 | Module | Addresses |
 | --- | --- |
-| 概览 | `#/overview` — figures from the retained audit records (their coverage is taken from `/api/v2/audit/stats/windows`; the per-window table was dropped in the part-1 rework), cache hit (summed `mosdns_cache_hit_total` / `mosdns_cache_query_total` of the named caches), CPU (one-core % between two `process_cpu_seconds_total` samples), memory (RSS), upstream (groups not in use under the current switches left out), routing, top domains/clients, slowest queries, learning summary (`/plugins/route_learner/status`) |
+| 概览 | `#/overview` — figures from the retained audit records (their coverage is taken from `/api/v2/audit/stats/windows`; the per-window table was dropped in the part-1 rework), cache hit (summed `atomdns_cache_hit_total` / `atomdns_cache_query_total` of the named caches), CPU (one-core % between two `process_cpu_seconds_total` samples), memory (RSS), upstream (groups not in use under the current switches left out), routing, top domains/clients, slowest queries, learning summary (`/plugins/route_learner/status`) |
 | 日志 | `#/logs` — live query (the client-alias button links to `#/rules/clients`); `#/logs/diagnostic` — diagnostic capture as its own page, reached from a button on the live page, with a way back |
 | 规则设置 | `#/rules/{mode,upstream,routing,blocking,learning,cache,clients,special-groups}` — eight sub-items (part 2, below); `#/rules/rewrite` redirects to `#/rules/routing` |
 | 系统管理 | `#/system` — one page of setting rows in five sections: version and update (with system info and configuration-package state), backup (export only), audit switch and capacity, theme and auto refresh, WebUI port / restart / reset statistics; the former `#/system/<section>` addresses redirect here |
@@ -368,8 +368,8 @@ saving (a rule the server skipped is reported), and a guard against cut-off list
 saved from the page. Leaving a page (or sub-item) with unsaved edits asks first (the router guard; the browser also asks before the tab closes). The fixed lists are always shown
 (no longer hidden when `special_groups.enabled`). The online subscription table is shared by the five sets, AdGuard and a special group's subscriptions.
 
-Theme: light / dark / follow the system (default), kept in the browser (`rtdns-theme`); every
-browser key uses the `rtdns-` prefix and older `mosdns*` keys are not read. Value colours
+Theme: light / dark / follow the system (default), kept in the browser (`atomdns-theme`); every
+browser key uses the `atomdns-` prefix and older `atomdns*` keys are not read. Value colours
 (latency ≤ 50 ms green, ≤ 200 ms yellow, above red; cache hit ≥ 90 % green, ≥ 70 % yellow; CPU
 > 50 % yellow, > 90 % red; memory > 128 MiB yellow, > 256 MiB red) are display only and defined
 once in `webui-log/src/utils/overviewMetrics.js`.
@@ -379,7 +379,7 @@ once in `webui-log/src/utils/overviewMetrics.js`.
 `scripts/build-rust-native.sh` builds the program alone (locked Cargo release in a
 source-hash-keyed Cargo directory, preventing restored older mtimes from reusing a stale
 executable); it runs no frontend build. `BUILD_VERSION` overrides repository
-`git describe --dirty` (fallback dev). `OUTPUT` defaults to `release/rtdns-native`. Its adjacent
+`git describe --dirty` (fallback dev). `OUTPUT` defaults to `release/atomdns-native`. Its adjacent
 `.manifest.json` records the source hashes (`rust/` and the two build scripts), compiler,
 artifact SHA-256 and CLI version. Source ID is null unless `BUILD_SOURCE_ID` is explicitly
 supplied; dirty code is not represented as clean HEAD. The WebUI is built separately

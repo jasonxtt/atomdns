@@ -24,7 +24,7 @@ async function requestRestart(delayMs) {
 
 async function restartHost() {
   if (!supportsOperation('system.restart')) return
-  if (!(await openConfirm('确认重启 rtdns？', { tone: 'danger' }))) {
+  if (!(await openConfirm('确认重启 AtomDNS？', { tone: 'danger' }))) {
     return
   }
   clearTopNotice()
@@ -43,7 +43,7 @@ async function restartHost() {
 // The overview statistics live in the process (audit ring, counters): a restart clears them.
 async function resetStatistics() {
   if (!supportsOperation('system.restart') || resetting.value) return
-  const confirmed = await openConfirm('将清空概览页全部统计并重启 rtdns，是否继续？', {
+  const confirmed = await openConfirm('将清空概览页全部统计并重启 AtomDNS，是否继续？', {
     title: '重置统计',
     confirmText: '继续',
     tone: 'danger'
@@ -101,7 +101,7 @@ async function applyWebUIPortAndRestart() {
     setError('请输入 1-65535 之间的端口')
     return
   }
-  if (!(await openConfirm(`将 WebUI 端口改为 ${port} 并重启 rtdns，确认继续？`, { tone: 'danger' }))) {
+  if (!(await openConfirm(`将 WebUI 端口改为 ${port} 并重启 AtomDNS，确认继续？`, { tone: 'danger' }))) {
     return
   }
   clearTopNotice()
@@ -110,7 +110,7 @@ async function applyWebUIPortAndRestart() {
     await postJSON('/api/v1/system/webui-port', { port })
     await requestRestart(800)
     const target = buildWebUIRootUrl(port)
-    setSuccess(`端口已更新为 ${port}，rtdns 正在重启，稍后将跳转到新地址。`)
+    setSuccess(`端口已更新为 ${port}，AtomDNS 正在重启，稍后将跳转到新地址。`)
     setTimeout(() => {
       window.location.href = target
     }, 4500)
@@ -124,26 +124,26 @@ async function applyWebUIPortAndRestart() {
 
 onMounted(() => {
   loadWebUIPortSettings()
-  window.addEventListener('mosdns-log-refresh', loadWebUIPortSettings)
+  window.addEventListener('atomdns-log-refresh', loadWebUIPortSettings)
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('mosdns-log-refresh', loadWebUIPortSettings)
+  window.removeEventListener('atomdns-log-refresh', loadWebUIPortSettings)
 })
 </script>
 
 <template>
   <SettingSection id="service" title="服务" tiles>
     <CapabilityBoundary operation="system.webui_port">
-      <SettingRow label="WebUI 端口" layout="form" :description="webuiPort.activeAddr ? `当前监听 ${webuiPort.activeAddr}。修改后 rtdns 会重启并跳转到新端口` : '修改后 rtdns 会重启并跳转到新端口'">
+      <SettingRow label="WebUI 端口" layout="form" :description="webuiPort.activeAddr ? `当前监听 ${webuiPort.activeAddr}。修改后 AtomDNS 会重启并跳转到新端口` : '修改后 AtomDNS 会重启并跳转到新端口'">
         <input v-model="webuiPort.input" class="rt-setting-input rt-setting-input-short" type="number" min="1" max="65535" placeholder="端口" aria-label="WebUI 端口" />
         <button class="btn tiny primary" :disabled="webuiPort.saving || webuiPort.loading" @click="applyWebUIPortAndRestart">{{ webuiPort.saving ? '处理中...' : '保存并重启' }}</button>
       </SettingRow>
     </CapabilityBoundary>
     <SettingRow label="重启与重置" layout="form" description="原地重启（进程号不变），期间 DNS 短暂不可用。重置统计会清空概览页的全部统计，做法就是重启" data-service-restart>
       <span v-if="!supportsOperation('system.restart')" class="muted rt-setting-note" role="note">{{ operationReason('system.restart') }}</span>
-      <button class="btn tiny secondary" :disabled="restarting || !supportsOperation('system.restart')" @click="restartHost">{{ restarting ? '处理中...' : '重启 rtdns' }}</button>
-      <button class="btn tiny danger" :disabled="resetting || !supportsOperation('system.restart')" title="清空概览页全部统计并重启 rtdns" @click="resetStatistics">{{ resetting ? '重置中...' : '重置统计' }}</button>
+      <button class="btn tiny secondary" :disabled="restarting || !supportsOperation('system.restart')" @click="restartHost">{{ restarting ? '处理中...' : '重启 AtomDNS' }}</button>
+      <button class="btn tiny danger" :disabled="resetting || !supportsOperation('system.restart')" title="清空概览页全部统计并重启 AtomDNS" @click="resetStatistics">{{ resetting ? '重置中...' : '重置统计' }}</button>
     </SettingRow>
   </SettingSection>
 </template>

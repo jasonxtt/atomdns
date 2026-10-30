@@ -134,7 +134,7 @@ pub(crate) fn render(sample: &ProcessSample) -> String {
         );
     }
     metric(
-        "mosdns_process_threads",
+        "atomdns_process_threads",
         "gauge",
         "Number of operating-system threads of the process.",
         sample.threads.to_string(),
@@ -192,7 +192,7 @@ mod tests {
         assert!(text.contains("process_resident_memory_bytes 100\n"));
         assert!(text.contains("process_open_fds 12\n"));
         assert!(text.contains("process_max_fds 1024\n"));
-        assert!(text.contains("mosdns_process_threads 3\n"));
+        assert!(text.contains("atomdns_process_threads 3\n"));
         for forbidden in ["go_", "process_network"] {
             assert!(!text.contains(forbidden), "{forbidden} must not be emitted");
         }

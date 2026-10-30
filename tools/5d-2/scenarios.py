@@ -297,7 +297,7 @@ def run_scenario(spec, work, role, binary, output, seed=501):
                 time.sleep(10)
                 idle.append(dict(t=round(time.monotonic() - began, 1), **proc_snapshot(dict(pid=env.host.pid))))
             (output / 'idle.json').write_text(json.dumps(idle))
-        log = env.root / 'tmp/mosdns.log'
+        log = env.root / 'tmp/atomdns.log'
         (output / 'host-log-tail.txt').write_text(log.read_text(errors='replace')[-400000:] if log.exists() else '')
     result = analysis(spec, role, output, events)
     (output / 'result.json').write_text(json.dumps(result, indent=2))

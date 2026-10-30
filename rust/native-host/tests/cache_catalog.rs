@@ -15,11 +15,11 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use mosdns_dns_core::{inspect_response_header, validate_response};
-use mosdns_native_host::{
+use atomdns_dns_core::{inspect_response_header, validate_response};
+use atomdns_native_host::{
     CacheId, CacheKind, CacheTestClock, HostAssembly, HostOptions, UdpServer, compile_yaml,
 };
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_upstream_core::TransportCancellation;
 
 /// A loopback upstream that answers every query with one fixed A record.
 struct MockUpstream {
@@ -147,7 +147,7 @@ fn run_batch_with_store(yaml: &str, requests: Vec<Vec<u8>>) -> (Vec<Vec<u8>>, us
 fn run_batch_with_audit(
     yaml: &str,
     requests: Vec<Vec<u8>>,
-) -> (Vec<Vec<u8>>, usize, u64, mosdns_native_host::AuditSnapshot) {
+) -> (Vec<Vec<u8>>, usize, u64, atomdns_native_host::AuditSnapshot) {
     let mock = MockUpstream::start();
     let prepared = yaml.replace("udp://127.0.0.1:15455", &format!("udp://{}", mock.address));
     let config = compile_yaml(&prepared).expect("catalog configuration must compile");
@@ -178,7 +178,7 @@ fn run_batch_with_audit(
     let stored = assembly
         .cache()
         .get(CacheId(0))
-        .map_or(0, mosdns_native_host::NativeCacheAdapter::len);
+        .map_or(0, atomdns_native_host::NativeCacheAdapter::len);
     mock.stop();
     (responses, requests_seen, stored, assembly.audit_snapshot())
 }
@@ -591,7 +591,7 @@ fn cache_hit_restores_the_successor_domain_set_in_the_final_query_audit() {
     assert_eq!(audit.records[1].domain_set.as_deref(), Some("routed"));
     assert_eq!(
         audit.records[1].cache_status,
-        mosdns_native_host::CacheStatus::Hit
+        atomdns_native_host::CacheStatus::Hit
     );
 }
 
@@ -682,7 +682,7 @@ fn lazy_refresh_through_exit_outlives_the_client_merges_followers_and_leaves_aud
                 .await
                 .unwrap();
             assert_eq!(
-                mosdns_dns_core::observe_response_ttl(&answer)
+                atomdns_dns_core::observe_response_ttl(&answer)
                     .unwrap()
                     .minimal_ttl,
                 5
@@ -740,7 +740,7 @@ fn lazy_refresh_through_exit_outlives_the_client_merges_followers_and_leaves_aud
             .await
             .unwrap();
         assert_eq!(
-            mosdns_dns_core::observe_response_ttl(&answer)
+            atomdns_dns_core::observe_response_ttl(&answer)
                 .unwrap()
                 .minimal_ttl,
             30
@@ -783,7 +783,7 @@ fn lazy_refresh_through_exit_outlives_the_client_merges_followers_and_leaves_aud
 
 #[test]
 fn detached_successor_owns_its_state_and_rebinds_exactly_one_64_fuel_root() {
-    use mosdns_sequence_core::{
+    use atomdns_sequence_core::{
         CancellationToken, ExecutionControl, ExecutionState, ExecutorOutcome, MachineStep,
         RootFuelHandle,
     };
@@ -793,7 +793,7 @@ fn detached_successor_owns_its_state_and_rebinds_exactly_one_64_fuel_root() {
     }
     let config = compile_yaml(&catalog_yaml(&named_cache("cache_a", 64), &rules)).unwrap();
     let q = query(1, "fuel.example");
-    let (header, question) = mosdns_dns_core::parse_query(&q).unwrap();
+    let (header, question) = atomdns_dns_core::parse_query(&q).unwrap();
     let cancellation = CancellationToken::new();
     let client_fuel = RootFuelHandle::new(1);
     let mut client = config
@@ -818,7 +818,7 @@ fn detached_successor_owns_its_state_and_rebinds_exactly_one_64_fuel_root() {
     assert!(
         matches!(
             refresh.state().response,
-            mosdns_sequence_core::ResponseState::None
+            atomdns_sequence_core::ResponseState::None
         ),
         "capture precedes stale response"
     );

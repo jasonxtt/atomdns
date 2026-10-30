@@ -1,7 +1,7 @@
 //! Shared pieces of static serving: target decoding, MIME types, safe
 //! redirects, and the page `/` shows when no WebUI is installed. The program
 //! embeds no UI; the WebUI is `<config root>/ui/main/` (`external_ui.rs`).
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_upstream_core::TransportCancellation;
 use std::io;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
@@ -100,9 +100,9 @@ pub(crate) async fn write_not_installed<W: AsyncWrite + Unpin>(
         None => String::new(),
     };
     let body = format!(
-        "<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\"><title>rtdns</title>\
-         <p>rtdns 正在运行，但没有安装 WebUI。</p>{detail}\
-         <p>把 rtdns-webui.tar.gz 解压到 &lt;配置根&gt;/ui/main/ 后重启即可；接口照常可用。</p></html>\n"
+        "<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\"><title>atomdns</title>\
+         <p>atomdns 正在运行，但没有安装 WebUI。</p>{detail}\
+         <p>把 atomdns-webui.tar.gz 解压到 &lt;配置根&gt;/ui/main/ 后重启即可；接口照常可用。</p></html>\n"
     );
     let response = async {
         writer

@@ -5,8 +5,8 @@
 
 use std::path::PathBuf;
 
-use mosdns_native_host::{BoundHost, HostAssembly};
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_native_host::{BoundHost, HostAssembly};
+use atomdns_upstream_core::TransportCancellation;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -86,7 +86,7 @@ fn config(tree: &Tree, cnfake: &str, nocnfake: &str, api: u16) {
 }
 
 fn compile_error(tree: &Tree) -> String {
-    match mosdns_native_host::load_and_compile(&tree.path("config.yaml")) {
+    match atomdns_native_host::load_and_compile(&tree.path("config.yaml")) {
         Ok(_) => panic!("compiled"),
         Err(error) => error.to_string(),
     }
@@ -146,7 +146,7 @@ fn show_when_is_validated_like_the_flag_matcher() {
         "[\"flag cn_fakeip\", \"!flag dns_mode=realip\"]",
     ] {
         config(&tree, cnfake, "\"flag dns_mode=fakeip\"", port);
-        mosdns_native_host::load_and_compile(&tree.path("config.yaml"))
+        atomdns_native_host::load_and_compile(&tree.path("config.yaml"))
             .unwrap_or_else(|error| panic!("{cnfake}: {error}"));
     }
 }

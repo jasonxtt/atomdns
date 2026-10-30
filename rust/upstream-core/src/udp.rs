@@ -14,7 +14,7 @@
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Instant;
 
-use mosdns_dns_core::{inspect_response_header, validate_response};
+use atomdns_dns_core::{inspect_response_header, validate_response};
 use tokio::net::UdpSocket;
 
 use crate::{

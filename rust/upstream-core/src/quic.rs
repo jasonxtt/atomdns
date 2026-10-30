@@ -70,8 +70,8 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Instant;
 
+use atomdns_dns_core::{inspect_response_header, validate_response};
 use hyper::body::Buf as _;
-use mosdns_dns_core::{inspect_response_header, validate_response};
 use quinn::crypto::rustls::QuicClientConfig;
 
 use crate::secure::{

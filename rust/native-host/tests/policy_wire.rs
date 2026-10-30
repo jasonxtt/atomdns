@@ -1,10 +1,10 @@
-use hickory_proto::op::{Message, Query};
-use hickory_proto::rr::{DNSClass, Name, RData, RecordType};
-use mosdns_native_host::{
+use atomdns_native_host::{
     CacheTestClock, HostAssembly, HostOptions, ResponseSource, ResponseState, UdpServer,
     compile_yaml,
 };
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_upstream_core::TransportCancellation;
+use hickory_proto::op::{Message, Query};
+use hickory_proto::rr::{DNSClass, Name, RData, RecordType};
 use std::net::UdpSocket;
 use std::time::Duration;
 
@@ -119,8 +119,8 @@ fn hosts_empty_family_has_complete_fake_soa() {
     let RData::SOA(soa) = record.data() else {
         panic!("SOA required")
     };
-    assert_eq!(soa.mname().to_ascii(), "fake-ns.mosdns.fake.root.");
-    assert_eq!(soa.rname().to_ascii(), "fake-mbox.mosdns.fake.root.");
+    assert_eq!(soa.mname().to_ascii(), "fake-ns.atomdns.fake.root.");
+    assert_eq!(soa.rname().to_ascii(), "fake-mbox.atomdns.fake.root.");
     assert_eq!(
         (
             soa.serial(),
@@ -395,7 +395,7 @@ fn cache_before_and_inside_redirect_owns_correct_wire_and_key() {
         );
         let second = request(&host, original.clone());
         assert_eq!(first.answers(), second.answers());
-        let cache = host.cache().get(mosdns_native_host::CacheId(0)).unwrap();
+        let cache = host.cache().get(atomdns_native_host::CacheId(0)).unwrap();
         let (stored, absent) = if outer {
             (&original, &target)
         } else {
@@ -428,7 +428,7 @@ fn redirect_exit_decorates_response_and_publishes_outer_cache() {
     assert_eq!(response.queries()[0].name().to_ascii(), "original.example.");
     assert!(
         host.cache()
-            .get(mosdns_native_host::CacheId(0))
+            .get(atomdns_native_host::CacheId(0))
             .unwrap()
             .lookup(&original)
             .unwrap()
@@ -528,7 +528,7 @@ fn redirect_exit_through_named_fallback_target_publishes_and_skips_parent_tail()
     assert_eq!(response.answers()[1].ttl(), 10);
     assert!(
         host.cache()
-            .get(mosdns_native_host::CacheId(0))
+            .get(atomdns_native_host::CacheId(0))
             .unwrap()
             .lookup(&original)
             .unwrap()
@@ -599,7 +599,7 @@ fn response_ip_named_cidr_or_ipv6_and_mapped_addresses_drive_real_sequence() {
 #[test]
 fn response_ip_text_file_is_or_snapshot_not_request_time_io() {
     let path = std::env::temp_dir().join(format!(
-        "mosdns-ip-wire-{}-{}.txt",
+        "atomdns-ip-wire-{}-{}.txt",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -643,7 +643,7 @@ fn composition_ttl_inside_and_outside_cache_keep_distinct_stored_ttls() {
         );
         let raw = query(RecordType::A, DNSClass::IN, "a.example.");
         assert_eq!(request(&host, raw.clone()).answers()[0].ttl(), 30);
-        let cache = host.cache().get(mosdns_native_host::CacheId(0)).unwrap();
+        let cache = host.cache().get(atomdns_native_host::CacheId(0)).unwrap();
         assert_eq!(
             Message::from_vec(&cache.lookup(&raw).unwrap().unwrap())
                 .unwrap()
@@ -668,7 +668,7 @@ fn composition_ttl_inside_and_outside_cache_keep_distinct_stored_ttls() {
 #[test]
 fn composition_retained_dump_can_hit_old_policy_until_quiescent_durable_flush() {
     let path = std::env::temp_dir().join(format!(
-        "mosdns-policy-dump-{}-{}.gz",
+        "atomdns-policy-dump-{}-{}.gz",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -696,7 +696,7 @@ fn composition_retained_dump_can_hit_old_policy_until_quiescent_durable_flush() 
             "192.0.2.1"
         );
         old.cache()
-            .get(mosdns_native_host::CacheId(0))
+            .get(atomdns_native_host::CacheId(0))
             .unwrap()
             .save()
             .await
@@ -706,7 +706,10 @@ fn composition_retained_dump_can_hit_old_policy_until_quiescent_durable_flush() 
     });
     drop(old);
     let changed = assembly_extra(rules, "['a.example 192.0.2.2']", "127.0.0.1:19000", &extra);
-    let cache = changed.cache().get(mosdns_native_host::CacheId(0)).unwrap();
+    let cache = changed
+        .cache()
+        .get(atomdns_native_host::CacheId(0))
+        .unwrap();
     changed
         .block_on(cache.import_dump(std::fs::read(&path).unwrap()))
         .unwrap();
@@ -735,7 +738,7 @@ fn composition_retained_dump_can_hit_old_policy_until_quiescent_durable_flush() 
         .block_on(
             after_flush
                 .cache()
-                .get(mosdns_native_host::CacheId(0))
+                .get(atomdns_native_host::CacheId(0))
                 .unwrap()
                 .import_dump(std::fs::read(&path).unwrap()),
         )
@@ -750,7 +753,7 @@ fn composition_retained_dump_can_hit_old_policy_until_quiescent_durable_flush() 
 #[test]
 fn composition_lazy_refresh_uses_same_immutable_hosts_snapshot() {
     let clock = CacheTestClock::new(10);
-    let path = std::env::temp_dir().join(format!("mosdns-hosts-lazy-{}.txt", std::process::id()));
+    let path = std::env::temp_dir().join(format!("atomdns-hosts-lazy-{}.txt", std::process::id()));
     std::fs::write(&path, "a.example 192.0.2.1\n").unwrap();
     let extra = format!(
         "  - tag: source_hosts\n    type: hosts\n    args: {{files: ['{}']}}\n  - tag: stored\n    type: cache\n    args: {{size: 64, lazy_cache_ttl: 90}}\n",
@@ -779,17 +782,17 @@ fn composition_lazy_refresh_uses_same_immutable_hosts_snapshot() {
         clock.advance(11);
         let lazy = ask(address, raw.clone()).await.unwrap();
         assert_eq!(lazy.answers()[0].data().to_string(), "192.0.2.1");
-        let cache = host.cache().get(mosdns_native_host::CacheId(0)).unwrap();
+        let cache = host.cache().get(atomdns_native_host::CacheId(0)).unwrap();
         let limit = std::time::Instant::now() + Duration::from_secs(1);
         while cache.lookup_entry(&raw).unwrap().unwrap().state
-            != mosdns_cache_core::LookupState::Fresh
+            != atomdns_cache_core::LookupState::Fresh
             && std::time::Instant::now() < limit
         {
             tokio::task::yield_now().await;
         }
         assert_eq!(
             cache.lookup_entry(&raw).unwrap().unwrap().state,
-            mosdns_cache_core::LookupState::Fresh
+            atomdns_cache_core::LookupState::Fresh
         );
         assert_eq!(
             ask(address, raw.clone()).await.unwrap().answers()[0].ttl(),
@@ -930,7 +933,7 @@ fn composition_fallback_redirect_siblings_are_isolated_and_cancelled_supplier_ne
             .attempts
             .iter()
             .any(|attempt| attempt.entry == "upstream"
-                && attempt.outcome == mosdns_native_host::UpstreamAttemptOutcome::Canceled)
+                && attempt.outcome == atomdns_native_host::UpstreamAttemptOutcome::Canceled)
     );
 }
 #[test]
@@ -951,7 +954,7 @@ fn composition_ip_matchers_see_target_and_restored_cached_answers_at_their_own_b
     let stored = Message::from_vec(
         &host
             .cache()
-            .get(mosdns_native_host::CacheId(0))
+            .get(atomdns_native_host::CacheId(0))
             .unwrap()
             .lookup(&raw)
             .unwrap()

@@ -25,7 +25,7 @@ from evaluate import event_failed, valid_dns_outcomes, static_oracle_block_reaso
 from fload import proc_snapshot  # noqa: E402
 
 def existing_service_state():
-    # The older harness checks the mosdns unit. This host also runs a
+    # The older harness checks the atomdns unit. This host also runs a
     # differently named mosdns-rust service, so protect all existing product
     # processes by PID/start/image identity, without reading their configs.
     identities = {}
@@ -34,7 +34,7 @@ def existing_service_state():
             continue
         try:
             comm = (proc/'comm').read_text().strip()
-            if comm in {'rtdns', 'mosdns', 'mosdns-rust'}:
+            if comm in {'atomdns', 'rtdns', 'mosdns', 'mosdns-rust'}:
                 fields = (proc/'stat').read_text().rsplit(')',1)[1].split()
                 image = (proc/'exe').stat()
                 identities[proc.name] = dict(comm=comm, start_ticks=int(fields[19]),

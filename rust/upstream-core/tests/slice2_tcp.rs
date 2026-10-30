@@ -13,7 +13,7 @@ use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};
 
-use mosdns_upstream_core::{
+use atomdns_upstream_core::{
     CloseResult, CloseTransition, Endpoint, ExchangeContext, ExchangeRequest, SideEffectState,
     Transport, TransportCancellation, Upstream, UpstreamError,
 };

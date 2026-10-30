@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use mosdns_dns_core::{QueryHeader, QuestionInfo, ResponseError as DnsResponseError, TtlInfo};
+use atomdns_dns_core::{QueryHeader, QuestionInfo, ResponseError as DnsResponseError, TtlInfo};
 
 const MAX_SYNTHESIZED_RCODE: u16 = 0x0fff;
 
@@ -351,7 +351,7 @@ impl OwnedResponseWire {
 }
 
 /// A locally synthesized response. RCODE validation is intentionally wider
-/// than the four-bit DNS header because configured `MosDNS` reject values use
+/// than the four-bit DNS header because configured `AtomDNS` reject values use
 /// the range `0..=0x0fff`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SynthesizedResponse {
@@ -432,7 +432,7 @@ pub struct DnsResponseInspector;
 
 impl ResponseInspector for DnsResponseInspector {
     fn inspect(&self, wire: &[u8]) -> Result<ResponseInspection, ResponseError> {
-        let ttl = mosdns_dns_core::observe_response_ttl(wire)
+        let ttl = atomdns_dns_core::observe_response_ttl(wire)
             .map_err(|source| ResponseError::MalformedRawResponse { source })?;
         Ok(ResponseInspection { ttl })
     }

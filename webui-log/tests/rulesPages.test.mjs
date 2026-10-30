@@ -463,7 +463,7 @@ test('the upstream page hides groups not in use unless asked, and checks before 
   assert.match(panel, /configuredGroups\.value\.filter\(\(group\) => showInactive\.value \|\| !inactive\(group\)\)/)
   assert.match(panel, /显示未生效的组（\$\{inactiveCount\}）/)
   assert.match(panel, /data-inactive-group/)
-  assert.match(panel, /rtdns-show-inactive-upstream-groups/)
+  assert.match(panel, /atomdns-show-inactive-upstream-groups/)
   // toggle and remove compute the list first and refuse before any request.
   for (const name of ['toggle', 'remove']) {
     const body = panel.slice(panel.indexOf(`async function ${name}(`))

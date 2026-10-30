@@ -13,8 +13,10 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
-use mosdns_native_host::{HostAssembly, HostRunError, PersistFault, PersistGate, load_and_compile};
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_native_host::{
+    HostAssembly, HostRunError, PersistFault, PersistGate, load_and_compile,
+};
+use atomdns_upstream_core::TransportCancellation;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// One owned fixture directory holding a config and its real rule files.
@@ -24,7 +26,7 @@ struct Fixture {
 
 impl Fixture {
     fn new(name: &str) -> Self {
-        let root = std::env::temp_dir().join(format!("mosdns-pub-{name}-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("atomdns-pub-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("rules")).expect("fixture directory");
         Self { root }

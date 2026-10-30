@@ -1,4 +1,4 @@
-module mosdns-udp-truncation-oracle
+module atomdns-udp-truncation-oracle
 
 go 1.24.0
 

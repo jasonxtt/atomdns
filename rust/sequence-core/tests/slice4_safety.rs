@@ -3,8 +3,8 @@ use std::rc::Rc;
 use std::sync::{Arc, Barrier};
 use std::thread;
 
-use mosdns_dns_core::{QueryHeader, QuestionInfo};
-use mosdns_sequence_core::{
+use atomdns_dns_core::{QueryHeader, QuestionInfo};
+use atomdns_sequence_core::{
     CancellationToken, DispatchMetadata, DnsResponseInspector, ExecutableSpec, ExecutableTarget,
     ExecutableTargetSpec, ExecutionCompletion, ExecutionControl, ExecutionError, ExecutionState,
     Executor, ExecutorError, ExecutorOutcome, FixtureRef, FixtureSpec, MatchOutcome, Matcher,
@@ -34,7 +34,7 @@ fn state() -> ExecutionState {
     )
 }
 
-fn entry(program: &mosdns_sequence_core::ValidatedProgram) -> SequenceId {
+fn entry(program: &atomdns_sequence_core::ValidatedProgram) -> SequenceId {
     program.sequence_id("main").expect("main entry")
 }
 
@@ -332,7 +332,7 @@ fn try_fixture_cancellation_is_checked_at_the_child_boundary() {
 fn inline_try_program(
     child_rules: Vec<RuleSpec>,
     calls: &Rc<RefCell<Vec<&'static str>>>,
-) -> mosdns_sequence_core::ValidatedProgram {
+) -> atomdns_sequence_core::ValidatedProgram {
     ProgramSpec::new(
         vec![
             SequenceSpec::new(
@@ -781,7 +781,9 @@ fn execution_priority_is_cancelled_then_budget_then_ordinary_error_then_exit() {
     assert_eq!(&*calls.borrow(), &["error", "exit"]);
 }
 
-fn error_program(calls: &Rc<RefCell<Vec<&'static str>>>) -> mosdns_sequence_core::ValidatedProgram {
+fn error_program(
+    calls: &Rc<RefCell<Vec<&'static str>>>,
+) -> atomdns_sequence_core::ValidatedProgram {
     ProgramSpec::new(
         vec![SequenceSpec::new(
             "main",
@@ -793,7 +795,7 @@ fn error_program(calls: &Rc<RefCell<Vec<&'static str>>>) -> mosdns_sequence_core
     .expect("valid error program")
 }
 
-fn matcher_error_program() -> mosdns_sequence_core::ValidatedProgram {
+fn matcher_error_program() -> atomdns_sequence_core::ValidatedProgram {
     ProgramSpec::new(
         vec![SequenceSpec::new(
             "main",
@@ -812,7 +814,7 @@ fn matcher_error_program() -> mosdns_sequence_core::ValidatedProgram {
     .expect("valid matcher error program")
 }
 
-fn exit_program(calls: &Rc<RefCell<Vec<&'static str>>>) -> mosdns_sequence_core::ValidatedProgram {
+fn exit_program(calls: &Rc<RefCell<Vec<&'static str>>>) -> atomdns_sequence_core::ValidatedProgram {
     ProgramSpec::new(
         vec![SequenceSpec::new(
             "main",
@@ -993,7 +995,7 @@ fn response_wire() -> Vec<u8> {
 }
 
 fn run_with_fuel(
-    program: &mosdns_sequence_core::ValidatedProgram,
+    program: &atomdns_sequence_core::ValidatedProgram,
     fuel: u64,
 ) -> (
     Result<ExecutionCompletion, ExecutionError>,
@@ -1007,7 +1009,7 @@ fn run_with_fuel(
 }
 
 fn run_with_token(
-    program: &mosdns_sequence_core::ValidatedProgram,
+    program: &atomdns_sequence_core::ValidatedProgram,
     fuel: u64,
     token: CancellationToken,
 ) -> (

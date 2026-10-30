@@ -25,7 +25,7 @@ def command(argv, **kwargs):
 
 
 def service_state():
-    return subprocess.check_output(['systemctl', 'show', 'mosdns', '-p', 'MainPID', '-p', 'ActiveState'])
+    return subprocess.check_output(['systemctl', 'show', 'atomdns', '-p', 'MainPID', '-p', 'ActiveState'])
 
 
 class Env:

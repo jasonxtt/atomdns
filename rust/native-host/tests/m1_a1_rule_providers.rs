@@ -10,11 +10,11 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use mosdns_native_host::{
+use atomdns_native_host::{
     CheckFindingKind, CompiledConfig, HostAssembly, MapperOutcome, check_config, compile_yaml,
     load_and_compile,
 };
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_upstream_core::TransportCancellation;
 
 const TREE: &str = "tests/fixtures/m1_a1/tree";
 

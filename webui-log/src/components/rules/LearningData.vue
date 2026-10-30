@@ -199,11 +199,11 @@ async function saveNow() {
 
 onMounted(() => {
   reload()
-  window.addEventListener('mosdns-log-refresh', reload)
+  window.addEventListener('atomdns-log-refresh', reload)
 })
 onBeforeUnmount(() => {
   window.clearTimeout(searchTimer)
-  window.removeEventListener('mosdns-log-refresh', reload)
+  window.removeEventListener('atomdns-log-refresh', reload)
 })
 </script>
 

@@ -1,4 +1,4 @@
-use mosdns_native_host::{CacheTestClock, NativeCacheAdapter};
+use atomdns_native_host::{CacheTestClock, NativeCacheAdapter};
 
 fn query(name: &[u8]) -> Vec<u8> {
     let mut wire = vec![0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0];
@@ -26,7 +26,7 @@ fn product_key_preserves_case_and_escaped_labels_with_independent_flags() {
 }
 
 fn response(q: &[u8], ttl: u32, opt: bool) -> Vec<u8> {
-    let (_, question) = mosdns_dns_core::parse_query(q).unwrap();
+    let (_, question) = atomdns_dns_core::parse_query(q).unwrap();
     let mut wire = vec![0, 1, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, u8::from(opt)];
     wire.extend_from_slice(&question.qname_wire);
     wire.extend_from_slice(&[0, 1, 0, 1]);
@@ -61,7 +61,7 @@ fn opt_is_removed_from_cache_copy_and_domain_set_survives_wall_rollback() {
     assert_eq!(hit.domain_set, "route-A");
     assert_eq!(hit.response[11], 0);
     assert_eq!(
-        mosdns_dns_core::observe_response_ttl(&hit.response)
+        atomdns_dns_core::observe_response_ttl(&hit.response)
             .unwrap()
             .minimal_ttl,
         50
@@ -103,9 +103,9 @@ fn lazy_retention_is_from_storage_and_excluded_answers_do_not_replace_entries() 
     );
     clock.advance(10);
     let hit = cache.lookup_entry(&q).unwrap().unwrap();
-    assert_eq!(hit.state, mosdns_cache_core::LookupState::Lazy);
+    assert_eq!(hit.state, atomdns_cache_core::LookupState::Lazy);
     assert_eq!(
-        mosdns_dns_core::observe_response_ttl(&hit.response)
+        atomdns_dns_core::observe_response_ttl(&hit.response)
             .unwrap()
             .minimal_ttl,
         5
@@ -295,7 +295,7 @@ fn refresh_deadline_releases_ownership_without_overwriting_the_old_lazy_value() 
         assert_eq!(cache.pending_refreshes(), 0);
         assert_eq!(
             cache.lookup_entry(&q).unwrap().unwrap().state,
-            mosdns_cache_core::LookupState::Lazy
+            atomdns_cache_core::LookupState::Lazy
         );
         cache.stop_refreshes().await.unwrap();
     });
@@ -305,7 +305,7 @@ fn refresh_deadline_releases_ownership_without_overwriting_the_old_lazy_value() 
 fn dump_paths_use_declaration_base_and_duplicate_normalized_targets_are_rejected() {
     let yaml = "log: {level: error}\nplugins:\n  - tag: a\n    type: cache\n    args: {dump_file: ./state/../a.dump}\n  - tag: f\n    type: forward\n    args: {upstreams: [{addr: udp://127.0.0.1:5301}]}\n  - tag: main\n    type: sequence\n    args: [{exec: $a}, {exec: $f}]\n  - tag: dns\n    type: udp_server\n    args: {listen: '127.0.0.1:5311', entry: main, enable_audit: false}\n";
     let config =
-        mosdns_native_host::compile_yaml_with_base(yaml, std::path::Path::new("/tmp/cache-base"))
+        atomdns_native_host::compile_yaml_with_base(yaml, std::path::Path::new("/tmp/cache-base"))
             .unwrap();
     assert_eq!(
         config.caches[0].dump_file.as_deref(),
@@ -316,7 +316,7 @@ fn dump_paths_use_declaration_base_and_duplicate_normalized_targets_are_rejected
         "  - tag: b\n    type: cache\n    args: {dump_file: a.dump}\n  - tag: f",
     );
     assert!(
-        mosdns_native_host::compile_yaml_with_base(
+        atomdns_native_host::compile_yaml_with_base(
             &duplicate,
             std::path::Path::new("/tmp/cache-base")
         )
@@ -338,7 +338,7 @@ fn temporary_dump() -> std::path::PathBuf {
         COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ))
 }
-async fn wait_persist(gate: &mosdns_native_host::PersistGate) {
+async fn wait_persist(gate: &atomdns_native_host::PersistGate) {
     for _ in 0..1000 {
         if gate.arrived() {
             return;
@@ -371,7 +371,7 @@ fn dump_roundtrip_restores_original_age_lazy_and_domain_with_all_or_nothing_vali
                 .unwrap();
         target.import_dump(bytes.clone()).await.unwrap();
         let hit = target.lookup_entry(&q).unwrap().unwrap();
-        assert_eq!(hit.state, mosdns_cache_core::LookupState::Lazy);
+        assert_eq!(hit.state, atomdns_cache_core::LookupState::Lazy);
         assert_eq!(hit.domain_set, "domain-A");
         assert_eq!(
             target.snapshot().unwrap()[0].wall_times,
@@ -412,7 +412,7 @@ fn dump_roundtrip_restores_original_age_lazy_and_domain_with_all_or_nothing_vali
 #[test]
 fn durable_flush_failure_keeps_file_memory_generation_and_commit_survives_request_cancellation() {
     tokio::task::LocalSet::new().block_on(&local_runtime(), async {
-        use mosdns_native_host::{PersistFault, PersistGate};
+        use atomdns_native_host::{PersistFault, PersistGate};
         let path = temporary_dump();
         let clock = CacheTestClock::new(1000);
         let cache = NativeCacheAdapter::for_test(clock)
@@ -502,7 +502,7 @@ fn import_invalidates_old_publications_and_save_keeps_concurrent_mutations_dirty
             cache.lookup_entry(&q).unwrap().unwrap().domain_set,
             "imported"
         );
-        let gate = mosdns_native_host::PersistGate::new();
+        let gate = atomdns_native_host::PersistGate::new();
         cache.inject_persist_gate(gate.clone());
         let saved = cache.clone();
         let save = tokio::task::spawn_local(async move { saved.save().await });
@@ -550,16 +550,16 @@ fn real_go_v2_fixture_import_and_native_export_preserve_product_key_and_dns_wire
         let hit = cache.lookup_entry(&q).unwrap().unwrap();
         assert_eq!(hit.domain_set, "go-domain");
         assert_eq!(
-            mosdns_dns_core::observe_response_ttl(&hit.response)
+            atomdns_dns_core::observe_response_ttl(&hit.response)
                 .unwrap()
                 .minimal_ttl,
             50
         );
         assert_eq!(
-            mosdns_dns_core::observe_answer_addresses(&hit.response).unwrap(),
+            atomdns_dns_core::observe_answer_addresses(&hit.response).unwrap(),
             ["192.0.2.7".parse::<std::net::IpAddr>().unwrap()]
         );
-        if let Ok(path) = std::env::var("MOSDNS_CACHE_INTEROP_EXPORT") {
+        if let Ok(path) = std::env::var("ATOMDNS_CACHE_INTEROP_EXPORT") {
             std::fs::write(path, cache.dump().unwrap()).unwrap();
         }
     });

@@ -1,4 +1,4 @@
-//! F-1 system operations, against the real `rtdns` binary: the in-place
+//! F-1 system operations, against the real `atomdns` binary: the in-place
 //! restart (same process id, saved state loaded again, failure paths), the saved
 //! WebUI port taking effect at the next start and the process metrics. The
 //! appearance routes were removed in the UI redo (2026-10-23). No public network:
@@ -207,8 +207,8 @@ impl Host {
         if dump_directory {
             std::fs::create_dir_all(root.join("dump")).unwrap();
         }
-        let exe = root.join("mosdns");
-        std::fs::copy(env!("CARGO_BIN_EXE_rtdns"), &exe).unwrap();
+        let exe = root.join("atomdns");
+        std::fs::copy(env!("CARGO_BIN_EXE_atomdns"), &exe).unwrap();
         std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
         let (stub, upstream) = Stub::start();
         let (api, dns) = (free_port(), free_udp_port());
@@ -292,7 +292,7 @@ impl Host {
     }
 
     fn exe(&self) -> PathBuf {
-        self.root.join("mosdns")
+        self.root.join("atomdns")
     }
 
     fn terminate(&mut self) -> std::process::ExitStatus {
@@ -376,7 +376,7 @@ fn restart_keeps_the_process_id_and_serves_again_from_saved_state() {
         "process_start_time_seconds",
         "process_resident_memory_bytes",
         "process_open_fds",
-        "mosdns_process_threads",
+        "atomdns_process_threads",
     ] {
         assert!(
             metrics

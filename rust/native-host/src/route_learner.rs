@@ -20,8 +20,8 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use mosdns_sequence_core::{ExecutionState, ExecutorError, Matcher};
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_sequence_core::{ExecutionState, ExecutorError, Matcher};
+use atomdns_upstream_core::TransportCancellation;
 use serde::Serialize;
 
 use crate::config::providers::{append_joined, presentation_name};
@@ -188,7 +188,7 @@ pub struct RouteLearnerConfig {
 /// The compiled `route_learn` rule dispatched as an external.
 pub struct RouteLearnConfig {
     pub tag: String,
-    pub executable: mosdns_sequence_core::ExecutableId,
+    pub executable: atomdns_sequence_core::ExecutableId,
     pub runtime: Rc<RouteLearn>,
 }
 

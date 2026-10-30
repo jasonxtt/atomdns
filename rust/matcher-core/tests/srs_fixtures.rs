@@ -1,7 +1,7 @@
 //! The SRS decoders against files written by the reference sing library
 //! (`tools/m1a1-oracle/mksrs`).
 
-use mosdns_matcher_core::{decode_domain_srs, decode_ip_srs};
+use atomdns_matcher_core::{decode_domain_srs, decode_ip_srs};
 
 const DOMAINS: &[u8] =
     include_bytes!("../../native-host/tests/fixtures/m1_a1/tree/srs/domains.srs");

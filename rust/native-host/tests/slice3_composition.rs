@@ -15,17 +15,17 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use mosdns_dns_core::{
+use atomdns_dns_core::{
     inspect_response_header, observe_answer_addresses, parse_query, validate_response,
 };
-use mosdns_native_host::{
+use atomdns_native_host::{
     ConfigError, HostAssembly, ListenerKind, UdpServer, compile_yaml, compile_yaml_with_base,
 };
 
 /// Unwraps a configuration rejection, because `CompiledConfig` carries no
 /// `Debug` impl and therefore cannot be inspected by `expect_err`.
 fn expect_config_error(
-    result: Result<mosdns_native_host::CompiledConfig, ConfigError>,
+    result: Result<atomdns_native_host::CompiledConfig, ConfigError>,
     message: &str,
 ) -> ConfigError {
     match result {
@@ -34,7 +34,7 @@ fn expect_config_error(
     }
 }
 
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_upstream_core::TransportCancellation;
 
 /// One owned phase5b fixture directory. Rules live beside the config so the
 /// include and rule-file resolution can be exercised through real paths.
@@ -162,7 +162,7 @@ fn write_chain(fixture: &Fixture) {
 fn the_representative_chain_loads_from_file_with_include_and_rule_files() {
     let fixture = Fixture::new("chain");
     write_chain(&fixture);
-    let config = mosdns_native_host::load_and_compile(&fixture.config())
+    let config = atomdns_native_host::load_and_compile(&fixture.config())
         .expect("representative chain must load");
     assert_eq!(config.listener.kind, ListenerKind::Udp);
     assert_eq!(config.listener.entry, "sequence_main");
@@ -170,7 +170,7 @@ fn the_representative_chain_loads_from_file_with_include_and_rule_files() {
     assert_eq!(config.forwards.len(), 2);
     let cache = config.caches.first().expect("one cache");
     assert_eq!(cache.capacity, 64);
-    assert_eq!(cache.kind, mosdns_native_host::CacheKind::Named);
+    assert_eq!(cache.kind, atomdns_native_host::CacheKind::Named);
     assert_eq!(cache.dump_interval_secs, 600);
     assert_eq!(cache.dump_file, None);
     let tags = config
@@ -202,7 +202,7 @@ fn a_relative_include_resolves_against_the_declaring_file_not_the_cwd() {
     write_chain(&fixture);
     // The same text compiles from any working directory because the base
     // directory travels with the file.
-    let config = mosdns_native_host::load_and_compile(&fixture.config())
+    let config = atomdns_native_host::load_and_compile(&fixture.config())
         .expect("file-backed load resolves the include");
     assert_eq!(config.forwards.len(), 2);
 
@@ -225,7 +225,7 @@ fn a_missing_include_or_rule_file_fails_before_assembly_with_its_path() {
     write_chain(&fixture);
     fs::remove_file(fixture.root.join("sub_config/routes.yaml")).expect("remove include");
     let error = expect_config_error(
-        mosdns_native_host::load_and_compile(&fixture.config()),
+        atomdns_native_host::load_and_compile(&fixture.config()),
         "a missing include must fail",
     );
     assert!(error.reason.contains("routes.yaml"), "{error}");
@@ -235,7 +235,7 @@ fn a_missing_include_or_rule_file_fails_before_assembly_with_its_path() {
     write_chain(&fixture);
     fs::remove_file(fixture.root.join("rules/local.txt")).expect("remove rules");
     let error = expect_config_error(
-        mosdns_native_host::load_and_compile(&fixture.config()),
+        atomdns_native_host::load_and_compile(&fixture.config()),
         "a missing rule file must fail",
     );
     assert!(error.reason.contains("local.txt"), "{error}");
@@ -245,7 +245,7 @@ fn a_missing_include_or_rule_file_fails_before_assembly_with_its_path() {
 fn included_definitions_keep_their_relative_path_and_source_context() {
     let fixture = Fixture::new("included-relative-rules");
     write_chain(&fixture);
-    let config = mosdns_native_host::load_and_compile(&fixture.config())
+    let config = atomdns_native_host::load_and_compile(&fixture.config())
         .expect("included rule files resolve from the configuration root");
     assert_eq!(config.forwards.len(), 2);
 
@@ -256,7 +256,7 @@ fn included_definitions_keep_their_relative_path_and_source_context() {
         "regexp:[\nstill-valid.example\n",
     )
     .expect("invalid included rule");
-    let config = mosdns_native_host::load_and_compile(&fixture.config())
+    let config = atomdns_native_host::load_and_compile(&fixture.config())
         .expect("an invalid file rule must be skipped, not fatal");
     assert_eq!(config.forwards.len(), 2);
 
@@ -264,7 +264,7 @@ fn included_definitions_keep_their_relative_path_and_source_context() {
     // and the offending rule-file path.
     fs::remove_file(fixture.root.join("rules/local.txt")).expect("remove rules");
     let error = expect_config_error(
-        mosdns_native_host::load_and_compile(&fixture.config()),
+        atomdns_native_host::load_and_compile(&fixture.config()),
         "a missing included rule file must retain its included-file source context",
     );
     assert!(
@@ -295,7 +295,7 @@ fn nested_includes_and_deferred_shapes_are_rejected_before_bind() {
         );
     fixture.write("sub_config/routes.yaml", &routes);
     let error = expect_config_error(
-        mosdns_native_host::load_and_compile(&fixture.config()),
+        atomdns_native_host::load_and_compile(&fixture.config()),
         "a nested include must be rejected",
     );
     assert!(error.reason.contains("unsupported field"), "{error}");
@@ -308,7 +308,7 @@ fn reject_beyond_the_supported_wire_range_fails_at_load_time() {
     let config = fs::read_to_string(fixture.config()).expect("config");
     fixture.write("config.yaml", &config.replace("reject 3", "reject 16"));
     let error = expect_config_error(
-        mosdns_native_host::load_and_compile(&fixture.config()),
+        atomdns_native_host::load_and_compile(&fixture.config()),
         "reject 16 is outside the supported wire range",
     );
     assert!(error.reason.contains("unsupported"), "{error}");
@@ -396,7 +396,7 @@ fn duplicate_tags_and_cross_type_references_fail_before_bind() {
         &format!("{routes}\n  - tag: blocked\n    type: domain_set\n    args:\n      exps:\n        - full:other.test\n"),
     );
     let error = expect_config_error(
-        mosdns_native_host::load_and_compile(&fixture.config()),
+        atomdns_native_host::load_and_compile(&fixture.config()),
         "duplicate tag must fail",
     );
     assert!(error.reason.contains("duplicate"), "{error}");
@@ -409,7 +409,7 @@ fn duplicate_tags_and_cross_type_references_fail_before_bind() {
         .replace("exec: $sequence_default", "exec: $blocked");
     fixture.write("config.yaml", &config);
     let error = expect_config_error(
-        mosdns_native_host::load_and_compile(&fixture.config()),
+        atomdns_native_host::load_and_compile(&fixture.config()),
         "a domain_set reference must not be executable",
     );
     assert!(error.reason.contains("not executable"), "{error}");
@@ -719,11 +719,11 @@ fn the_representative_chain_routes_blocks_and_falls_through_to_default() {
     );
     assert_eq!(
         audit.records[3].cache_status,
-        mosdns_native_host::CacheStatus::Miss
+        atomdns_native_host::CacheStatus::Miss
     );
     assert_eq!(
         audit.records[5].cache_status,
-        mosdns_native_host::CacheStatus::Hit
+        atomdns_native_host::CacheStatus::Hit
     );
     assert_eq!(
         audit.records[3].final_sequence.as_deref(),
@@ -768,7 +768,7 @@ fn the_representative_chain_also_serves_tcp_with_audit_off() {
     );
     let assembly = HostAssembly::from_config_file(&fixture.config()).expect("TCP chain assembly");
     let server = assembly
-        .block_on(mosdns_native_host::TcpServer::bind(
+        .block_on(atomdns_native_host::TcpServer::bind(
             &assembly,
             "127.0.0.1:0".parse().expect("bind"),
         ))

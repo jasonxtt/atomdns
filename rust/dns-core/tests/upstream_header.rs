@@ -1,4 +1,4 @@
-use mosdns_dns_core::{HeaderError, inspect_response_header};
+use atomdns_dns_core::{HeaderError, inspect_response_header};
 
 #[test]
 fn response_header_inspection_is_minimal_and_typed() {

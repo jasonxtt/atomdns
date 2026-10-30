@@ -1,4 +1,4 @@
-//! Pure Rust DNS wire foundation for the experimental MosDNS query core.
+//! Pure Rust DNS wire foundation for the experimental AtomDNS query core.
 //!
 //! This crate mirror of the frozen Go oracle contract in
 //! `pkg/query_context/rust_bridge` (Slice 0 of the Phase 3 task) and the

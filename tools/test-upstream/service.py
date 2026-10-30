@@ -13,13 +13,13 @@ import time
 
 from fixture import IP, VERSION, sha, save
 
-ROOT=pathlib.Path('/opt/rtdns-test-upstream')
-NS='rtdns-upstream'
+ROOT=pathlib.Path('/opt/atomdns-test-upstream')
+NS='atomdns-upstream'
 BRIDGE='rtup-br'
 HOST='rtup-host'
 PEER='rtup-peer'
-OWNER='rtdns-test-upstream-v1'
-UNIT='rtdns-test-upstream.service'
+OWNER='atomdns-test-upstream-v1'
+UNIT='atomdns-test-upstream.service'
 
 
 def call(argv, **kwargs):
@@ -149,7 +149,7 @@ def wait_ready(root):
 def install_unit(root):
     unit=pathlib.Path('/etc/systemd/system')/UNIT
     text=f'''[Unit]
-Description=Isolated fixed-response rtdns test upstream
+Description=Isolated fixed-response atomdns test upstream
 After=network.target
 
 [Service]

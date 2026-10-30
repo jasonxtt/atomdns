@@ -1,9 +1,9 @@
 //! Public API smoke tests: the documented crate-root surface must be usable
-//! from `mosdns_dns_core` without module-path dependencies (the Go oracle
+//! from `atomdns_dns_core` without module-path dependencies (the Go oracle
 //! atoms are re-exported so the later ABI slice depends on this crate, not on
 //! module paths).
 
-use mosdns_dns_core::{QueryError, parse_query};
+use atomdns_dns_core::{QueryError, parse_query};
 
 fn valid_query() -> Vec<u8> {
     // id=0x1234, flags=0x10 (RD set, QR clear), opcode QUERY, qd=1.

@@ -1,19 +1,19 @@
 # E2E-1 full-chain differential
 
 VM Linux root, Python 3 + PyYAML, iproute2, util-linux, OpenSSL required.
-Build binaries before running; this tool never builds or deploys. The Go reference (`--go`) comes from `tools/go-reference/build.sh <dir> mosdns` (pinned commit of the Go repository, cross-compiled with GOOS=linux GOARCH=amd64 on the Mac); the Rust binaries are built on the test VM.
+Build binaries before running; this tool never builds or deploys. The Go reference (`--go`) comes from `tools/go-reference/build.sh <dir> atomdns` (pinned commit of the Go repository, cross-compiled with GOOS=linux GOARCH=amd64 on the Mac); the Rust binaries are built on the test VM.
 Inputs are config_all/config_rust plus snapshot/{rule,gen,srs,adguard,webinfo}.
 The output directory must not exist. Keep inputs and outputs outside the repo.
 
 ```sh
 python3 tools/e2e-1/run.py --inputs /private/input --work /private/run \
-  --go /private/mosdns-go --native /private/mosdns-native \
-  --migrate /private/mosdns-settings-migrate --names 2000 \
+  --go /private/mosdns-go --native /private/atomdns-native \
+  --migrate /private/atomdns-settings-migrate --names 2000 \
   --corpus /private/round1-corpus.json
 ```
 
 Each host runs with its mocks in a loopback-only netns and private /tmp mount.
-Original system mosdns is not touched. All processes/namespaces are cleaned on
+Original system atomdns is not touched. All processes/namespaces are cleaned on
 success/failure; the private run directory is retained for analysis. Archive
 needed replay evidence outside the repository, then remove the VM task workspace.
 Raw results contain private names and ECS: only index-based summaries belong in
@@ -52,6 +52,6 @@ state into the other. Browser smoke performs Vue create/edit/delete with source
 references on native `/` and `/log`, and Go `/`. Playwright can be supplied via
 `PLAYWRIGHT_MODULE`; its browser must already be cached. No public networking is
 available inside these namespaces. Finally all owned processes and namespaces
-are stopped, and the original mosdns service identity is checked.
+are stopped, and the original atomdns service identity is checked.
 
 Run tool guards on the VM with `python3 -m unittest discover -s tools/e2e-1`.

@@ -29,7 +29,7 @@ mod slice1_state_tests {
         DnsResponseInspector, ExecutionState, OwnedResponseWire, ResponseError, ResponseState,
         StateSnapshot, SynthesizedResponse,
     };
-    use mosdns_dns_core::{QueryHeader, QuestionInfo};
+    use atomdns_dns_core::{QueryHeader, QuestionInfo};
 
     fn state() -> ExecutionState {
         ExecutionState::new(
@@ -346,7 +346,7 @@ mod slice2_dispatch_tests {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
-    use mosdns_dns_core::{QueryHeader, QuestionInfo};
+    use atomdns_dns_core::{QueryHeader, QuestionInfo};
 
     use crate::{
         DispatchMetadata, ExecutableSpec, ExecutionCompletion, ExecutionControl, ExecutionError,
@@ -806,7 +806,7 @@ mod slice3_control_tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use mosdns_dns_core::{QueryHeader, QuestionInfo};
+    use atomdns_dns_core::{QueryHeader, QuestionInfo};
 
     use crate::{
         ExecutableSpec, ExecutableTargetSpec, ExecutionCompletion, ExecutionControl,
@@ -2029,7 +2029,7 @@ mod slice4_safety_tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use mosdns_dns_core::{QueryHeader, QuestionInfo};
+    use atomdns_dns_core::{QueryHeader, QuestionInfo};
 
     use crate::{
         ExecutableSpec, ExecutableTargetSpec, ExecutionControl, ExecutionError, ExecutionState,
@@ -2257,7 +2257,7 @@ mod step_trace_tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use mosdns_dns_core::{QueryHeader, QuestionInfo};
+    use atomdns_dns_core::{QueryHeader, QuestionInfo};
 
     use crate::{
         CancellationToken, DispatchMetadata, ExecutableSpec, ExecutionControl, ExecutionState,

@@ -18,7 +18,7 @@ Finally stop with SIGTERM and report the lines of the statistics files.
 Prints one JSON object. Readings are kB from /proc/<pid>/status.
 
 Usage:
-  measure-domain-output.py --binary ./mosdns --snapshot DIR --work DIR \
+  measure-domain-output.py --binary ./atomdns --snapshot DIR --work DIR \
       [--names 100000] [--qps 200] [--without-outputs]
 """
 

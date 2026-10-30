@@ -138,7 +138,7 @@ def make_events(env,name):
 
 def hot_run(root,scenario,role,pair,identity,progress,ignore_unsent=False):
     output=root/'results'/scenario/f'r{pair}'/role
-    with OperationEnv(root,root/(role+'-rtdns'),output) as env:
+    with OperationEnv(root,root/(role+'-atomdns'),output) as env:
         events,original=make_events(env,scenario)
         before=udp_counters(env)
         spec=dict(corpus=str(root/'work/corpus.json'),mode='weighted',rate=500,duration=150,seed=500+pair,deadline_s=5,observation_only=True,sampling_process=True,sampler_cpu=3,precise_timer=True,retain_wire=True,pid=env.host.pid,mock_pid=env.mock.pid,root=str(env.root),api_port=env.api_port,dns_port=40053,output=str(output/'load'),events=events)
@@ -177,7 +177,7 @@ def fill_ring(env,output,index):
 
 def audit_run(root,role,pair,identity,progress):
     output=root/'results/R3'/f'r{pair}'/role;row=dict(operations={},identity=identity)
-    with OperationEnv(root,root/(role+'-rtdns'),output) as env:
+    with OperationEnv(root,root/(role+'-atomdns'),output) as env:
         progress(stage='prefill100k');fill_ring(env,output,1)
         operations=[('read-'+p,'GET','/api/v2/audit/'+p,None,10) for p in RANKS]+[('clear','POST','/api/v1/audit/clear',{},1),('capacity400k','POST','/api/v1/audit/capacity',dict(capacity=400000),1),('capacity100k','POST','/api/v1/audit/capacity',dict(capacity=100000),1)]
         for name,method,path,body,count in operations:
@@ -201,7 +201,7 @@ def audit_run(root,role,pair,identity,progress):
 def initialize(args):
     root=args.root;root.mkdir(mode=0o700)
     up=root/'upstream';(up/'bin').mkdir(parents=True)
-    for source,target in [(args.base,root/'base-rtdns'),(args.candidate,root/'candidate-rtdns'),(args.core,up/'bin/coredns')]:shutil.copy2(source,target)
+    for source,target in [(args.base,root/'base-atomdns'),(args.candidate,root/'candidate-atomdns'),(args.core,up/'bin/coredns')]:shutil.copy2(source,target)
     certificates(up);fixture=from_source(args.source,up/'fixtures/frozen')
     work=root/'work';work.mkdir();save(work/'fixture-manifest.json',fixture)
     manifest=prepare(args.source,work/'native',fixture,up/'certs',True);save(work/'input-manifest.json',manifest)
@@ -231,7 +231,7 @@ def run(root,scenarios=None,prior_report=None,ignore_unsent=False):
     scenarios=['M0','M1','M3','MF','R3'] if scenarios is None else scenarios
     if not scenarios or len(set(scenarios))!=len(scenarios):raise ValueError('nonempty distinct scenarios required')
     tools=[p for folder in [HERE,HERE.parent/'test-upstream',HERE.parent/'5d-2',HERE.parent/'5d-1',HERE.parent/'e2e-1'] for p in folder.glob('*.py')]
-    identity=dict(base=sha(root/'base-rtdns'),candidate=sha(root/'candidate-rtdns'),input=sha(root/'work/input-manifest.json'),corpus=sha(root/'work/corpus.json'),core=sha(root/'upstream/bin/coredns'),tools={str(p.relative_to(HERE.parent)):sha(p) for p in tools})
+    identity=dict(base=sha(root/'base-atomdns'),candidate=sha(root/'candidate-atomdns'),input=sha(root/'work/input-manifest.json'),corpus=sha(root/'work/corpus.json'),core=sha(root/'upstream/bin/coredns'),tools={str(p.relative_to(HERE.parent)):sha(p) for p in tools})
     controls=None;source_controls=None
     if prior_report is not None:
         prior=json.loads(prior_report.read_text());validate_controls(prior,identity)
@@ -247,7 +247,7 @@ def run(root,scenarios=None,prior_report=None,ignore_unsent=False):
             section=report['R3'] if scenario=='R3' else report['R2'].setdefault(scenario,{})
             for pair in [1,2,3]:
                 for role in (['candidate','base'] if pair==2 else ['base','candidate']):
-                    if identity['tools']!={str(p.relative_to(HERE.parent)):sha(p) for p in tools} or identity[role]!=sha(root/(role+'-rtdns')):raise ValueError('frozen method/binary changed')
+                    if identity['tools']!={str(p.relative_to(HERE.parent)):sha(p) for p in tools} or identity[role]!=sha(root/(role+'-atomdns')):raise ValueError('frozen method/binary changed')
                     def mark(**v):progress(scenario=scenario,pair=pair,role=role,**v)
                     row=(audit_run(root,role,pair,identity,mark) if scenario=='R3' else hot_run(root,scenario,role,pair,identity,mark,ignore_unsent=ignore_unsent))
                     section.setdefault(str(pair),{})[role]=row;save(root/'report.json',report)

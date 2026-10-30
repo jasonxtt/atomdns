@@ -11,17 +11,17 @@ use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use atomdns_upstream_core::secure::{
+    DohEndpoint, DohProtocolError, DohUpstream, SecureError, SecureHttpVersion, SecureTransport,
+    TlsPolicy,
+};
+use atomdns_upstream_core::{
+    CloseResult, ExchangeContext, ExchangeRequest, SideEffectState, TransportCancellation,
+};
 use fixtures::FixtureSet;
 use h2::{Reason, server};
 use hyper::Response;
 use hyper::body::Bytes;
-use mosdns_upstream_core::secure::{
-    DohEndpoint, DohProtocolError, DohUpstream, SecureError, SecureHttpVersion, SecureTransport,
-    TlsPolicy,
-};
-use mosdns_upstream_core::{
-    CloseResult, ExchangeContext, ExchangeRequest, SideEffectState, TransportCancellation,
-};
 use rustls::ServerConfig;
 use tokio::net::TcpListener as AsyncTcpListener;
 use tokio::time::timeout;

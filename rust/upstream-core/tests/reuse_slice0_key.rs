@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use mosdns_upstream_core::{
+use atomdns_upstream_core::{
     Endpoint, ExchangeContext, ExchangeRequest, PoolError, ReuseKey, ReuseOwner, SecureKey,
     SecureKind, SideEffectState, Transport, TransportCancellation, UpstreamError,
 };
@@ -632,7 +632,7 @@ impl ManualClock {
     }
 }
 
-impl mosdns_upstream_core::Clock for ManualClock {
+impl atomdns_upstream_core::Clock for ManualClock {
     fn now(&self) -> Instant {
         *self.0.lock().expect("clock")
     }
@@ -705,11 +705,11 @@ fn close_is_idempotent_and_refuses_later_exchanges() {
         assert_eq!(owner.idle_connections(), 1, "a connection is retained");
 
         let first = owner.close().await;
-        assert_eq!(first, mosdns_upstream_core::CloseResult::Closed);
+        assert_eq!(first, atomdns_upstream_core::CloseResult::Closed);
         let second = owner.close().await;
         assert_eq!(
             second,
-            mosdns_upstream_core::CloseResult::AlreadyClosed,
+            atomdns_upstream_core::CloseResult::AlreadyClosed,
             "repeated close converges"
         );
 
@@ -773,7 +773,7 @@ fn an_idle_connection_past_the_timeout_is_not_reused() {
         let mut fixture = TcpFixture::new([192, 0, 2, 24]);
         let clock = ManualClock::new();
         let owner = tcp_owner(fixture.address)
-            .with_clock(Arc::clone(&clock) as Arc<dyn mosdns_upstream_core::Clock>);
+            .with_clock(Arc::clone(&clock) as Arc<dyn atomdns_upstream_core::Clock>);
         let query = query_wire(0x9999, "expiry.example.org");
 
         bounded(owner.exchange(ExchangeRequest::new(&query).expect("request"), context(5)))
@@ -858,7 +858,7 @@ fn the_total_idle_bound_evicts_the_oldest_entry_across_keys() {
         }
 
         assert!(
-            owner.idle_connections() <= mosdns_upstream_core::MAX_IDLE_PER_KEY,
+            owner.idle_connections() <= atomdns_upstream_core::MAX_IDLE_PER_KEY,
             "one owner never retains more than the per-key bound, so the global \
              bound holds a fortiori"
         );
@@ -870,7 +870,7 @@ fn the_total_idle_bound_evicts_the_oldest_entry_across_keys() {
         // The global bound is a compile-time invariant of the two constants.
         const {
             assert!(
-                mosdns_upstream_core::MAX_IDLE_TOTAL >= mosdns_upstream_core::MAX_IDLE_PER_KEY,
+                atomdns_upstream_core::MAX_IDLE_TOTAL >= atomdns_upstream_core::MAX_IDLE_PER_KEY,
                 "the global bound must be at least the per-key bound"
             );
         }
@@ -886,7 +886,7 @@ fn the_total_idle_bound_evicts_the_oldest_entry_across_keys() {
 /// and never enters a reuse key.
 #[test]
 fn a_resolver_snapshot_feeds_the_numeric_dial_without_entering_the_key() {
-    use mosdns_upstream_core::resolve_numeric;
+    use atomdns_upstream_core::resolve_numeric;
 
     // A resolver publication for a numeric literal yields a numeric target.
     let published =

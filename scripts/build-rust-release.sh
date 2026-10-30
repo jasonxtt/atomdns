@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Builds the release artifacts for a tag on a Linux x86_64 host: rtdns-linux-<variant>.tar.gz
-# (one file, `rtdns`; the variant is amd64 by default), rtdns-webui.tar.gz (the WebUI package:
-# the files of <config root>/ui/main/ at the top level) and rtdns-update-manifest.json. Nothing is
+# Builds the release artifacts for a tag on a Linux x86_64 host: atomdns-linux-<variant>.tar.gz
+# (one file, `atomdns`; the variant is amd64 by default), atomdns-webui.tar.gz (the WebUI package:
+# the files of <config root>/ui/main/ at the top level) and atomdns-update-manifest.json. Nothing is
 # published; attach the files to a GitHub release named like the tag by hand or from CI.
 #   scripts/build-rust-release.sh vX.Y.Z [out-dir]
 # VARIANTS="amd64 amd64-v3 arm64 armv7" builds more program packages (default: amd64). amd64-v3 is
 # the glibc build with -C target-cpu=x86-64-v3; arm64/armv7 are static musl builds made with
-# cargo-zigbuild and need qemu-user binfmt to run `rtdns version` (CI: .github/workflows/release-build.yml).
-# Only rtdns-linux-amd64.tar.gz is used by the in-app updater; the others are for manual installs.
-# PREBUILT=<path to an already built rtdns> replaces the amd64 build (it must report the same tag).
-# PREBUILT_WEBUI=<rtdns-webui.tar.gz> skips the WebUI build (its ui_version must be the tag).
+# cargo-zigbuild and need qemu-user binfmt to run `atomdns version` (CI: .github/workflows/release-build.yml).
+# Only atomdns-linux-amd64.tar.gz is used by the in-app updater; the others are for manual installs.
+# PREBUILT=<path to an already built atomdns> replaces the amd64 build (it must report the same tag).
+# PREBUILT_WEBUI=<atomdns-webui.tar.gz> skips the WebUI build (its ui_version must be the tag).
 # RUST_CONFIG_PACKAGE=<config_rust_up.zip> is passed on to generate-rust-update-manifest.sh.
 set -euo pipefail
 
@@ -42,7 +42,7 @@ for VARIANT in ${VARIANTS:-amd64}; do
     armv7) TARGET="armv7-unknown-linux-musleabihf"; SUBCOMMAND="zigbuild" ;;
     *) echo "unknown variant ${VARIANT} (amd64, amd64-v3, arm64, armv7)" >&2; exit 1 ;;
   esac
-  BIN="${STAGE}/${VARIANT}/rtdns"
+  BIN="${STAGE}/${VARIANT}/atomdns"
   mkdir -p "${STAGE}/${VARIANT}"
   if [ "${VARIANT}" = "amd64" ] && [ -n "${PREBUILT:-}" ]; then
     cp "${PREBUILT}" "${BIN}"
@@ -60,13 +60,13 @@ for VARIANT in ${VARIANTS:-amd64}; do
     echo "the ${VARIANT} binary reports ${REPORTED}, not ${TAG}" >&2
     exit 1
   fi
-  ARCHIVE="${OUT}/rtdns-linux-${VARIANT}.tar.gz"
+  ARCHIVE="${OUT}/atomdns-linux-${VARIANT}.tar.gz"
   rm -f "${ARCHIVE}"
-  tar -C "${STAGE}/${VARIANT}" --owner=0 --group=0 --numeric-owner -czf "${ARCHIVE}" rtdns
+  tar -C "${STAGE}/${VARIANT}" --owner=0 --group=0 --numeric-owner -czf "${ARCHIVE}" atomdns
   echo "built ${ARCHIVE}"
 done
 
-WEBUI="${OUT}/rtdns-webui.tar.gz"
+WEBUI="${OUT}/atomdns-webui.tar.gz"
 rm -f "${WEBUI}"
 if [ -n "${PREBUILT_WEBUI:-}" ]; then
   cp "${PREBUILT_WEBUI}" "${WEBUI}"
@@ -76,19 +76,19 @@ else
     npm ci --include=dev
     UI_VERSION="${TAG}" npm run build:package
   )
-  cp "${ROOT_DIR}/release/rtdns-webui.tar.gz" "${WEBUI}"
+  cp "${ROOT_DIR}/release/atomdns-webui.tar.gz" "${WEBUI}"
 fi
 # List once: `tar | grep -q` under pipefail fails when grep exits early and tar gets SIGPIPE.
 WEBUI_ENTRIES="$(tar -tzf "${WEBUI}")"
 for required in index.html ui-manifest.json; do
   if ! grep -qx "${required}" <<<"${WEBUI_ENTRIES}"; then
-    echo "rtdns-webui.tar.gz has no top-level ${required}" >&2
+    echo "atomdns-webui.tar.gz has no top-level ${required}" >&2
     exit 1
   fi
 done
 UI_REPORTED="$(tar -xzOf "${WEBUI}" ui-manifest.json | jq -r '.ui_version')"
 if [ "${UI_REPORTED}" != "${TAG}" ]; then
-  echo "rtdns-webui.tar.gz reports ui_version ${UI_REPORTED}, not ${TAG}" >&2
+  echo "atomdns-webui.tar.gz reports ui_version ${UI_REPORTED}, not ${TAG}" >&2
   exit 1
 fi
 

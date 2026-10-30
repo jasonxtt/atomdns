@@ -50,7 +50,7 @@ Native root, branch sequence and direct fallback target dispatch execute hosts a
 
 ## 3. Contracts
 
-Hosts only answers IN A/AAAA, preserving configured order with TTL 10. Empty selected family emits NOERROR and one SOA at the current question: TTL 300, ns `fake-ns.mosdns.fake.root.`, mbox `fake-mbox.mosdns.fake.root.`, serial 2021110400, refresh 1800, retry 900, expire 604800, minimum 86400. No match, both families empty, non-IN or non-address types leave the entire response/generation unchanged. Successful hosts sets Local supplier and clears selected endpoint, preserving historical attempts. Policies Continue; only subsequent sequence rules may accept/reject or overwrite them.
+Hosts only answers IN A/AAAA, preserving configured order with TTL 10. Empty selected family emits NOERROR and one SOA at the current question: TTL 300, ns `fake-ns.atomdns.fake.root.`, mbox `fake-mbox.atomdns.fake.root.`, serial 2021110400, refresh 1800, retry 900, expire 604800, minimum 86400. No match, both families empty, non-IN or non-address types leave the entire response/generation unchanged. Successful hosts sets Local supplier and clears selected endpoint, preserving historical attempts. Policies Continue; only subsequent sequence rules may accept/reject or overwrite them.
 
 TTL fixed zero is a validated no-op. Positive fixed TTL replaces all non-OPT record TTLs in Answer/Authority/Additional. Ranges apply nonzero minimum then nonzero maximum, including inverted ranges. OPT bytes remain unchanged; TTL preserves supplier identity. Wire edits are prepared on a copy and committed only on success.
 

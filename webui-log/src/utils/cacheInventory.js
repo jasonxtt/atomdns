@@ -19,7 +19,7 @@ export async function loadCacheInventory(getJSON) {
 export function parseCacheMetrics(metricsText, tag) {
   const stats = { query_total: null, hit_total: null, lazy_hit_total: null, size_current: null }
   const escapedTag = String(tag).replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('\n', '\\n')
-  const prefix = `mosdns_cache_`
+  const prefix = `atomdns_cache_`
   for (const line of String(metricsText || '').split('\n')) {
     for (const key of Object.keys(stats)) {
       const name = `${prefix}${key}{tag="${escapedTag}"}`

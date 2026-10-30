@@ -158,12 +158,12 @@ function saveSoon() {
 
 onMounted(() => {
   load()
-  window.addEventListener('mosdns-log-refresh', load)
+  window.addEventListener('atomdns-log-refresh', load)
 })
 onBeforeUnmount(() => {
   window.clearInterval(pollTimer)
   window.clearTimeout(saveTimer)
-  window.removeEventListener('mosdns-log-refresh', load)
+  window.removeEventListener('atomdns-log-refresh', load)
 })
 </script>
 

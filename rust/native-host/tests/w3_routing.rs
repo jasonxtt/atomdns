@@ -6,15 +6,15 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use mosdns_dns_core::{
+use atomdns_dns_core::{
     QuestionInfo, inspect_response_header, observe_answer_addresses, observe_response_metadata,
     parse_query, validate_response,
 };
-use mosdns_native_host::{
+use atomdns_native_host::{
     CacheStatus, HostAssembly, HostOptions, QueryTerminalOutcome, ResponseSource, ResponseState,
     UdpServer, UpstreamAttemptOutcome, compile_yaml,
 };
-use mosdns_upstream_core::{LifecycleState, TransportCancellation};
+use atomdns_upstream_core::{LifecycleState, TransportCancellation};
 use serde::Deserialize;
 
 const ROUTING_CONFIG: &str = include_str!("../../../tests/phase5a-baseline/configs/routing.yaml");
@@ -275,7 +275,7 @@ fn assert_frozen_w3_observations(
             .unwrap_or_else(|| panic!("missing audit record for {}", case.case_id));
         let expected = expected_routes(case);
         let final_upstream = format!("route_{}", expected.last().expect("route"));
-        assert_eq!(record.transport, mosdns_native_host::QueryTransport::Udp);
+        assert_eq!(record.transport, atomdns_native_host::QueryTransport::Udp);
         assert_eq!(record.qtype, 1);
         assert_eq!(record.qclass, 1);
         assert_eq!(record.terminal_outcome, QueryTerminalOutcome::SendSucceeded);

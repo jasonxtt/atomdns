@@ -11,8 +11,8 @@ use std::io::{Read, Write as _};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use mosdns_native_host::{BoundHost, HostAssembly, HostOptions};
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_native_host::{BoundHost, HostAssembly, HostOptions};
+use atomdns_upstream_core::TransportCancellation;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -135,7 +135,8 @@ plugins:
 }
 
 fn host(tree: &Tree) -> HostAssembly {
-    let config = mosdns_native_host::load_and_compile(&tree.path("config.yaml")).expect("compiles");
+    let config =
+        atomdns_native_host::load_and_compile(&tree.path("config.yaml")).expect("compiles");
     HostAssembly::with_options(config, HostOptions::default()).expect("assembles")
 }
 
@@ -671,7 +672,7 @@ fn bad_arguments_fail_the_configuration() {
             &format!("  - tag: top_domains\n    type: domain_output\n    args:\n{arguments}"),
             &["top_domains"],
         );
-        let error = mosdns_native_host::load_and_compile(&tree.path("config.yaml"))
+        let error = atomdns_native_host::load_and_compile(&tree.path("config.yaml"))
             .err()
             .unwrap_or_else(|| panic!("{arguments} must fail"))
             .to_string();

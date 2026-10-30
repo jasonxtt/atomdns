@@ -61,7 +61,7 @@ use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
-use mosdns_upstream_core::{
+use atomdns_upstream_core::{
     CloseResult, Endpoint, ExchangeContext, ExchangeRequest, ExchangeResponse, SideEffectState,
     TcpFallbackContext, Transport, TransportCancellation, UdpTcpPolicy, UpstreamError,
 };

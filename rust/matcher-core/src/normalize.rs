@@ -16,7 +16,7 @@ impl std::error::Error for NonAsciiRule {}
 /// lowercase + strip a single trailing dot.
 ///
 /// ```
-/// # use mosdns_matcher_core::normalize;
+/// # use atomdns_matcher_core::normalize;
 /// assert_eq!(normalize("GOOGLE.com."), "google.com");
 /// assert_eq!(normalize("google.com"), "google.com");
 /// assert_eq!(normalize(""), "");

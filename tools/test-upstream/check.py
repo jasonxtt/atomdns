@@ -87,7 +87,7 @@ async def exhaustive(endpoint, zone, names, output):
 def check(root,output,full=False):
     import dns.message,dns.zone,dns.flags
     folder,manifest=verify_fixture(root);output.mkdir(mode=0o700,parents=True)
-    began=time.time();report=dict(scope='CoreDNS infrastructure self-check; not rtdns performance acceptance',fixture_sha256=sha(folder/'manifest.json'),
+    began=time.time();report=dict(scope='CoreDNS infrastructure self-check; not atomdns performance acceptance',fixture_sha256=sha(folder/'manifest.json'),
                                   all_passed=False,protocols=[],exhaustive=[],whole_project_accepted=False,started=began,
                                   sources_sha256={p.name:sha(p) for p in [pathlib.Path(__file__).resolve(),pathlib.Path(__file__).with_name('fixture.py'),pathlib.Path(__file__).with_name('service.py')]},
                                   client=dict(python=sys.version,dnspython=__import__('dns').__version__,openssl=ssl.OPENSSL_VERSION),

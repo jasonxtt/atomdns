@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use mosdns_upstream_core::{
+use atomdns_upstream_core::{
     AddressFamily, BootstrapEndpoint, BootstrapResolver, Clock, ExchangeContext, LifecycleState,
     ResolutionPolicy, ResolutionTarget, ResolverError, TransportCancellation,
 };
@@ -299,12 +299,12 @@ fn close_is_idempotent_and_rejects_later_work() {
         assert_eq!(resolver.lifecycle_state(), LifecycleState::Open);
         assert_eq!(
             resolver.begin_close(),
-            mosdns_upstream_core::CloseTransition::BeganClosing
+            atomdns_upstream_core::CloseTransition::BeganClosing
         );
         assert_eq!(resolver.lifecycle_state(), LifecycleState::Closing);
         assert_eq!(
             resolver.begin_close(),
-            mosdns_upstream_core::CloseTransition::AlreadyClosing,
+            atomdns_upstream_core::CloseTransition::AlreadyClosing,
             "close is idempotent"
         );
         assert_eq!(resolver.lifecycle_state(), LifecycleState::Closing);
@@ -317,14 +317,14 @@ fn close_is_idempotent_and_rejects_later_work() {
 
         assert_eq!(
             resolver.close().await,
-            mosdns_upstream_core::CloseResult::Closed
+            atomdns_upstream_core::CloseResult::Closed
         );
         assert_eq!(resolver.lifecycle_state(), LifecycleState::Closed);
         assert_eq!(resolver.in_flight_resolutions(), 0);
         // A repeated close converges on the same terminal state.
         assert_eq!(
             resolver.close().await,
-            mosdns_upstream_core::CloseResult::AlreadyClosed
+            atomdns_upstream_core::CloseResult::AlreadyClosed
         );
 
         drop(resolver);
@@ -390,7 +390,7 @@ fn a_closed_owner_sends_no_datagram_at_all() {
 
         assert_eq!(
             resolver.begin_close(),
-            mosdns_upstream_core::CloseTransition::BeganClosing
+            atomdns_upstream_core::CloseTransition::BeganClosing
         );
         let error = bounded(resolver.resolve(context(10)))
             .await

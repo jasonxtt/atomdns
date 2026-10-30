@@ -1,6 +1,6 @@
-use mosdns_dns_core::{QueryHeader, QuestionInfo};
-use mosdns_native_host::{AssemblyError, HostAssembly, ListenerKind, compile_yaml};
-use mosdns_sequence_core::{
+use atomdns_dns_core::{QueryHeader, QuestionInfo};
+use atomdns_native_host::{AssemblyError, HostAssembly, ListenerKind, compile_yaml};
+use atomdns_sequence_core::{
     ExecutionControl, ExecutionState, ExecutorOutcome, MachineStep, ValidatedExecutable,
 };
 

@@ -1,5 +1,5 @@
 //! Standard special-group state participates in the one effective configuration.
-use mosdns_native_host::load_and_compile;
+use atomdns_native_host::load_and_compile;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -314,14 +314,14 @@ async fn query(port: u16, name: &str) -> Vec<u8> {
 }
 async fn stub(
     marker: u8,
-    cancel: mosdns_upstream_core::TransportCancellation,
+    cancel: atomdns_upstream_core::TransportCancellation,
 ) -> (u16, tokio::task::JoinHandle<()>) {
     let (port, task, _) = counted_stub(marker, cancel).await;
     (port, task)
 }
 async fn counted_stub(
     marker: u8,
-    cancel: mosdns_upstream_core::TransportCancellation,
+    cancel: atomdns_upstream_core::TransportCancellation,
 ) -> (
     u16,
     tokio::task::JoinHandle<()>,
@@ -358,7 +358,7 @@ fn group_create_and_delete_keep_an_unrelated_cache_warm() {
     let host = tokio::task::LocalSet::new().block_on(&runtime, async {
         let tree = Tree::new("cache", ONE, true);
         std::fs::write(tree.0.join("webinfo/special_upstream_groups.json"), "[]").unwrap();
-        let cancel = mosdns_upstream_core::TransportCancellation::new();
+        let cancel = atomdns_upstream_core::TransportCancellation::new();
         let (upstream, peer, calls) = counted_stub(10, cancel.clone()).await;
         let api = port(); let unrelated = port(); let main = port();
         let path = tree.0.join("config.yaml");
@@ -367,9 +367,9 @@ fn group_create_and_delete_keep_an_unrelated_cache_warm() {
             .replace("tcp://127.0.0.1:15500", &format!("udp://127.0.0.1:{upstream}"))
             .replace("127.0.0.1:15535", &format!("127.0.0.1:{main}"));
         std::fs::write(&path, format!("{yaml}\n  - tag: unrelated_cache\n    type: cache\n    args: {{size: 16}}\n  - tag: isolated\n    type: sequence\n    args: [{{exec: $unrelated_cache}}, {{exec: $normal}}]\n  - tag: isolated_server\n    type: udp_server\n    args: {{listen: '127.0.0.1:{unrelated}', entry: isolated}}\n")).unwrap();
-        let host = mosdns_native_host::HostAssembly::from_config_file(&path).unwrap();
+        let host = atomdns_native_host::HostAssembly::from_config_file(&path).unwrap();
         let bound = host.bind_host().await.unwrap();
-        let scope = mosdns_upstream_core::TransportCancellation::new();
+        let scope = atomdns_upstream_core::TransportCancellation::new();
         let serving = tokio::task::spawn_local(bound.serve(scope.clone()));
         assert_eq!(query(unrelated, "warm.example.com").await.last(), Some(&10));
         assert_eq!(calls.get(), 1);
@@ -476,7 +476,7 @@ fn standard_http_routes_dns_ports_rollback_refresh_and_restart() {
     let assemblies = tokio::task::LocalSet::new().block_on(&runtime, async {
         let tree = Tree::new("http", ONE, true);
         std::fs::write(tree.0.join("webinfo/special_upstream_groups.json"), "[]").unwrap();
-        let cancel = mosdns_upstream_core::TransportCancellation::new();
+        let cancel = atomdns_upstream_core::TransportCancellation::new();
         let (a, stub_a) = stub(10, cancel.clone()).await;
         let (b, stub_b) = stub(20, cancel.clone()).await;
         let dns = port(); let api = port(); let dedicated = port();
@@ -501,9 +501,9 @@ plugins:
     type: udp_server
     args: {{listen: '127.0.0.1:{dns}', entry: entry, enable_audit: true}}
 ")).unwrap();
-        let host = mosdns_native_host::HostAssembly::from_config_file(&tree.0.join("config.yaml")).unwrap();
+        let host = atomdns_native_host::HostAssembly::from_config_file(&tree.0.join("config.yaml")).unwrap();
         let bound = host.bind_host().await.unwrap();
-        let scope = mosdns_upstream_core::TransportCancellation::new();
+        let scope = atomdns_upstream_core::TransportCancellation::new();
         let serve_scope = scope.clone();
         let serving = tokio::task::spawn_local(async move { bound.serve(serve_scope).await.unwrap(); });
         let (_, caps) = http(api, "GET", "/api/v1/capabilities", serde_json::Value::Null).await;
@@ -558,10 +558,10 @@ plugins:
         scope.cancel(); serving.await.unwrap();
         // A stale derived file cannot resurrect a deleted group on restart.
         std::fs::write(tree.0.join("sub_config/special_groups.yaml"), generated).unwrap();
-        let restart = mosdns_native_host::HostAssembly::from_config_file(&tree.0.join("config.yaml")).unwrap();
+        let restart = atomdns_native_host::HostAssembly::from_config_file(&tree.0.join("config.yaml")).unwrap();
         let rebound = restart.bind_host().await.unwrap();
         assert_eq!(load_and_compile(&tree.0.join("config.yaml")).unwrap().listeners.len(), 1);
-        let stopped = mosdns_upstream_core::TransportCancellation::new();
+        let stopped = atomdns_upstream_core::TransportCancellation::new();
         stopped.cancel(); rebound.serve(stopped).await.unwrap();
         cancel.cancel(); stub_a.await.unwrap(); stub_b.await.unwrap();
         (host, restart)
@@ -651,14 +651,14 @@ fn an_undeletable_group_artifact_after_a_save_is_pending_not_fatal() {
     let host = tokio::task::LocalSet::new().block_on(&runtime, async {
         let tree = Tree::new("cleanup-save", ONE, true);
         std::fs::write(tree.0.join("webinfo/special_upstream_groups.json"), "[]").unwrap();
-        let cancel = mosdns_upstream_core::TransportCancellation::new();
+        let cancel = atomdns_upstream_core::TransportCancellation::new();
         let (a, stub_a) = stub(10, cancel.clone()).await;
         let (dns, api) = (port(), port());
         cleanup_config(&tree, api, dns, a);
-        let host = mosdns_native_host::HostAssembly::from_config_file(&tree.0.join("config.yaml"))
+        let host = atomdns_native_host::HostAssembly::from_config_file(&tree.0.join("config.yaml"))
             .unwrap();
         let bound = host.bind_host().await.unwrap();
-        let scope = mosdns_upstream_core::TransportCancellation::new();
+        let scope = atomdns_upstream_core::TransportCancellation::new();
         let serve_scope = scope.clone();
         let serving = tokio::task::spawn_local(async move {
             bound.serve(serve_scope).await.unwrap();
@@ -736,17 +736,17 @@ fn an_undeletable_orphan_at_startup_is_pending_not_fatal() {
     let host = tokio::task::LocalSet::new().block_on(&runtime, async {
         let tree = Tree::new("cleanup-start", ONE, true);
         std::fs::write(tree.0.join("webinfo/special_upstream_groups.json"), "[]").unwrap();
-        let cancel = mosdns_upstream_core::TransportCancellation::new();
+        let cancel = atomdns_upstream_core::TransportCancellation::new();
         let (a, stub_a) = stub(10, cancel.clone()).await;
         let (dns, api) = (port(), port());
         cleanup_config(&tree, api, dns, a);
         // One orphan that can be removed and one that cannot.
         std::fs::write(tree.0.join("cache/cache_special_61.dump"), "x").unwrap();
         std::fs::create_dir_all(tree.0.join("srs/special_62.json/inner")).unwrap();
-        let host = mosdns_native_host::HostAssembly::from_config_file(&tree.0.join("config.yaml"))
+        let host = atomdns_native_host::HostAssembly::from_config_file(&tree.0.join("config.yaml"))
             .unwrap();
         let bound = host.bind_host().await.expect("startup continues");
-        let scope = mosdns_upstream_core::TransportCancellation::new();
+        let scope = atomdns_upstream_core::TransportCancellation::new();
         let serve_scope = scope.clone();
         let serving = tokio::task::spawn_local(async move {
             bound.serve(serve_scope).await.unwrap();

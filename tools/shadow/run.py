@@ -206,7 +206,7 @@ class Experiment:
     def health_loop(self):
         while not self.stop.is_set():
             try:
-                props = dict(line.split("=", 1) for line in subprocess.check_output(["systemctl", "show", "mosdns.service",
+                props = dict(line.split("=", 1) for line in subprocess.check_output(["systemctl", "show", "atomdns.service",
                     "-p", "MainPID", "-p", "NRestarts", "-p", "ActiveState"], text=True).splitlines())
                 try:
                     ready = api(self.config["api"], "/api/v1/system/health").get("ready") is True
@@ -364,7 +364,7 @@ class Experiment:
             self.audit.popleft()
 
     def sample(self, phase):
-        props = dict(line.split("=", 1) for line in subprocess.check_output(["systemctl", "show", "mosdns.service",
+        props = dict(line.split("=", 1) for line in subprocess.check_output(["systemctl", "show", "atomdns.service",
             "-p", "MainPID", "-p", "NRestarts", "-p", "ActiveState"], text=True).splitlines())
         data = {"wall": time.time(), "monotonic": time.monotonic(), "phase": phase, "service": props,
                 "counts": dict(self.counts), "pending": len(self.pending), "event_queue": self.events.qsize(),

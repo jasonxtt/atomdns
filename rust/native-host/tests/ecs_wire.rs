@@ -1,7 +1,7 @@
+use atomdns_native_host::{HostAssembly, UdpServer, compile_yaml};
+use atomdns_upstream_core::TransportCancellation;
 use hickory_proto::op::{Message, MessageType, Query};
 use hickory_proto::rr::{Name, RData, Record, RecordType, rdata::A};
-use mosdns_native_host::{HostAssembly, UdpServer, compile_yaml};
-use mosdns_upstream_core::TransportCancellation;
 use std::net::UdpSocket;
 use std::time::Duration;
 
@@ -169,13 +169,13 @@ fn run_scenario_requests(
     });
     (response, peer_task.join().unwrap())
 }
-fn ecs(wire: &[u8]) -> Option<mosdns_dns_core::EcsInfo> {
-    let (_, q) = mosdns_dns_core::parse_query(wire).unwrap();
+fn ecs(wire: &[u8]) -> Option<atomdns_dns_core::EcsInfo> {
+    let (_, q) = atomdns_dns_core::parse_query(wire).unwrap();
     let offset = 12 + q.qname_wire.len() + 4;
     if wire[11] == 0 {
         None
     } else {
-        mosdns_dns_core::extract_edns_at(wire, offset)
+        atomdns_dns_core::extract_edns_at(wire, offset)
             .unwrap()
             .unwrap()
             .ecs
@@ -227,9 +227,9 @@ fn named_handler_selection_and_masked_wire() {
     let wire = run("{send: true}", None, query(None, false));
     assert_eq!(ecs(&wire).unwrap().address, vec![127, 0, 0, 0]);
     assert_eq!(
-        mosdns_dns_core::extract_edns_at(
+        atomdns_dns_core::extract_edns_at(
             &wire,
-            12 + mosdns_dns_core::parse_query(&wire)
+            12 + atomdns_dns_core::parse_query(&wire)
                 .unwrap()
                 .1
                 .qname_wire
@@ -294,7 +294,7 @@ fn handler_preserves_other_opt_flags_and_empty_legacy_and_non_in() {
     let incoming = [0, 1, 24, 0, 203, 0, 113];
     let original = query(Some(&incoming), true);
     let wire = run("{preset: '192.0.2.199', mask4: 25}", None, original.clone());
-    let (_, question) = mosdns_dns_core::parse_query(&wire).unwrap();
+    let (_, question) = atomdns_dns_core::parse_query(&wire).unwrap();
     let offset = 12 + question.qname_wire.len() + 4;
     assert_eq!(&wire[..offset], &original[..offset]);
     assert_eq!(&wire[offset..offset + 9], &original[offset..offset + 9]);
@@ -320,7 +320,7 @@ fn malformed_incoming_ecs_fails_locally_without_forwarding() {
         assert!(wire.is_none());
     }
     let mut duplicate = query(Some(&[0, 1, 24, 0, 203, 0, 113]), true);
-    let (_, q) = mosdns_dns_core::parse_query(&duplicate).unwrap();
+    let (_, q) = atomdns_dns_core::parse_query(&duplicate).unwrap();
     let offset = 12 + q.qname_wire.len() + 4;
     let old = u16::from_be_bytes([duplicate[offset + 9], duplicate[offset + 10]]);
     duplicate[offset + 9..offset + 11].copy_from_slice(&(old + 11).to_be_bytes());
@@ -459,7 +459,7 @@ fn preference_local_suppression_has_no_supplier_echo() {
     use hickory_proto::rr::rdata::opt::EdnsCode;
     let mut raw = query(Some(&[0, 1, 24, 0, 203, 0, 113]), true);
     let offset = 12
-        + mosdns_dns_core::parse_query(&raw)
+        + atomdns_dns_core::parse_query(&raw)
             .unwrap()
             .1
             .qname_wire
@@ -671,7 +671,7 @@ fn ecs_scope_shutdown_cancels_without_fabricated_response() {
     upstream.join().unwrap();
     assert_eq!(
         host.audit_snapshot().records[0].response,
-        mosdns_native_host::ResponseState::NoResponse
+        atomdns_native_host::ResponseState::NoResponse
     );
 }
 
@@ -737,11 +737,11 @@ fn enabled_cache_uses_current_policy_ecs_and_hit_has_no_echo_scope() {
 #[test]
 fn compressed_noopt_query_can_receive_generated_ecs() {
     let plain = query(None, false);
-    let (_, question) = mosdns_dns_core::parse_query(&plain).unwrap();
+    let (_, question) = atomdns_dns_core::parse_query(&plain).unwrap();
     let mut compressed = plain[..12].to_vec();
     compressed.extend_from_slice(&[0xc0, 18, 0, 1, 0, 1]);
     compressed.extend_from_slice(&question.qname_wire);
     let wire = run("{preset: '192.0.2.99'}", None, compressed);
-    assert_eq!(mosdns_dns_core::parse_query(&wire).unwrap().1, question);
+    assert_eq!(atomdns_dns_core::parse_query(&wire).unwrap().1, question);
     assert_eq!(ecs(&wire).unwrap().address, vec![192, 0, 2, 0]);
 }

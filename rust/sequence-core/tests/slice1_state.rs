@@ -1,5 +1,5 @@
-use mosdns_dns_core::{QueryHeader, QuestionInfo};
-use mosdns_sequence_core::{
+use atomdns_dns_core::{QueryHeader, QuestionInfo};
+use atomdns_sequence_core::{
     DnsResponseInspector, ExecutionState, OwnedResponseWire, ResponseError, ResponseState,
     RoutingState, SynthesizedResponse,
 };
@@ -46,7 +46,7 @@ fn complete_response_wire() -> Vec<u8> {
 fn cached_default_is_preserved_without_a_live_learning_prefix() {
     let mut state = state();
     state.routing.domain_set = Some("NEW_STATIC".to_owned());
-    state.domain_set_overlay = Some(mosdns_sequence_core::RoutingLabelOverlay {
+    state.domain_set_overlay = Some(atomdns_sequence_core::RoutingLabelOverlay {
         prefix_len: 0,
         dynamic_label_count: 1,
         replaced: vec!["LEARNED".to_owned(), "DEFAULT".to_owned()].into(),

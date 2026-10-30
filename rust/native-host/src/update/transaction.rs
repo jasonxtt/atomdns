@@ -20,7 +20,7 @@ const STAGED_STALE_SECS: u64 = 24 * 3600;
 /// A staged transaction younger than this still blocks a new one.
 const STAGED_BUSY_SECS: u64 = 10 * 60;
 const INSTALLED_FILE: &str = "installed.json";
-pub(crate) const MARKER_ENV: &str = "MOSDNS_UPDATE_GUARD_TXN";
+pub(crate) const MARKER_ENV: &str = "ATOMDNS_UPDATE_GUARD_TXN";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Transaction {
@@ -51,7 +51,7 @@ pub(crate) struct Transaction {
     pub(crate) created_at: u64,
     #[serde(default)]
     pub(crate) last_error: String,
-    /// The staged `rtdns-webui.tar.gz`; empty when `ui/main` is not replaced.
+    /// The staged `atomdns-webui.tar.gz`; empty when `ui/main` is not replaced.
     #[serde(default)]
     pub(crate) webui_archive_path: String,
     #[serde(default)]
@@ -221,7 +221,7 @@ pub(crate) struct StageInput<'a> {
     pub(crate) candidate: Option<&'a [u8]>,
     /// The configuration package and its original bytes, when the update carries one.
     pub(crate) package: Option<(&'a Package, &'a [u8])>,
-    /// The release's `rtdns-webui.tar.gz`, when `ui/main` is replaced.
+    /// The release's `atomdns-webui.tar.gz`, when `ui/main` is replaced.
     pub(crate) webui: Option<&'a [u8]>,
 }
 
@@ -282,13 +282,13 @@ fn stage_into(
     input: &StageInput<'_>,
     preflight: Preflight<'_>,
 ) -> Result<Transaction, String> {
-    let previous = dir.join("mosdns.previous");
+    let previous = dir.join("atomdns.previous");
     durable_copy(input.executable, &previous, 0o755)
         .map_err(|error| format!("备份当前程序失败: {error}"))?;
     let previous_sha256 = super::file_sha256(&previous).map_err(|error| error.to_string())?;
     let (candidate_path, candidate_sha256) = match input.candidate {
         Some(bytes) => {
-            let path = dir.join("mosdns.candidate");
+            let path = dir.join("atomdns.candidate");
             durable_write(&path, bytes, 0o755)
                 .map_err(|error| format!("暂存候选程序失败: {error}"))?;
             (path.display().to_string(), super::sha256_hex(bytes))
@@ -422,7 +422,7 @@ pub(crate) fn validate_paths(tx: &Transaction) -> Result<(), String> {
         return Err("transaction has no previous program".to_owned());
     }
     // The WebUI paths are this transaction's own fixed ones (the guard removes and renames
-    // whole directories there): `<txn>/rtdns-webui.tar.gz`, `<txn>/webui/{new,previous}`,
+    // whole directories there): `<txn>/atomdns-webui.tar.gz`, `<txn>/webui/{new,previous}`,
     // where `<txn>` is the `update/txn-*` directory of the saved program.
     let webui = [
         &tx.webui_archive_path,
@@ -585,7 +585,7 @@ mod tests {
     fn fixture(name: &str) -> Fixture {
         let root = temp(name);
         std::fs::write(root.join("config_custom.yaml"), "old config\n").unwrap();
-        let exe = root.join("mosdns-live");
+        let exe = root.join("atomdns-live");
         std::fs::write(&exe, b"OLD-PROGRAM").unwrap();
         std::fs::set_permissions(&exe, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
@@ -606,7 +606,7 @@ mod tests {
                 config_path: &fixture.root.join("config_custom.yaml"),
                 executable: &fixture.exe,
                 args: vec![
-                    "mosdns".into(),
+                    "atomdns".into(),
                     "start".into(),
                     "-d".into(),
                     fixture.root.display().to_string(),
@@ -641,11 +641,11 @@ mod tests {
         assert_eq!(read(&path).unwrap(), tx);
         let dir = path.parent().unwrap();
         assert_eq!(
-            std::fs::read(dir.join("mosdns.previous")).unwrap(),
+            std::fs::read(dir.join("atomdns.previous")).unwrap(),
             b"OLD-PROGRAM"
         );
         assert_eq!(
-            std::fs::read(dir.join("mosdns.candidate")).unwrap(),
+            std::fs::read(dir.join("atomdns.candidate")).unwrap(),
             b"NEW-PROGRAM"
         );
         assert!(
@@ -730,7 +730,7 @@ mod tests {
     #[test]
     fn a_program_directory_that_takes_no_new_file_is_refused_before_anything_is_staged() {
         let mut fixture = fixture("unwritable");
-        fixture.exe = fixture.root.join("no-such-dir/mosdns");
+        fixture.exe = fixture.root.join("no-such-dir/atomdns");
         let error = stage_for(&fixture, "binary", true, &|_, _| Ok(())).unwrap_err();
         assert!(error.contains("不可写"), "{error}");
         assert!(list(&fixture.root).is_empty());
@@ -788,7 +788,7 @@ mod tests {
         let fixture = fixture("config-kind");
         let (path, mut tx) = stage_for(&fixture, "config", true, &|program, _| {
             assert!(
-                program.ends_with("mosdns.previous"),
+                program.ends_with("atomdns.previous"),
                 "the running program is the candidate"
             );
             Ok(())
@@ -956,7 +956,7 @@ mod tests {
                 root: &fixture.root,
                 config_path: &fixture.root.join("config_custom.yaml"),
                 executable: &fixture.exe,
-                args: vec!["mosdns".into(), "start".into()],
+                args: vec!["atomdns".into(), "start".into()],
                 health_url: "http://127.0.0.1:9/api/v1/system/health".into(),
                 health_timeout_secs: 5,
                 kind: "binary",
@@ -1135,7 +1135,7 @@ mod tests {
             ("new", update_dir(&fixture.root)),
             ("new", dir.clone()),
             ("previous", dir.join("config-backup")),
-            ("archive", dir.join("mosdns.previous")),
+            ("archive", dir.join("atomdns.previous")),
         ] {
             let mut doctored = tx.clone();
             let value = value.display().to_string();
@@ -1153,11 +1153,11 @@ mod tests {
         }
         let mut no_txn = tx.clone();
         no_txn.previous_binary_path = update_dir(&fixture.root)
-            .join("mosdns.previous")
+            .join("atomdns.previous")
             .display()
             .to_string();
         assert!(validate_paths(&no_txn).is_err());
-        assert!(dir.join("mosdns.previous").exists() && dir.join("rtdns-webui.tar.gz").exists());
+        assert!(dir.join("atomdns.previous").exists() && dir.join("atomdns-webui.tar.gz").exists());
         std::fs::remove_dir_all(fixture.root).unwrap();
     }
 

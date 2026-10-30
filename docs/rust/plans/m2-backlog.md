@@ -94,7 +94,7 @@ requery 不再清空学习名单（缓存照旧清空）；配置 schema 升到 
 
 ## M2-4：切换生产后的待办（2026-10-21 记录）
 
-生产已于 2026-10-21 由用户手动切换为 rtdns（rust-v0.1.4，独立服务 `rtdns.service`、配置根 `/cus/rtdns`，Go 原样保留可回滚）。
+生产已于 2026-10-21 由用户手动切换为 atomdns（rust-v0.1.4，独立服务 `atomdns.service`、配置根 `/cus/atomdns`，Go 原样保留可回滚）。
 
 **随 UI 重做一起处理（用户决定 2026-10-21）**
 1. **本地规则页隐藏固定名单**：`webui-log/src/components/ListManager.vue` 中原生模式下 `special_groups.enabled` 为真时只列专属分流组名单，
@@ -122,12 +122,12 @@ requery 不再清空学习名单（缓存照旧清空）；配置 schema 升到 
 同一名字后半段另有 16 条反向差异。最可能是两端缓存取得/刷新时序不同，但缺少初始缓存与首次上游应答，判定为**证据不足**，保持原未解释计数、不改代码。
 数值、推断和限制见上述验证记录。
 
-**独立为 rtdns 仓库后（2026-10-21 记录）**
-8. **项目改名收尾**（2026-10-22 任务 `10-22-rtdns-rename-release`：已完成；2026-10-22 发布 v0.2.0，生产手动替换为 v0.2.0 后经 WebUI 在线更新到 v0.2.1）：
-   用户决定不做桥接版（旧仓库从未发布 `rust-v*`，Go 更新器有一条路径读 `/releases/latest`）；tag 为 `vX.Y.Z`，发布包 `rtdns-linux-amd64.tar.gz`/`rtdns-update-manifest.json`，
-   在线更新只来自 `jasonxtt/rtdns`，cargo bin 改为 `rtdns`，`native-host` 版本 `0.2.0`；README 已重写，发版与手动替换见 [release.md](../release.md)，
-   演练记录见 [10-22-rtdns-rename](../validation-records/10-22-rtdns-rename/README.md)。生产 `rust-v0.1.4` 由用户手动替换为 `v0.2.0`。
-   WebUI 里的 “MosDNS” 界面文案已在 UI 重做第一段（2026-10-23）改为 rtdns，localStorage 键改用 `rtdns-` 前缀（旧键不迁移）；`scripts/cutover/`、`tools/cutover/` 仍按旧名/`rust-v*` 编写，已不适用于新程序。
+**独立为 atomdns 仓库后（2026-10-21 记录）**
+8. **项目改名收尾**（2026-10-22 任务 `10-22-atomdns-rename-release`：已完成；2026-10-22 发布 v0.2.0，生产手动替换为 v0.2.0 后经 WebUI 在线更新到 v0.2.1）：
+   用户决定不做桥接版（旧仓库从未发布 `rust-v*`，Go 更新器有一条路径读 `/releases/latest`）；tag 为 `vX.Y.Z`，发布包 `atomdns-linux-amd64.tar.gz`/`atomdns-update-manifest.json`，
+   在线更新只来自 `jasonxtt/atomdns`，cargo bin 改为 `atomdns`，`native-host` 版本 `0.2.0`；README 已重写，发版与手动替换见 [release.md](../release.md)，
+   演练记录见 [10-22-atomdns-rename](../validation-records/10-22-atomdns-rename/README.md)。生产 `rust-v0.1.4` 由用户手动替换为 `v0.2.0`。
+   WebUI 里的 “AtomDNS” 界面文案已在 UI 重做第一段（2026-10-23）改为 atomdns，localStorage 键改用 `atomdns-` 前缀（旧键不迁移）；`scripts/cutover/`、`tools/cutover/` 仍按旧名/`rust-v*` 编写，已不适用于新程序。
 
 **M2-1 差分发现（2026-10-23 记录，后续小项）**
 9. **新学到域名的审计标签滞后（已修）**（P2，v0.2.2 已有；2026-10-24 修复，未发布）：mapper 的实时学习标签被随后命中的应答缓存旧标签覆盖，来源字段却没有被覆盖。
@@ -135,3 +135,11 @@ requery 不再清空学习名单（缓存照旧清空）；配置 schema 升到 
    VM fmt、严格 Clippy、全工作区 **1501 passed / 0 failed**；等价 G1 的 **471 行真实滞后 → 0**，其它比较字段及学习集合零差异，
    见 [10-24-learned-label-lag](../validation-records/10-24-learned-label-lag/README.md)。
    M2-1 的历史 G1/H 组计数仍保留在 [10-23-feature-flags](../validation-records/10-23-feature-flags/README.md)；本次使用不同的旧快照，没有复刻原 432 行数据集。
+
+## M2-5：运行内存优化研究（2026-10-23–24）
+
+合并研究：[域名索引压缩与分级查询日志](../research/memory-optimization.md)，含源码依据、离线实验数据、复现源码和待验证边界；尚未实施。
+
+- **域名**：对比 40/64 位哈希、字符串池、紧凑 trie 和 FST；优先保留精确匹配与完整路由来源语义，未批准以哈希碰撞概率改变默认分流。优化构建输入共享与更新峰值一并评估。
+- **日志（用户 2026-10-24 已确认方向）**：较早的普通成功查询，保留客户端、域名、完整返回 IP/CNAME、分流和实际最终上游已足够；日常记录较长保留，完整 TTL/特殊 RR/分支与尝试过程可较短保留。具体预算、时长、异常/慢查询策略与 API/WebUI 迁移待设计；不将举例条数当作默认值。
+- **先测后做**：分别测域名索引、日志固定结构/共享载荷与读快照；消除重复时间表等无损成本，再按已确认的日志需求完善分级保留。另记录过期冷缓存、dump 副本、SRS 展开/列表分页和 UDP 在途缓冲线索。

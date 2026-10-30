@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""VM-only drill of the online-update path after the rtdns rename (task 10-22-rtdns-rename-release).
+"""VM-only drill of the online-update path after the atomdns rename (task 10-22-atomdns-rename-release).
 
-Runs a systemd unit named `rtdns` (Restart=always, RestartSec=120, program at
-<work>/usr/local/bin/rtdns, configuration root <work>/cus/rtdns) against a fake GitHub
-release API on 127.0.0.1 (MOSDNS_UPDATE_API_URL) and a fake UDP upstream on 127.0.0.1.
+Runs a systemd unit named `atomdns` (Restart=always, RestartSec=120, program at
+<work>/usr/local/bin/atomdns, configuration root <work>/cus/atomdns) against a fake GitHub
+release API on 127.0.0.1 (ATOMDNS_UPDATE_API_URL) and a fake UDP upstream on 127.0.0.1.
 Release artifacts are built with scripts/build-rust-release.sh from prebuilt binaries
 that report v0.2.0 / v0.2.1. Never touches the public network; only RFC 5737 answers.
 
@@ -28,12 +28,12 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-UNIT = "rtdns"
+UNIT = "atomdns"
 UNIT_FILE = Path(f"/etc/systemd/system/{UNIT}.service")
 UNIT_OWNED = False   # true once this run has written the unit file: only then is it cleaned up
 ANSWER = "192.0.2.1"
-ASSET = "rtdns-linux-amd64.tar.gz"
-MANIFEST = "rtdns-update-manifest.json"
+ASSET = "atomdns-linux-amd64.tar.gz"
+MANIFEST = "atomdns-update-manifest.json"
 RESULTS = []
 
 
@@ -220,8 +220,8 @@ class Site:
 class Host:
     def __init__(self, work, site):
         self.work, self.site = Path(work), site
-        self.exe = self.work / "usr/local/bin/rtdns"
-        self.root = self.work / "cus/rtdns"
+        self.exe = self.work / "usr/local/bin/atomdns"
+        self.root = self.work / "cus/atomdns"
         self.api, self.dns, self.upstream = free_port(), free_port(socket.SOCK_DGRAM), free_port(socket.SOCK_DGRAM)
 
     def config_text(self):
@@ -244,10 +244,10 @@ class Host:
             {"format": 1, "applied_schema": 1, "required_schema": 1, "status": "success",
              "package_id": "rust-config-schema-1", "binary_version": "v0.2.0"}))
         UNIT_FILE.write_text(
-            "[Unit]\nDescription=rtdns rename drill (temporary)\nAfter=network.target\n\n"
+            "[Unit]\nDescription=atomdns rename drill (temporary)\nAfter=network.target\n\n"
             "[Service]\nType=simple\n"
-            f"Environment=MOSDNS_UPDATE_API_URL={self.site.api_url}\n"
-            "Environment=MOSDNS_UPDATE_HEALTH_TIMEOUT_SECS=20\n"
+            f"Environment=ATOMDNS_UPDATE_API_URL={self.site.api_url}\n"
+            "Environment=ATOMDNS_UPDATE_HEALTH_TIMEOUT_SECS=20\n"
             f"ExecStart={self.exe} start -d {self.root} -c {self.root}/config_custom.yaml\n"
             "Restart=always\nRestartSec=120\n\n[Install]\nWantedBy=multi-user.target\n")
         UNIT_OWNED = True
@@ -321,13 +321,13 @@ def drill(args):
     program_v020 = work / "unpacked-v0.2.0"
     program_v020.mkdir(parents=True)
     run(["tar", "-xzf", v020 / ASSET, "-C", program_v020])
-    sha_020 = sha256(program_v020 / "rtdns")
+    sha_020 = sha256(program_v020 / "atomdns")
     sha_021 = sha256(Path(args.v021))
     config_before = (host.root / "config_custom.yaml").read_bytes()
 
     # --- 1. the user replaces the program by hand: stop, copy, start --------------------
     site.releases = []
-    shutil.copy2(program_v020 / "rtdns", host.exe)
+    shutil.copy2(program_v020 / "atomdns", host.exe)
     host.systemctl("start")
     health = host.wait_ready("v0.2.0")
     say("1 manual replace: health", health["version"] == "v0.2.0", f"version={health['version']}")
@@ -352,7 +352,7 @@ def drill(args):
     site.publish("v0.2.8", v021, prerelease=True)
     status = host.check()
     say("2 check", status["latest_version"] == "v0.2.1" and status["update_available"] is True
-        and status["release_url"] == "https://github.com/jasonxtt/rtdns/releases/tag/v0.2.1"
+        and status["release_url"] == "https://github.com/jasonxtt/atomdns/releases/tag/v0.2.1"
         and status["asset_name"] == ASSET and status["download_url"].endswith(f"/dl/v0.2.1/{ASSET}"),
         f"latest={status['latest_version']} release_url={status['release_url']}")
     say("4 other tag families ignored", True,
@@ -409,7 +409,7 @@ def drill(args):
     # --- 5b. a candidate that is not healthy is rolled back automatically -------------------
     broken = work / "broken"
     broken.mkdir()
-    script = broken / "rtdns"
+    script = broken / "atomdns"
     script.write_text("#!/bin/sh\ncase \"$1\" in\n  version) echo v0.2.3;;\n  check) exit 0;;\n  start) exit 3;;\nesac\n")
     script.chmod(0o755)
     build_release(repo, script, "v0.2.3", broken / "release")
@@ -457,8 +457,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--work", required=True, help="empty directory for this drill (removed at the end)")
     parser.add_argument("--repo", required=True, help="the repository checkout holding scripts/")
-    parser.add_argument("--v020", required=True, help="a prebuilt rtdns reporting v0.2.0")
-    parser.add_argument("--v021", required=True, help="a prebuilt rtdns reporting v0.2.1")
+    parser.add_argument("--v020", required=True, help="a prebuilt atomdns reporting v0.2.0")
+    parser.add_argument("--v021", required=True, help="a prebuilt atomdns reporting v0.2.1")
     parser.add_argument("--keep", action="store_true", help="keep the work directory")
     parser.add_argument("--log", help="also write the STEP lines to this file")
     args = parser.parse_args()

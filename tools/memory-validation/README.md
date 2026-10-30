@@ -106,7 +106,7 @@ must remain outside Git. Inspect input mapping before using a new config.
    Keep builds, other test jobs and browser probes out of formal timing.
 5. `diagnostic_candidate.py --source SOURCE --output NEW_DIAGNOSTIC_SOURCE`
    injects the established original-capacity audit accounting and shutdown
-   launcher. Build `mosdns-native-host --example audit_memory --release --locked`
+   launcher. Build `atomdns-native-host --example audit_memory --release --locked`
    with a fresh target (or explicitly clean/rebuild the native-host package
    between source copies). `run.py --diagnostic` fills the audit ring and exits
    after a short observation; its CPU/latency/RSS are not acceptance evidence.
@@ -117,9 +117,9 @@ must remain outside Git. Inspect input mapping before using a new config.
    `memory-diagnostic.json` records the transformation and fixture hash. Run:
 
    ```sh
-   RTDNS_MEMORY_AUDIT_CAPACITY=100000 RTDNS_MEMORY_AUDIT_PROFILE=ttl \
+   ATOMDNS_MEMORY_AUDIT_CAPACITY=100000 ATOMDNS_MEMORY_AUDIT_PROFILE=ttl \
      cargo test --locked --manifest-path NEW_DIAGNOSTIC_SOURCE/rust/Cargo.toml \
-       -p mosdns-native-host --lib memory_validation_synthetic_retention -- --nocapture
+       -p atomdns-native-host --lib memory_validation_synthetic_retention -- --nocapture
    ```
 
    Profiles are `shared`, `ttl` and `unique`; capacities are0/100000/400000.
@@ -130,7 +130,7 @@ must remain outside Git. Inspect input mapping before using a new config.
    `index-probe/main.rs` is a separate counting-allocator executable taking rule
    files/SRS paths; its constructed provider metadata exercises complete valued
    results but does not represent a whole production mapper allocation census.
-   Set diagnostic-only `RTDNS_MEMORY_PROBE_OUTPUT` to a PRIVATE path for full
+   Set diagnostic-only `ATOMDNS_MEMORY_PROBE_OUTPUT` to a PRIVATE path for full
    query/result byte comparison (emitted after measurement, never published).
 6. `browser.py` serves a copied runtime through a loopback proxy for up to600s,
    or until its output `stop` file exists. Connect an owned SSH forward and test
@@ -148,7 +148,7 @@ Tool checks: `python3 -m unittest discover -s tools/memory-validation -p 'test_*
 
 The newer `ValidationEnv` wrapper also fingerprints all existing product processes
 by PID/start/image identity, including the test host's `mosdns-rust`; the legacy
-harness's `mosdns`-unit receipt is insufficient by itself. The evaluator requires
+harness's `atomdns`-unit receipt is insufficient by itself. The evaluator requires
 both cleanup and this existing-process guard. The current production snapshot's
 static-oracle aging failure is retained as a blocker; no formal run is launched
 with that unsupported model.

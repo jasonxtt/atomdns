@@ -117,7 +117,7 @@ async function exportFile() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(latest, null, 2)], { type: 'application/json' }))
     const anchor = document.createElement('a')
     anchor.href = url
-    anchor.download = `rtdns-aliases-${new Date().toISOString().slice(0, 10)}.json`
+    anchor.download = `atomdns-aliases-${new Date().toISOString().slice(0, 10)}.json`
     document.body.appendChild(anchor)
     anchor.click()
     document.body.removeChild(anchor)
@@ -129,10 +129,10 @@ async function exportFile() {
 
 onMounted(() => {
   load()
-  window.addEventListener('mosdns-log-refresh', load)
+  window.addEventListener('atomdns-log-refresh', load)
 })
 onBeforeUnmount(() => {
-  window.removeEventListener('mosdns-log-refresh', load)
+  window.removeEventListener('atomdns-log-refresh', load)
   clearDirty(uid)
 })
 </script>

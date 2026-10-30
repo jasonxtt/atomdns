@@ -1,4 +1,4 @@
-use mosdns_native_host::{ResponsePolicy, TtlPolicy, compile_yaml};
+use atomdns_native_host::{ResponsePolicy, TtlPolicy, compile_yaml};
 fn config(plugins: &str, rules: &str) -> String {
     format!(
         "log: {{level: error}}\nplugins:\n{plugins}\n  - tag: upstream\n    type: forward\n    args:\n      upstreams:\n        - addr: udp://127.0.0.1:19000\n  - tag: main\n    type: sequence\n    args:\n{rules}\n  - tag: listener\n    type: udp_server\n    args:\n      entry: main\n      listen: 127.0.0.1:19100\n      enable_audit: false\n"
@@ -34,7 +34,7 @@ impl Scratch {
     fn new() -> Self {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
-            "mosdns-policy-{}-{}",
+            "atomdns-policy-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
@@ -63,7 +63,7 @@ fn domain_payload_precedence_replacement_and_startup_snapshot_are_observable() {
         "      - exec: $local\n      - exec: $upstream",
     );
     let compiled =
-        mosdns_native_host::compile_yaml_with_base(&yaml, &dir.0).expect("payload snapshot");
+        atomdns_native_host::compile_yaml_with_base(&yaml, &dir.0).expect("payload snapshot");
     let ResponsePolicy::Hosts(rules) = &compiled.response_policies[0].policy else {
         panic!("hosts")
     };
@@ -103,7 +103,7 @@ fn ip_files_have_empty_missing_bad_and_binary_startup_outcomes() {
         "  - tag: networks\n    type: ip_set\n    args:\n      ips: ['::1']\n      files: ['missing.txt', 'empty.txt']",
         "      - matches: resp_ip $networks &empty.txt\n        exec: accept\n      - exec: $upstream",
     );
-    let compiled = mosdns_native_host::compile_yaml_with_base(&yaml, &dir.0)
+    let compiled = atomdns_native_host::compile_yaml_with_base(&yaml, &dir.0)
         .expect("missing skips, empty valid");
     assert!(
         compiled.ip_sets[0]
@@ -123,7 +123,7 @@ fn ip_files_have_empty_missing_bad_and_binary_startup_outcomes() {
         b"\xff",
     ] {
         dir.write("empty.txt", bytes);
-        let error = mosdns_native_host::compile_yaml_with_base(&yaml, &dir.0)
+        let error = atomdns_native_host::compile_yaml_with_base(&yaml, &dir.0)
             .err()
             .expect("bad source rejected entirely");
         assert!(error.path.contains("empty.txt:1") || error.path.contains("empty.txt:2"));
@@ -133,7 +133,7 @@ fn ip_files_have_empty_missing_bad_and_binary_startup_outcomes() {
         .replace("ips: ['::1']", "entries: ['x ::1']")
         .replace("resp_ip $networks &empty.txt", "_true");
     assert!(
-        mosdns_native_host::compile_yaml_with_base(&hosts, &dir.0).is_err(),
+        atomdns_native_host::compile_yaml_with_base(&hosts, &dir.0).is_err(),
         "missing hosts file fails startup"
     );
 }
@@ -199,7 +199,7 @@ fn included_policy_file_paths_belong_to_the_configuration_root() {
             "      - exec: $local\n      - matches: resp_ip $networks\n        exec: accept\n      - exec: $upstream"
         )
     );
-    let cfg = mosdns_native_host::compile_yaml_with_base(&yaml, &dir.0)
+    let cfg = atomdns_native_host::compile_yaml_with_base(&yaml, &dir.0)
         .expect("root-relative policy file");
     assert!(
         cfg.ip_sets[0]
@@ -227,10 +227,10 @@ fn text_loader_limits_are_enforced_before_snapshot_publication() {
     );
     dir.write(
         "large.txt",
-        vec![b'#'; mosdns_native_host::POLICY_LINE_LIMIT + 1],
+        vec![b'#'; atomdns_native_host::POLICY_LINE_LIMIT + 1],
     );
     let check = || {
-        mosdns_native_host::compile_yaml_with_base(&yaml, &dir.0)
+        atomdns_native_host::compile_yaml_with_base(&yaml, &dir.0)
             .err()
             .expect("limit error")
     };
@@ -247,7 +247,7 @@ fn text_loader_limits_are_enforced_before_snapshot_publication() {
     {
         let mut out =
             std::io::BufWriter::new(std::fs::File::create(dir.0.join("large.txt")).unwrap());
-        for _ in 0..=mosdns_native_host::POLICY_RULE_LIMIT {
+        for _ in 0..=atomdns_native_host::POLICY_RULE_LIMIT {
             out.write_all(b"::1\n").unwrap();
         }
     }
@@ -262,7 +262,7 @@ fn expanded_ip_descriptors_assemble_with_real_runtime() {
     );
     let compiled = compile_yaml(&yaml).expect("typed compile supported in S1");
     assert!(
-        mosdns_native_host::HostAssembly::from_config(compiled).is_ok(),
+        atomdns_native_host::HostAssembly::from_config(compiled).is_ok(),
         "expanded IP matcher now executes immutable snapshots"
     );
 }
@@ -276,7 +276,7 @@ fn empty_policy_defaults_and_mapped_hosts_keep_typed_family() {
         "      - exec: $local\n      - exec: $upstream",
     ))
     .expect("mapped IPv6 hosts");
-    let mosdns_native_host::ResponsePolicy::Hosts(rules) = &cfg.response_policies[0].policy else {
+    let atomdns_native_host::ResponsePolicy::Hosts(rules) = &cfg.response_policies[0].policy else {
         panic!("hosts")
     };
     assert!(rules.lookup("x").unwrap().ipv4.is_empty());

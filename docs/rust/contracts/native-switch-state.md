@@ -1,7 +1,7 @@
 # Native switch state (removed in configuration schema 3)
 
 The plugin types `switch1`–`switch17`, their `rule/switchN.txt` state files, the host switch registry, the per-admission switch values and fast-flag bits
-32–45/47/49, the `/plugins/{switch tag}/show|post` routes with `X-Mosdns-Config-Generation`, the `switches.manage` operation and the `switches` capability
+32–45/47/49, the `/plugins/{switch tag}/show|post` routes with `X-Atomdns-Config-Generation`, the `switches.manage` operation and the `switches` capability
 extension were removed by M2-1 (2026-10-23). Named flags replace them: [native-feature-flags.md](native-feature-flags.md), which also describes the one-time
 migration of the `rule/switchN.txt` values.
 

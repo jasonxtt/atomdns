@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use mosdns_native_host::{BoundHost, HostAssembly, HostOptions};
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_native_host::{BoundHost, HostAssembly, HostOptions};
+use atomdns_upstream_core::TransportCancellation;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -227,7 +227,8 @@ const NO_SCHEDULER: &str = r#"{"enabled": false, "start_datetime": "", "interval
 const IDLE: &str = r#"{"task_state": "idle", "progress": {"processed": 0, "total": 0}}"#;
 
 fn host(tree: &Tree) -> HostAssembly {
-    let config = mosdns_native_host::load_and_compile(&tree.path("config.yaml")).expect("compiles");
+    let config =
+        atomdns_native_host::load_and_compile(&tree.path("config.yaml")).expect("compiles");
     HostAssembly::with_options(config, HostOptions::default()).expect("assembles")
 }
 
@@ -831,7 +832,7 @@ fn an_unparsable_state_file_fails_the_configuration() {
     let upstream = Upstream::start();
     config(&tree, &ports, &upstream);
     tree.write("webinfo/requeryconfig.json", "{not json");
-    let error = mosdns_native_host::load_and_compile(&tree.path("config.yaml"))
+    let error = atomdns_native_host::load_and_compile(&tree.path("config.yaml"))
         .err()
         .expect("must fail")
         .to_string();
@@ -844,7 +845,7 @@ fn an_unparsable_state_file_fails_the_configuration() {
         .text("config.yaml")
         .replace("args: {file: webinfo/requeryconfig.json}", "args: {}");
     tree.write("config.yaml", &yaml);
-    let error = mosdns_native_host::load_and_compile(&tree.path("config.yaml"))
+    let error = atomdns_native_host::load_and_compile(&tree.path("config.yaml"))
         .err()
         .expect("must fail")
         .to_string();

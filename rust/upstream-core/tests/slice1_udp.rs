@@ -17,7 +17,7 @@ use std::sync::{Arc, mpsc};
 
 use std::time::{Duration, Instant};
 
-use mosdns_upstream_core::{
+use atomdns_upstream_core::{
     CloseCompletion, CloseResult, CloseTransition, Endpoint, ExchangeContext, ExchangeRequest,
     ExchangeResponse, LifecycleState, SideEffectState, TerminalError, Transport,
     TransportCancellation, Upstream, UpstreamError,

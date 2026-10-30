@@ -17,8 +17,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use mosdns_matcher_core::MixMatcher;
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_matcher_core::MixMatcher;
+use atomdns_upstream_core::TransportCancellation;
 
 /// Which step of the safe same-directory replacement fails.
 ///

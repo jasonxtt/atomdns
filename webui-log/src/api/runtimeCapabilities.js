@@ -62,7 +62,7 @@ export function operationReason(id) {
 }
 export async function retryRuntimeCapabilities() {
   await refreshRuntimeCapabilities()
-  if (typeof window !== 'undefined') { window.dispatchEvent(new CustomEvent('mosdns-capabilities-ready')); window.dispatchEvent(new CustomEvent('mosdns-log-refresh')) }
+  if (typeof window !== 'undefined') { window.dispatchEvent(new CustomEvent('atomdns-capabilities-ready')); window.dispatchEvent(new CustomEvent('atomdns-log-refresh')) }
 }
 
 // One endpoint inventory for shared HTTP, raw upload/export calls and services.

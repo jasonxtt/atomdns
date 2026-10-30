@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use mosdns_dns_core::{FrameMode, frame_response, parse_query};
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_dns_core::{FrameMode, frame_response, parse_query};
+use atomdns_upstream_core::TransportCancellation;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
@@ -256,9 +256,9 @@ async fn process_connection(task: ConnectionTask) {
         request_options.admission_deadline = Some(Instant::now() + options.request_deadline);
         let mut execution = execute_request(
             ExecutionRequest {
-                client: mosdns_sequence_core::ClientContext::from_peer(
+                client: atomdns_sequence_core::ClientContext::from_peer(
                     client_addr.ip(),
-                    mosdns_sequence_core::ClientTransport::Tcp,
+                    atomdns_sequence_core::ClientTransport::Tcp,
                 ),
                 config: &config,
                 cache: &cache,
@@ -461,10 +461,10 @@ impl std::error::Error for TcpServerError {}
 mod tests {
     use std::net::SocketAddr;
 
-    use mosdns_dns_core::{
+    use atomdns_dns_core::{
         FrameMode, frame_response, parse_query, synthesize_response, validate_response,
     };
-    use mosdns_upstream_core::TransportCancellation;
+    use atomdns_upstream_core::TransportCancellation;
     use tokio::io::AsyncWriteExt;
     use tokio::net::{TcpListener, TcpStream};
 

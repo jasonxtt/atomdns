@@ -1,13 +1,13 @@
 //! M2-1: while an online update tries the new program out (the guard's
-//! `MOSDNS_UPDATE_GUARD_TXN` is set), the flag values are migrated in memory
+//! `ATOMDNS_UPDATE_GUARD_TXN` is set), the flag values are migrated in memory
 //! only and the flag routes refuse changes, so a rollback finds the
 //! `settings.json` the old program can read. A binary of its own: the
 //! variable is process-wide.
 
 use std::path::PathBuf;
 
-use mosdns_native_host::HostAssembly;
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_native_host::HostAssembly;
+use atomdns_upstream_core::TransportCancellation;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 fn free_port() -> u16 {
@@ -40,7 +40,7 @@ async fn api(port: u16, method: &str, path: &str, body: &str) -> (u16, String) {
 #[test]
 fn an_update_trial_neither_writes_the_migration_nor_accepts_changes() {
     // SAFETY: set before any other thread of this test binary exists.
-    unsafe { std::env::set_var("MOSDNS_UPDATE_GUARD_TXN", "/nonexistent/transaction.json") };
+    unsafe { std::env::set_var("ATOMDNS_UPDATE_GUARD_TXN", "/nonexistent/transaction.json") };
     let root: PathBuf = std::env::temp_dir().join(format!("m2-1-trial-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("rule")).unwrap();
@@ -102,7 +102,7 @@ fn an_update_trial_neither_writes_the_migration_nor_accepts_changes() {
     drop(host);
     // The final program (started without the variable) migrates.
     // SAFETY: the host above has stopped; no other thread reads the environment.
-    unsafe { std::env::remove_var("MOSDNS_UPDATE_GUARD_TXN") };
+    unsafe { std::env::remove_var("ATOMDNS_UPDATE_GUARD_TXN") };
     drop(HostAssembly::from_config_file(&root.join("config.yaml")).expect("assembles"));
     let file: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(root.join("webinfo/settings.json")).unwrap())

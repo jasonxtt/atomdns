@@ -23,8 +23,8 @@ const sourceMarks = ref({})
 const stats = ref({})
 const globalSocks5 = ref('')
 const editor = reactive({ open: false, group: '', index: -1, entry: null })
-const HIDE_DISABLED_KEY = 'rtdns-hide-disabled-upstreams'
-const SHOW_INACTIVE_KEY = 'rtdns-show-inactive-upstream-groups'
+const HIDE_DISABLED_KEY = 'atomdns-hide-disabled-upstreams'
+const SHOW_INACTIVE_KEY = 'atomdns-show-inactive-upstream-groups'
 const filterGroup = ref('all')
 const hideDisabled = ref(false)
 const showInactive = ref(false)
@@ -232,9 +232,9 @@ onMounted(() => {
     showInactive.value = false
   }
   load()
-  window.addEventListener('mosdns-log-refresh', load)
+  window.addEventListener('atomdns-log-refresh', load)
 })
-onBeforeUnmount(() => window.removeEventListener('mosdns-log-refresh', load))
+onBeforeUnmount(() => window.removeEventListener('atomdns-log-refresh', load))
 </script>
 
 <template>

@@ -1,8 +1,8 @@
 #!/bin/sh
 # Native host writes domain_output files; the reference plugin reads them back
-# (M1-c1 interop evidence). Usage: native_to_reference.sh <mosdns-binary> <m1c1-interop-binary> <workdir>
+# (M1-c1 interop evidence). Usage: native_to_reference.sh <atomdns-binary> <m1c1-interop-binary> <workdir>
 set -eu
-MOSDNS=$1; INTEROP=$2; WORK=$3
+ATOMDNS=$1; INTEROP=$2; WORK=$3
 rm -rf "$WORK"; mkdir -p "$WORK/gen"
 cat > "$WORK/config.yaml" <<YAML
 log: {level: error}
@@ -24,7 +24,7 @@ plugins:
     args: {entry: entry, listen: "127.0.0.1:19053"}
 YAML
 cd "$WORK"
-"$MOSDNS" start -d "$WORK" -c "$WORK/config.yaml" > mosdns.log 2>&1 &
+"$ATOMDNS" start -d "$WORK" -c "$WORK/config.yaml" > atomdns.log 2>&1 &
 PID=$!
 sleep 1
 python3 - <<'PY'

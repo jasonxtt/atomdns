@@ -7,17 +7,17 @@ use std::rc::{Rc, Weak};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use mosdns_dns_core::{
+use atomdns_dns_core::{
     FrameMode, QueryHeader, QuestionInfo, ResponseError, frame_response, inspect_response_header,
     observe_answer_addresses, observe_answer_records, observe_response_metadata,
     patch_response_id_ra, synthesize_response, validate_response,
 };
-use mosdns_sequence_core::{
+use atomdns_sequence_core::{
     CancellationToken, ExecutableId, ExecutionCompletion, ExecutionControl, ExecutionError,
     ExecutionMachine, ExecutionState, ExecutorError, ExecutorOutcome, MachineStep,
     ResponseState as MachineResponseState, RootFuelHandle, RoutingState, SequenceId, WatchToken,
 };
-use mosdns_upstream_core::{ExchangeResponse, TransportCancellation, UpstreamError};
+use atomdns_upstream_core::{ExchangeResponse, TransportCancellation, UpstreamError};
 
 use crate::assembly::{ForwardAdapter, ForwardCatalog, HostOptions};
 use crate::cache::{CacheCatalog, PendingStore};
@@ -91,7 +91,7 @@ pub(crate) enum ExchangeError {
 }
 
 pub(crate) struct ExecutionRequest<'a> {
-    pub client: mosdns_sequence_core::ClientContext,
+    pub client: atomdns_sequence_core::ClientContext,
     pub config: &'a CompiledConfig,
     pub cache: &'a CacheCatalog,
     pub options: &'a HostOptions,
@@ -122,7 +122,7 @@ impl RefreshEnvironment {
     fn start(
         self: &Rc<Self>,
         id: crate::config::CacheId,
-        recipe: mosdns_sequence_core::SuccessorRecipe,
+        recipe: atomdns_sequence_core::SuccessorRecipe,
         view: QueryView,
     ) {
         let Some(catalog) = self.cache.upgrade() else {
@@ -213,7 +213,7 @@ impl QueryView {
         let raw = message
             .to_vec()
             .map_err(|error| ExecutorError::new(format!("redirect encoding failed: {error}")))?;
-        let (header, question) = mosdns_dns_core::parse_query(&raw).map_err(|error| {
+        let (header, question) = atomdns_dns_core::parse_query(&raw).map_err(|error| {
             ExecutorError::new(format!("redirect query validation failed: {error:?}"))
         })?;
         Ok(Self {
@@ -701,7 +701,7 @@ fn fallback_failure<E: ExchangeExecutor + ?Sized>(
     } else if Instant::now() >= context.deadline {
         ExecutionError::BudgetExceeded
     } else {
-        ExecutionError::Executor(mosdns_sequence_core::ExecutorError::new(
+        ExecutionError::Executor(atomdns_sequence_core::ExecutorError::new(
             "fallback branches produced no usable response",
         ))
     };
@@ -804,7 +804,7 @@ struct ExecutionFacts<'a> {
     capture_audit_details: bool,
     cache_status: CacheStatus,
     response_source: Option<ResponseSource>,
-    response_origin: Option<mosdns_sequence_core::ResponseOrigin>,
+    response_origin: Option<atomdns_sequence_core::ResponseOrigin>,
     upstream_attempts: UpstreamAttemptList,
     selected_peer: Option<SocketAddr>,
     upstream_diagnostics: Option<UpstreamDiagnostics>,
@@ -1418,7 +1418,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
     if let Some(trace) = facts.checkpoint.step_trace() {
         root_control = root_control.with_step_trace(trace);
     }
-    let mut machine = match mosdns_sequence_core::ExecutionMachine::new(
+    let mut machine = match atomdns_sequence_core::ExecutionMachine::new(
         &config.program,
         options.entry_sequence.unwrap_or(config.sequence.sequence),
         state,
@@ -1928,11 +1928,11 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                             .ok()
                             .flatten()
                             .filter(|hit| {
-                                hit.state == mosdns_cache_core::LookupState::Fresh
+                                hit.state == atomdns_cache_core::LookupState::Fresh
                                     || options.refresh_environment.is_some()
                             });
                     if let Some(hit) = lookup {
-                        if hit.state == mosdns_cache_core::LookupState::Lazy {
+                        if hit.state == atomdns_cache_core::LookupState::Lazy {
                             if let (Some(environment), Ok(recipe)) =
                                 (&options.refresh_environment, machine.capture_successor())
                             {
@@ -2411,7 +2411,7 @@ async fn drive_branch_inner<'a, E: ExchangeExecutor + ?Sized>(
                 {
                     return BranchOutcome::failure(
                         machine.state().clone(),
-                        ExecutionError::Executor(mosdns_sequence_core::ExecutorError::new(
+                        ExecutionError::Executor(atomdns_sequence_core::ExecutorError::new(
                             "branch completed without a response",
                         )),
                     );
@@ -2734,7 +2734,7 @@ async fn drive_branch_inner<'a, E: ExchangeExecutor + ?Sized>(
                     let Some(store) = context.cache.get(cache_config.id) else {
                         return BranchOutcome::failure(
                             machine.state().clone(),
-                            ExecutionError::Executor(mosdns_sequence_core::ExecutorError::new(
+                            ExecutionError::Executor(atomdns_sequence_core::ExecutorError::new(
                                 "compiled cache has no store",
                             )),
                         );
@@ -2744,11 +2744,11 @@ async fn drive_branch_inner<'a, E: ExchangeExecutor + ?Sized>(
                         .ok()
                         .flatten()
                         .filter(|hit| {
-                            hit.state == mosdns_cache_core::LookupState::Fresh
+                            hit.state == atomdns_cache_core::LookupState::Fresh
                                 || context.refresh_environment.is_some()
                         })
                     {
-                        if hit.state == mosdns_cache_core::LookupState::Lazy {
+                        if hit.state == atomdns_cache_core::LookupState::Lazy {
                             if let (Some(environment), Ok(recipe)) =
                                 (&context.refresh_environment, machine.capture_successor())
                             {
@@ -2865,7 +2865,7 @@ async fn drive_branch_inner<'a, E: ExchangeExecutor + ?Sized>(
                 let Some((wire, identity)) = response else {
                     return BranchOutcome::failure(
                         machine.state().clone(),
-                        ExecutionError::Executor(mosdns_sequence_core::ExecutorError::new(
+                        ExecutionError::Executor(atomdns_sequence_core::ExecutorError::new(
                             "branch upstream exchange failed",
                         )),
                     );
@@ -2925,7 +2925,7 @@ fn run_target<'a, E: ExchangeExecutor + ?Sized>(
                 }
                 let outcome = match context.config.program.fixture(fixture) {
                     Some(fixture) => fixture.executable.execute(successor.state_mut()),
-                    None => Err(mosdns_sequence_core::ExecutorError::new(
+                    None => Err(atomdns_sequence_core::ExecutorError::new(
                         "branch fixture is missing",
                     )),
                 };
@@ -2945,7 +2945,7 @@ fn run_target<'a, E: ExchangeExecutor + ?Sized>(
                             return BranchOutcome::failure(
                                 successor.state().clone(),
                                 ExecutionError::Executor(
-                                    mosdns_sequence_core::ExecutorError::InvalidRcode(rcode),
+                                    atomdns_sequence_core::ExecutorError::InvalidRcode(rcode),
                                 ),
                             );
                         }
@@ -2955,9 +2955,11 @@ fn run_target<'a, E: ExchangeExecutor + ?Sized>(
                         if matches!(successor.state().response, MachineResponseState::None) {
                             BranchOutcome::failure(
                                 successor.state().clone(),
-                                ExecutionError::Executor(mosdns_sequence_core::ExecutorError::new(
-                                    "branch exited without a response",
-                                )),
+                                ExecutionError::Executor(
+                                    atomdns_sequence_core::ExecutorError::new(
+                                        "branch exited without a response",
+                                    ),
+                                ),
                             )
                         } else {
                             BranchOutcome {
@@ -3114,7 +3116,7 @@ fn run_target<'a, E: ExchangeExecutor + ?Sized>(
                     let Some(store) = context.cache.get(cache_config.id) else {
                         return BranchOutcome::failure(
                             successor.state().clone(),
-                            ExecutionError::Executor(mosdns_sequence_core::ExecutorError::new(
+                            ExecutionError::Executor(atomdns_sequence_core::ExecutorError::new(
                                 "compiled cache has no store",
                             )),
                         );
@@ -3124,11 +3126,11 @@ fn run_target<'a, E: ExchangeExecutor + ?Sized>(
                         .ok()
                         .flatten()
                         .filter(|hit| {
-                            hit.state == mosdns_cache_core::LookupState::Fresh
+                            hit.state == atomdns_cache_core::LookupState::Fresh
                                 || context.refresh_environment.is_some()
                         })
                     {
-                        if hit.state == mosdns_cache_core::LookupState::Lazy {
+                        if hit.state == atomdns_cache_core::LookupState::Lazy {
                             if let (Some(environment), Ok(recipe)) = (
                                 &context.refresh_environment,
                                 successor.capture_branch_successor(),
@@ -3209,7 +3211,7 @@ fn run_target<'a, E: ExchangeExecutor + ?Sized>(
                 let Some(wire) = wire else {
                     return BranchOutcome::failure(
                         successor.state().clone(),
-                        ExecutionError::Executor(mosdns_sequence_core::ExecutorError::new(
+                        ExecutionError::Executor(atomdns_sequence_core::ExecutorError::new(
                             "branch external exchange failed",
                         )),
                     );
@@ -3274,7 +3276,7 @@ impl QueryView {
     fn with_ecs(
         &self,
         policy: &crate::ecs::EcsPolicy,
-        client: mosdns_sequence_core::ClientContext,
+        client: atomdns_sequence_core::ClientContext,
     ) -> Result<Self, ExecutorError> {
         if self.policy_ecs {
             return Ok(self.clone());
@@ -3298,7 +3300,7 @@ impl QueryView {
                     .map(|ip| crate::ecs::Subnet::from_ip(ip, policy.mask4, policy.mask6))
             });
         let raw = crate::ecs::replace_query_ecs(&self.raw, selected.as_ref())?;
-        let (header, question) = mosdns_dns_core::parse_query(&raw)
+        let (header, question) = atomdns_dns_core::parse_query(&raw)
             .map_err(|_| ExecutorError::new("invalid policy query"))?;
         Ok(Self {
             raw: Rc::new(raw),
@@ -3352,7 +3354,7 @@ fn run_query_policy<'a, E: ExchangeExecutor + ?Sized>(
                         matches!(outcome.source, Some(ResponseSource::Upstream(_))),
                     )),
                     MachineResponseState::Synthesized(response) => Some(
-                        mosdns_dns_core::synthesize_response(
+                        atomdns_dns_core::synthesize_response(
                             &original_state.query.header,
                             &original_state.query.question,
                             u8::try_from(response.rcode()).unwrap_or(2),
@@ -3393,7 +3395,7 @@ fn decorate_redirect(
 ) -> Result<Vec<u8>, ExecutorError> {
     let wire = match &state.response {
         MachineResponseState::Raw(wire) => wire.as_bytes().to_vec(),
-        MachineResponseState::Synthesized(response) => mosdns_dns_core::synthesize_response(
+        MachineResponseState::Synthesized(response) => atomdns_dns_core::synthesize_response(
             &state.query.header,
             &state.query.question,
             u8::try_from(response.rcode())
@@ -3769,7 +3771,7 @@ fn run_preference<'a, E: ExchangeExecutor + ?Sized>(
                 if successor.state_mut().set_synthesized_response(0).is_err() {
                     return BranchOutcome::failure(
                         successor.state().clone(),
-                        ExecutionError::Executor(mosdns_sequence_core::ExecutorError::new(
+                        ExecutionError::Executor(atomdns_sequence_core::ExecutorError::new(
                             "preference suppression response could not be built",
                         )),
                     );
@@ -3823,7 +3825,7 @@ fn run_preference<'a, E: ExchangeExecutor + ?Sized>(
         let mut reference_question = context.view.question.clone();
         reference_question.qtype = preferred_qtype;
         let reference_raw = rewrite_query_qtype(context.raw(), preferred_qtype).ok_or_else(|| {
-            ExecutionError::Executor(mosdns_sequence_core::ExecutorError::new(
+            ExecutionError::Executor(atomdns_sequence_core::ExecutorError::new(
                 "preference query rewrite failed",
             ))
         });
@@ -3872,7 +3874,7 @@ fn run_preference<'a, E: ExchangeExecutor + ?Sized>(
                     if successor.state_mut().set_synthesized_response(0).is_err() {
                         return BranchOutcome::failure(
                             successor.state().clone(),
-                            ExecutionError::Executor(mosdns_sequence_core::ExecutorError::new(
+                            ExecutionError::Executor(atomdns_sequence_core::ExecutorError::new(
                                 "preference suppression response could not be built",
                             )),
                         );
@@ -3913,7 +3915,7 @@ fn run_preference<'a, E: ExchangeExecutor + ?Sized>(
                 let original_value = original_result.take().unwrap_or_else(|| {
                     BranchOutcome::failure(
                         successor.state().clone(),
-                        ExecutionError::Executor(mosdns_sequence_core::ExecutorError::new(
+                        ExecutionError::Executor(atomdns_sequence_core::ExecutorError::new(
                             "preference branches completed without an original result",
                         )),
                     )
@@ -4077,7 +4079,7 @@ fn invocation_response_origin(
     peer: Option<SocketAddr>,
     ledger: &UpstreamAttemptLedger,
     fallback_transport: UpstreamTransport,
-) -> Option<mosdns_sequence_core::ResponseOrigin> {
+) -> Option<atomdns_sequence_core::ResponseOrigin> {
     let identity = selected_entry
         .and_then(|index| {
             config
@@ -4088,7 +4090,7 @@ fn invocation_response_origin(
         .or_else(|| upstream_identity(config, executable).map(std::sync::Arc::from))?;
     let slot = selected_entry
         .and_then(|index| ledger.slots().iter().find(|slot| slot.entry_index == index));
-    Some(mosdns_sequence_core::ResponseOrigin {
+    Some(atomdns_sequence_core::ResponseOrigin {
         identity,
         peer: peer.or_else(|| slot.and_then(|slot| slot.peer)),
         transport: Some(
@@ -4105,7 +4107,7 @@ fn is_timeout(error: &UpstreamError) -> bool {
         UpstreamError::Diagnosed { cause, .. } => {
             matches!(
                 cause,
-                mosdns_upstream_core::TerminalError::DeadlineExceeded(_)
+                atomdns_upstream_core::TerminalError::DeadlineExceeded(_)
             )
         }
         UpstreamError::TcpFallback { cause, .. } => is_timeout(cause),
@@ -4176,11 +4178,11 @@ fn record_invocation_ledger(
     }
 }
 
-fn branch_transport(transport: mosdns_upstream_core::Transport) -> UpstreamTransport {
+fn branch_transport(transport: atomdns_upstream_core::Transport) -> UpstreamTransport {
     match transport {
-        mosdns_upstream_core::Transport::Udp => UpstreamTransport::Udp,
-        mosdns_upstream_core::Transport::Tcp => UpstreamTransport::Tcp,
-        mosdns_upstream_core::Transport::Quic => UpstreamTransport::Https,
+        atomdns_upstream_core::Transport::Udp => UpstreamTransport::Udp,
+        atomdns_upstream_core::Transport::Tcp => UpstreamTransport::Tcp,
+        atomdns_upstream_core::Transport::Quic => UpstreamTransport::Https,
     }
 }
 
@@ -4883,13 +4885,13 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use mosdns_dns_core::{parse_query, validate_response};
-    use mosdns_sequence_core::{
+    use atomdns_dns_core::{parse_query, validate_response};
+    use atomdns_sequence_core::{
         DispatchMetadata, ExecutableId, ExecutableSpec, ExecutionError, ExecutionState,
         ExecutorError, ExternalRef, ExternalSpec, MatcherSpecInput, ProgramSpec, RuleSpec,
         SequenceRef, SequenceSpec,
     };
-    use mosdns_upstream_core::{
+    use atomdns_upstream_core::{
         Endpoint, ExchangeResponse, SideEffectState, Transport, TransportCancellation,
         UpstreamError,
     };
@@ -4958,7 +4960,7 @@ mod tests {
                 let offset = wire.len() - 16;
                 wire[offset..].copy_from_slice(&address.octets());
             }
-            let wire = mosdns_dns_core::replace_response_ttls(&wire, 300).expect("fixture TTL");
+            let wire = atomdns_dns_core::replace_response_ttls(&wire, 300).expect("fixture TTL");
             Box::pin(async move {
                 Ok(ExchangeResponse::new(
                     wire,
@@ -5026,7 +5028,7 @@ mod tests {
             executable: ExecutableId,
             _query: &'a [u8],
             _deadline: std::time::Instant,
-            _cancellation: mosdns_upstream_core::TransportCancellation,
+            _cancellation: atomdns_upstream_core::TransportCancellation,
         ) -> std::pin::Pin<
             Box<
                 dyn std::future::Future<Output = Result<ExchangeResponse, super::ExchangeError>>
@@ -5227,7 +5229,7 @@ mod tests {
             executable: ExecutableId,
             _query: &'a [u8],
             deadline: std::time::Instant,
-            _cancellation: mosdns_upstream_core::TransportCancellation,
+            _cancellation: atomdns_upstream_core::TransportCancellation,
         ) -> std::pin::Pin<
             Box<
                 dyn std::future::Future<Output = Result<ExchangeResponse, super::ExchangeError>>
@@ -5255,7 +5257,7 @@ mod tests {
             _executable: ExecutableId,
             _query: &'a [u8],
             _deadline: std::time::Instant,
-            _cancellation: mosdns_upstream_core::TransportCancellation,
+            _cancellation: atomdns_upstream_core::TransportCancellation,
         ) -> std::pin::Pin<
             Box<
                 dyn std::future::Future<Output = Result<ExchangeResponse, super::ExchangeError>>
@@ -5266,7 +5268,7 @@ mod tests {
             if self.fail {
                 return Box::pin(async {
                     Err(super::ExchangeError::Upstream(
-                        mosdns_upstream_core::UpstreamError::Connect,
+                        atomdns_upstream_core::UpstreamError::Connect,
                     ))
                 });
             }
@@ -5541,7 +5543,7 @@ plugins:
                     .parse()
                     .unwrap();
                 assert_eq!(
-                    mosdns_dns_core::observe_answer_addresses(&result.response_wire).unwrap(),
+                    atomdns_dns_core::observe_answer_addresses(&result.response_wire).unwrap(),
                     vec![expected],
                     "pass={pass} qtype={qtype}"
                 );
@@ -5568,7 +5570,7 @@ plugins:
                     matches!(&result.response, ResponseState::Dns { source, .. } if if pass == 0 { *source == ResponseSource::Upstream("cnfake".into()) } else { *source == ResponseSource::Cache })
                 );
                 assert_eq!(
-                    mosdns_dns_core::observe_response_ttl(&result.response_wire)
+                    atomdns_dns_core::observe_response_ttl(&result.response_wire)
                         .unwrap()
                         .minimal_ttl,
                     5 - u32::from(pass)
@@ -5707,7 +5709,7 @@ plugins:
         );
         assert_eq!(result.failure_provenance, None);
         assert_eq!(
-            mosdns_dns_core::observe_answer_addresses(&result.response_wire).unwrap(),
+            atomdns_dns_core::observe_answer_addresses(&result.response_wire).unwrap(),
             vec![std::net::IpAddr::V4("192.0.2.71".parse().unwrap())]
         );
         assert_eq!(
@@ -5798,7 +5800,7 @@ plugins:
         let catalog = cache.catalog();
         let execution = super::execute_request_with_observation(
             super::ExecutionRequest {
-                client: mosdns_sequence_core::ClientContext::default(),
+                client: atomdns_sequence_core::ClientContext::default(),
                 config: &config,
                 cache: &catalog,
                 options: &options,
@@ -5822,12 +5824,12 @@ plugins:
     fn a_deferred_deep_branch_waiting_for_its_upstream_does_not_spin() {
         let (shallow, answer) = polls_while_a_nested_branch_waits(4, Duration::from_millis(200));
         assert_eq!(
-            mosdns_dns_core::observe_answer_addresses(&answer).unwrap(),
+            atomdns_dns_core::observe_answer_addresses(&answer).unwrap(),
             vec![std::net::IpAddr::V4("192.0.2.91".parse().unwrap())]
         );
         let (deep, answer) = polls_while_a_nested_branch_waits(40, Duration::from_millis(200));
         assert_eq!(
-            mosdns_dns_core::observe_answer_addresses(&answer).unwrap(),
+            atomdns_dns_core::observe_answer_addresses(&answer).unwrap(),
             vec![std::net::IpAddr::V4("192.0.2.91".parse().unwrap())]
         );
         let (deep_longer, _) = polls_while_a_nested_branch_waits(40, Duration::from_millis(600));
@@ -5880,7 +5882,7 @@ plugins:
         let catalog = cache.catalog();
         let execution = super::execute_request_with_observation(
             super::ExecutionRequest {
-                client: mosdns_sequence_core::ClientContext::default(),
+                client: atomdns_sequence_core::ClientContext::default(),
                 config: &config,
                 cache: &catalog,
                 options: &options,
@@ -5954,7 +5956,7 @@ plugins:
         let mut checkpoint = ExecutionCheckpoint::new(true);
         futures_like_block_on(super::execute_request_with_observation(
             super::ExecutionRequest {
-                client: mosdns_sequence_core::ClientContext::default(),
+                client: atomdns_sequence_core::ClientContext::default(),
                 config,
                 cache: &cache.catalog(),
                 options,
@@ -5993,7 +5995,7 @@ plugins:
         let (header, question) = parse_query(&request).expect("query");
         let result = futures_like_block_on(execute_request_with_observation(
             ExecutionRequest {
-                client: mosdns_sequence_core::ClientContext::default(),
+                client: atomdns_sequence_core::ClientContext::default(),
                 config: &config,
                 cache: &cache.catalog(),
                 options: &HostOptions::default(),
@@ -6190,7 +6192,7 @@ plugins:
                 );
                 let _ = execute_request_with_observation(
                     ExecutionRequest {
-                        client: mosdns_sequence_core::ClientContext::default(),
+                        client: atomdns_sequence_core::ClientContext::default(),
                         config: &config,
                         cache: &cache.catalog(),
                         options: &options,
@@ -6289,7 +6291,7 @@ plugins:
                 );
                 let _ = execute_request_with_observation(
                     ExecutionRequest {
-                        client: mosdns_sequence_core::ClientContext::default(),
+                        client: atomdns_sequence_core::ClientContext::default(),
                         config: &config,
                         cache: &cache.catalog(),
                         options: &options,
@@ -6368,7 +6370,7 @@ plugins:
                 );
                 let _ = execute_request_with_observation(
                     ExecutionRequest {
-                        client: mosdns_sequence_core::ClientContext::default(),
+                        client: atomdns_sequence_core::ClientContext::default(),
                         config: &config,
                         cache: &cache.catalog(),
                         options: &options,
@@ -6815,7 +6817,7 @@ plugins:
         let options = HostOptions::with_deadline(Duration::from_secs(1));
         let result = futures_like_block_on(execute_request_with_executor(
             super::ExecutionRequest {
-                client: mosdns_sequence_core::ClientContext::default(),
+                client: atomdns_sequence_core::ClientContext::default(),
                 config: &config,
                 cache: &cache.catalog(),
                 options: &options,
@@ -6824,7 +6826,7 @@ plugins:
                 question,
             },
             &executor,
-            mosdns_upstream_core::TransportCancellation::new(),
+            atomdns_upstream_core::TransportCancellation::new(),
         ));
         validate_response(&result).expect("final response");
         let calls = calls.borrow();
@@ -6892,7 +6894,7 @@ plugins:
         let options = HostOptions::default();
         let response = futures_like_block_on(execute_request_with_executor(
             super::ExecutionRequest {
-                client: mosdns_sequence_core::ClientContext::default(),
+                client: atomdns_sequence_core::ClientContext::default(),
                 config: &config,
                 cache: &cache.catalog(),
                 options: &options,
@@ -6901,7 +6903,7 @@ plugins:
                 question,
             },
             &executor,
-            mosdns_upstream_core::TransportCancellation::new(),
+            atomdns_upstream_core::TransportCancellation::new(),
         ));
         validate_response(&response).expect("SERVFAIL response");
         assert_eq!(response[3] & 0x0f, super::SERVFAIL);
@@ -6923,7 +6925,7 @@ plugins:
         let cache = NativeCacheAdapter::for_test(CacheTestClock::new(0)).expect("cache");
         let response = futures_like_block_on(execute_request_with_executor(
             super::ExecutionRequest {
-                client: mosdns_sequence_core::ClientContext::default(),
+                client: atomdns_sequence_core::ClientContext::default(),
                 config: &config,
                 cache: &cache.catalog(),
                 options: &HostOptions::default(),
@@ -7010,7 +7012,7 @@ plugins:
             tokio::join!(
                 execute_request_with_executor(
                     super::ExecutionRequest {
-                        client: mosdns_sequence_core::ClientContext::default(),
+                        client: atomdns_sequence_core::ClientContext::default(),
                         config: &config,
                         cache: &cache_catalog,
                         options: &cancelled_options,
@@ -7023,7 +7025,7 @@ plugins:
                 ),
                 execute_request_with_executor(
                     super::ExecutionRequest {
-                        client: mosdns_sequence_core::ClientContext::default(),
+                        client: atomdns_sequence_core::ClientContext::default(),
                         config: &config,
                         cache: &cache_catalog,
                         options: &live_options,
@@ -7067,11 +7069,11 @@ plugins:
         };
         let assembly = config();
         let first_options = HostOptions::default();
-        let cancellation = mosdns_upstream_core::TransportCancellation::new();
+        let cancellation = atomdns_upstream_core::TransportCancellation::new();
         let (first_header, first_question) = parse_query(&first).expect("query");
         let first_result = futures_like_block_on(execute_request_with_executor(
             super::ExecutionRequest {
-                client: mosdns_sequence_core::ClientContext::default(),
+                client: atomdns_sequence_core::ClientContext::default(),
                 config: &assembly,
                 cache: &cache.catalog(),
                 options: &first_options,
@@ -7089,7 +7091,7 @@ plugins:
         let (second_header, second_question) = parse_query(&second).expect("query");
         let second_result = futures_like_block_on(execute_request_with_executor(
             super::ExecutionRequest {
-                client: mosdns_sequence_core::ClientContext::default(),
+                client: atomdns_sequence_core::ClientContext::default(),
                 config: &assembly,
                 cache: &cache.catalog(),
                 options: &second_options,
@@ -7126,7 +7128,7 @@ plugins:
         let options = HostOptions::default();
         let response = futures_like_block_on(execute_request_with_executor(
             super::ExecutionRequest {
-                client: mosdns_sequence_core::ClientContext::default(),
+                client: atomdns_sequence_core::ClientContext::default(),
                 config: &config,
                 cache: &cache.catalog(),
                 options: &options,
@@ -7135,7 +7137,7 @@ plugins:
                 question,
             },
             &wrong_owner,
-            mosdns_upstream_core::TransportCancellation::new(),
+            atomdns_upstream_core::TransportCancellation::new(),
         ));
         validate_response(&response).expect("SERVFAIL response");
         assert_eq!(response[3] & 0x0f, super::SERVFAIL);
@@ -7155,10 +7157,10 @@ plugins:
         };
         let options = HostOptions::default();
         let (header, question) = parse_query(&first).expect("query");
-        let cancellation = mosdns_upstream_core::TransportCancellation::new();
+        let cancellation = atomdns_upstream_core::TransportCancellation::new();
         let _ = futures_like_block_on(execute_request_with_executor(
             super::ExecutionRequest {
-                client: mosdns_sequence_core::ClientContext::default(),
+                client: atomdns_sequence_core::ClientContext::default(),
                 config: &assembly,
                 cache: &cache.catalog(),
                 options: &options,
@@ -7173,7 +7175,7 @@ plugins:
         let (header, question) = parse_query(&second).expect("query");
         let _ = futures_like_block_on(execute_request_with_executor(
             super::ExecutionRequest {
-                client: mosdns_sequence_core::ClientContext::default(),
+                client: atomdns_sequence_core::ClientContext::default(),
                 config: &assembly,
                 cache: &cache.catalog(),
                 options: &options,
@@ -7196,10 +7198,10 @@ plugins:
         };
         let first = query(5);
         let (header, question) = parse_query(&first).expect("query");
-        let cancellation = mosdns_upstream_core::TransportCancellation::new();
+        let cancellation = atomdns_upstream_core::TransportCancellation::new();
         let _ = futures_like_block_on(execute_request_with_executor(
             super::ExecutionRequest {
-                client: mosdns_sequence_core::ClientContext::default(),
+                client: atomdns_sequence_core::ClientContext::default(),
                 config: &assembly,
                 cache: &local_cache.catalog(),
                 options: &options,
@@ -7214,7 +7216,7 @@ plugins:
         let (header, question) = parse_query(&second).expect("query");
         let _ = futures_like_block_on(execute_request_with_executor(
             super::ExecutionRequest {
-                client: mosdns_sequence_core::ClientContext::default(),
+                client: atomdns_sequence_core::ClientContext::default(),
                 config: &assembly,
                 cache: &local_cache.catalog(),
                 options: &options,
@@ -7676,7 +7678,7 @@ plugins:
         let mut checkpoint = ExecutionCheckpoint::new(true);
         let result = futures_like_block_on(execute_request_with_observation(
             ExecutionRequest {
-                client: mosdns_sequence_core::ClientContext::default(),
+                client: atomdns_sequence_core::ClientContext::default(),
                 config: &config,
                 cache: &catalog,
                 options: &HostOptions::default(),
@@ -7705,7 +7707,7 @@ plugins:
             .expect("lookup b")
             .expect("cache_b must hold its own successor result");
         assert_eq!(
-            mosdns_dns_core::observe_answer_addresses(&stored_b).expect("addresses"),
+            atomdns_dns_core::observe_answer_addresses(&stored_b).expect("addresses"),
             vec![std::net::IpAddr::V4("192.0.2.71".parse().expect("address"))],
             "cache_b's boundary is the child scope, so it must hold the child's answer"
         );
@@ -7716,7 +7718,7 @@ plugins:
             .expect("lookup a")
             .expect("cache_a must hold its own successor result");
         assert_eq!(
-            mosdns_dns_core::observe_answer_addresses(&stored_a).expect("addresses"),
+            atomdns_dns_core::observe_answer_addresses(&stored_a).expect("addresses"),
             vec![std::net::IpAddr::V4("192.0.2.81".parse().expect("address"))],
             "cache_a's boundary is the root scope, so it must hold the overwritten answer"
         );
@@ -7759,7 +7761,7 @@ plugins:
             .lookup(&first_request)
             .expect("lookup")
             .expect("the child successor result must be cached");
-        let stored_addresses = mosdns_dns_core::observe_answer_addresses(&stored).expect("stored");
+        let stored_addresses = atomdns_dns_core::observe_answer_addresses(&stored).expect("stored");
         assert_eq!(
             stored_addresses,
             vec![std::net::IpAddr::V4("192.0.2.31".parse().expect("address"))],
@@ -8359,7 +8361,7 @@ plugins:
         cancellation.cancel();
         let result = futures_like_block_on(execute_request_with_observation(
             super::ExecutionRequest {
-                client: mosdns_sequence_core::ClientContext::default(),
+                client: atomdns_sequence_core::ClientContext::default(),
                 config: &config,
                 cache: &cache.catalog(),
                 options: &HostOptions::default(),
@@ -8559,10 +8561,10 @@ plugins:
         };
         let options = HostOptions::with_deadline(Duration::ZERO);
         let (header, question) = parse_query(&first_query).expect("query");
-        let cancellation = mosdns_upstream_core::TransportCancellation::new();
+        let cancellation = atomdns_upstream_core::TransportCancellation::new();
         let first = futures_like_block_on(execute_request_with_executor(
             super::ExecutionRequest {
-                client: mosdns_sequence_core::ClientContext::default(),
+                client: atomdns_sequence_core::ClientContext::default(),
                 config: &assembly,
                 cache: &cache.catalog(),
                 options: &options,
@@ -8580,7 +8582,7 @@ plugins:
         let (header, question) = parse_query(&second_query).expect("query");
         let _ = futures_like_block_on(execute_request_with_executor(
             super::ExecutionRequest {
-                client: mosdns_sequence_core::ClientContext::default(),
+                client: atomdns_sequence_core::ClientContext::default(),
                 config: &assembly,
                 cache: &cache.catalog(),
                 options: &second_options,
@@ -9085,7 +9087,7 @@ plugins:
         let result = futures_like_block_on(async {
             let execution = execute_request_with_observation(
                 ExecutionRequest {
-                    client: mosdns_sequence_core::ClientContext::default(),
+                    client: atomdns_sequence_core::ClientContext::default(),
                     config,
                     cache: &catalog,
                     options,

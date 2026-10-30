@@ -1,6 +1,6 @@
 log:
   level: warn
-  file: logs/mosdns.log
+  file: logs/atomdns.log
 
 include:
   - sub_config/rule_set.yaml

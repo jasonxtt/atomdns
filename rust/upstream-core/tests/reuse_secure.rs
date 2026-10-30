@@ -14,11 +14,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use fixtures::{FixtureSet, ServerIdentityFixture};
-use mosdns_upstream_core::{
+use atomdns_upstream_core::{
     DotEndpoint, ExchangeContext, ExchangeRequest, ReuseKey, SecureKey, SecureKind,
     SecureReuseOwner, ServerIdentity, TlsPolicy, TransportCancellation,
 };
+use fixtures::{FixtureSet, ServerIdentityFixture};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener as AsyncTcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
@@ -319,7 +319,7 @@ fn dot_reuse_honors_an_expired_deadline_without_dialing() {
             panic!("an expired deadline must be refused");
         };
         assert!(
-            matches!(error, mosdns_upstream_core::SecureError::Transport(_)),
+            matches!(error, atomdns_upstream_core::SecureError::Transport(_)),
             "an expired deadline is a typed transport control error, got {error:?}"
         );
         assert_eq!(server.accepts(), 0, "an expired deadline must not dial");
@@ -342,11 +342,11 @@ fn dot_reuse_close_is_idempotent_and_refuses_later_exchanges() {
 
         assert_eq!(
             owner.close().await,
-            mosdns_upstream_core::CloseResult::Closed
+            atomdns_upstream_core::CloseResult::Closed
         );
         assert_eq!(
             owner.close().await,
-            mosdns_upstream_core::CloseResult::AlreadyClosed,
+            atomdns_upstream_core::CloseResult::AlreadyClosed,
             "repeated close converges"
         );
         assert_eq!(owner.idle_connections(), 0, "close drops idle sessions");
@@ -395,7 +395,7 @@ fn a_doh_reuse_key_separates_protocol_and_authority() {
 #[test]
 fn a_doh_endpoint_keeps_numeric_dial_separate_from_the_service_authority() {
     let dial = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 443);
-    let endpoint = mosdns_upstream_core::DohEndpoint::new("https://doh.example/dns-query", dial)
+    let endpoint = atomdns_upstream_core::DohEndpoint::new("https://doh.example/dns-query", dial)
         .expect("doh endpoint");
     assert_eq!(endpoint.dial(), dial, "the dial address is the numeric one");
     assert_eq!(

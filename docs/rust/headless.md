@@ -3,7 +3,7 @@
 从 v0.4.0 起程序不内嵌 WebUI：WebUI 是配置根目录下的 `ui/main/`（由 `/` 提供）。**没有 `ui/main/` 就是纯后端**：
 `/` 只返回一段"没有安装 WebUI"的说明（404），接口、`/metrics` 与其它 `ui/<名字>/` 照常；在线更新也不会创建它
 （`ui/main/` 存在时才随程序一起替换）。全新安装包 `config_rust.zip` 自带 `ui/main/`，不要界面就删掉它。
-之后需要界面时，把同版本 Release 的 `rtdns-webui.tar.gz` 解到 `ui/main/` 再重启一次即可（见 [external-ui.md](external-ui.md)）。
+之后需要界面时，把同版本 Release 的 `atomdns-webui.tar.gz` 解到 `ui/main/` 再重启一次即可（见 [external-ui.md](external-ui.md)）。
 
 YAML 提供默认值。通过 `config_rust_up.zip` 管理的 `config_custom.yaml` 和
 `sub_config/*.yaml` 会随配置包更新替换；希望更新后保留的代理、上游列表和 ECS
@@ -48,14 +48,14 @@ API 保存时会去除这类重复值。
 
 ## 校验与生效
 
-例如配置根为 `/etc/rtdns`，主配置为该目录的 `config_custom.yaml`：
+例如配置根为 `/etc/atomdns`，主配置为该目录的 `config_custom.yaml`：
 
 ```sh
-rtdns check -d /etc/rtdns -c config_custom.yaml
+atomdns check -d /etc/atomdns -c config_custom.yaml
 ```
 
 `check` 只读取并校验，不写文件、不应用到正在运行的进程。确认没有错误后重启你运行的
-`rtdns` 进程或服务。直接编辑 JSON 不会自动热加载。
+`atomdns` 进程或服务。直接编辑 JSON 不会自动热加载。
 
 检查输出中的每条 `EFFECTIVE` 行描述最终值及来源，例如：
 

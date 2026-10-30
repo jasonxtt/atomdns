@@ -18,7 +18,7 @@ use std::pin::Pin;
 use std::task::Poll;
 use std::time::Instant;
 
-use mosdns_dns_core::{FrameMode, frame_response, inspect_response_header, validate_response};
+use atomdns_dns_core::{FrameMode, frame_response, inspect_response_header, validate_response};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::{

@@ -1,6 +1,6 @@
-//! F-2 diagnostics, against the real `rtdns` binary: the log capture routes
+//! F-2 diagnostics, against the real `atomdns` binary: the log capture routes
 //! (`/api/v1/capture/*`: contract, per-query lines, expiry, restart of the
-//! window, level restoration), the `mosdns_aliapi_*` upstream series of
+//! window, level restoration), the `atomdns_aliapi_*` upstream series of
 //! `/metrics` with exact counts, and the absence of `/debug/pprof`. No public
 //! network: the upstream is a local UDP stub.
 #![cfg(unix)]
@@ -194,8 +194,8 @@ impl Host {
         let root = std::env::temp_dir().join(format!("f2-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        let exe = root.join("mosdns");
-        std::fs::copy(env!("CARGO_BIN_EXE_rtdns"), &exe).unwrap();
+        let exe = root.join("atomdns");
+        std::fs::copy(env!("CARGO_BIN_EXE_atomdns"), &exe).unwrap();
         std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
         let (stub, upstream) = Stub::start();
         let (api, dns) = (free_port(), free_udp_port());
@@ -486,11 +486,11 @@ fn the_upstream_series_count_attempts_errors_winners_and_latency() {
     // Series exist at zero before any query, with the reference's help and type lines.
     let initial = host.metrics();
     assert_eq!(
-        sample(&initial, "mosdns_aliapi_query_total", &labels),
+        sample(&initial, "atomdns_aliapi_query_total", &labels),
         Some(0.0)
     );
-    assert!(initial.contains("# TYPE mosdns_aliapi_response_latency_millisecond histogram\n"));
-    assert!(initial.contains("# HELP mosdns_aliapi_upstream_winner_total "));
+    assert!(initial.contains("# TYPE atomdns_aliapi_response_latency_millisecond histogram\n"));
+    assert!(initial.contains("# HELP atomdns_aliapi_upstream_winner_total "));
     for absent in [
         "inflight_queries",
         "conn_opened_total",
@@ -499,28 +499,28 @@ fn the_upstream_series_count_attempts_errors_winners_and_latency() {
     ] {
         assert!(!initial.contains(absent), "{absent}");
     }
-    assert!(initial.contains("mosdns_cache_query_total{tag=\"cache_main\"}"));
+    assert!(initial.contains("atomdns_cache_query_total{tag=\"cache_main\"}"));
 
     // Three distinct names miss the cache and reach the upstream, which answers each.
     for index in 0..3 {
         assert!(ask(host.dns, &format!("ok{index}.example.com")).is_some());
     }
     wait_until("three attempts counted", || {
-        sample(&host.metrics(), "mosdns_aliapi_query_total", &labels) == Some(3.0)
+        sample(&host.metrics(), "atomdns_aliapi_query_total", &labels) == Some(3.0)
     });
     let text = host.metrics();
     assert_eq!(
-        sample(&text, "mosdns_aliapi_error_total", &labels),
+        sample(&text, "atomdns_aliapi_error_total", &labels),
         Some(0.0)
     );
     assert_eq!(
-        sample(&text, "mosdns_aliapi_upstream_winner_total", &labels),
+        sample(&text, "atomdns_aliapi_upstream_winner_total", &labels),
         Some(3.0)
     );
     assert_eq!(
         sample(
             &text,
-            "mosdns_aliapi_response_latency_millisecond_count",
+            "atomdns_aliapi_response_latency_millisecond_count",
             &labels
         ),
         Some(3.0)
@@ -528,7 +528,7 @@ fn the_upstream_series_count_attempts_errors_winners_and_latency() {
     assert_eq!(
         sample(
             &text,
-            "mosdns_aliapi_response_latency_millisecond_bucket",
+            "atomdns_aliapi_response_latency_millisecond_bucket",
             &format!("{labels},le=\"+Inf\"")
         ),
         Some(3.0)
@@ -537,7 +537,7 @@ fn the_upstream_series_count_attempts_errors_winners_and_latency() {
     assert_eq!(
         sample(
             &text,
-            "mosdns_aliapi_response_latency_millisecond_bucket",
+            "atomdns_aliapi_response_latency_millisecond_bucket",
             &format!("{labels},le=\"5000\"")
         ),
         Some(3.0)
@@ -547,7 +547,7 @@ fn the_upstream_series_count_attempts_errors_winners_and_latency() {
     assert!(ask(host.dns, "ok0.example.com").is_some());
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(
-        sample(&host.metrics(), "mosdns_aliapi_query_total", &labels),
+        sample(&host.metrics(), "atomdns_aliapi_query_total", &labels),
         Some(3.0)
     );
 
@@ -557,21 +557,21 @@ fn the_upstream_series_count_attempts_errors_winners_and_latency() {
         let _ = ask(host.dns, &format!("bad{index}.example.com"));
     }
     wait_until("two failed attempts counted", || {
-        sample(&host.metrics(), "mosdns_aliapi_query_total", &labels) == Some(5.0)
+        sample(&host.metrics(), "atomdns_aliapi_query_total", &labels) == Some(5.0)
     });
     let text = host.metrics();
     assert_eq!(
-        sample(&text, "mosdns_aliapi_error_total", &labels),
+        sample(&text, "atomdns_aliapi_error_total", &labels),
         Some(2.0)
     );
     assert_eq!(
-        sample(&text, "mosdns_aliapi_upstream_winner_total", &labels),
+        sample(&text, "atomdns_aliapi_upstream_winner_total", &labels),
         Some(3.0)
     );
     assert_eq!(
         sample(
             &text,
-            "mosdns_aliapi_response_latency_millisecond_count",
+            "atomdns_aliapi_response_latency_millisecond_count",
             &labels
         ),
         Some(3.0),

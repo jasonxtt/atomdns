@@ -1,12 +1,12 @@
 [package]
-name = "mosdns-matcher-core"
+name = "atomdns-matcher-core"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [lib]
-name = "mosdns_matcher_core"
+name = "atomdns_matcher_core"
 crate-type = ["rlib"]
 
 [dependencies]

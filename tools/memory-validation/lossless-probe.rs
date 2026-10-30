@@ -1,6 +1,6 @@
 //! Requested-allocation diagnostic, never a formal timing binary.
-use mosdns_cache_core::{CacheConfig, NativeCache};
-use mosdns_native_host::{CacheTestClock, NativeCacheAdapter};
+use atomdns_cache_core::{CacheConfig, NativeCache};
+use atomdns_native_host::{CacheTestClock, NativeCacheAdapter};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::hash::Hasher;
 use std::hint::black_box;

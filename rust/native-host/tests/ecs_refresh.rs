@@ -1,8 +1,8 @@
 //! Same-key followers cannot replace the first lazy refresh's state or wire.
+use atomdns_native_host::{CacheTestClock, HostAssembly, HostOptions, compile_yaml};
+use atomdns_upstream_core::TransportCancellation;
 use hickory_proto::op::{Message, MessageType, Query};
 use hickory_proto::rr::{Name, RData, Record, RecordType, rdata::A};
-use mosdns_native_host::{CacheTestClock, HostAssembly, HostOptions, compile_yaml};
-use mosdns_upstream_core::TransportCancellation;
 use std::net::UdpSocket;
 use std::rc::Rc;
 use std::sync::{
@@ -164,7 +164,7 @@ fn run(tcp: bool) {
             "192.0.2.20"
         );
         release.send(()).unwrap();
-        let cache = host.cache().get(mosdns_native_host::CacheId(0)).unwrap();
+        let cache = host.cache().get(atomdns_native_host::CacheId(0)).unwrap();
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {
                 if cache.lookup(&query(42)).unwrap().is_some_and(|wire| {

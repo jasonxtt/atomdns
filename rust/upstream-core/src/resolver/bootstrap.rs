@@ -19,7 +19,7 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Instant;
 
-use mosdns_dns_core::{QueryIdSource, build_resolver_query, parse_resolver_response};
+use atomdns_dns_core::{QueryIdSource, build_resolver_query, parse_resolver_response};
 use tokio::net::UdpSocket;
 
 use super::{AddressFamily, BootstrapEndpoint, ResolutionPolicy, ResolverError};
@@ -177,8 +177,8 @@ fn control_error(error: UpstreamError) -> ResolverError {
 /// message, so it keeps its own typed error instead of collapsing into
 /// [`ResolverError::MalformedBootstrapResponse`]. This foundation performs no
 /// TCP bootstrap fallback, so that error is terminal.
-fn wire_error(error: mosdns_dns_core::ResolverWireError) -> ResolverError {
-    use mosdns_dns_core::ResolverWireError as Wire;
+fn wire_error(error: atomdns_dns_core::ResolverWireError) -> ResolverError {
+    use atomdns_dns_core::ResolverWireError as Wire;
     match error {
         Wire::Rcode(code) => ResolverError::BootstrapRcode(code),
         Wire::NoUsableAnswer => ResolverError::NoUsableAddress,
@@ -330,10 +330,10 @@ pub(crate) async fn exchange(
                     // correlated reply is ignored while budget remains: the
                     // socket is connected, so this can only be the peer's own
                     // traffic and a later valid reply must still be able to win.
-                    Err(mosdns_dns_core::ResolverWireError::MismatchedId)
-                    | Err(mosdns_dns_core::ResolverWireError::QuestionMismatch)
-                    | Err(mosdns_dns_core::ResolverWireError::NotAResponse)
-                    | Err(mosdns_dns_core::ResolverWireError::UnexpectedOpcode(_)) => continue,
+                    Err(atomdns_dns_core::ResolverWireError::MismatchedId)
+                    | Err(atomdns_dns_core::ResolverWireError::QuestionMismatch)
+                    | Err(atomdns_dns_core::ResolverWireError::NotAResponse)
+                    | Err(atomdns_dns_core::ResolverWireError::UnexpectedOpcode(_)) => continue,
                     Err(error) => return Err(wire_error(error)),
                 }
             }
@@ -343,7 +343,7 @@ pub(crate) async fn exchange(
 
 /// Copies the question name out of an encoded query in uncompressed wire form.
 fn question_name(query: &[u8]) -> Option<Vec<u8>> {
-    let parsed = mosdns_dns_core::parse_query(query).ok()?;
+    let parsed = atomdns_dns_core::parse_query(query).ok()?;
     Some(parsed.1.qname_wire)
 }
 

@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use mosdns_matcher_core::{
+use atomdns_matcher_core::{
     MAX_INFLATED_BYTES, MAX_SET_BYTES, MAX_SET_WORDS, range_to_prefixes, succinct_set_keys,
 };
 use ruzstd::decoding::StreamingDecoder;
@@ -908,7 +908,7 @@ pub(crate) mod tests {
         assert_eq!(parsed.skipped.total(), 0);
         for rule in &parsed.domains {
             if let Some(pattern) = rule.strip_prefix("regexp:") {
-                mosdns_matcher_core::check_go_regexp(pattern).unwrap();
+                atomdns_matcher_core::check_go_regexp(pattern).unwrap();
             }
         }
     }

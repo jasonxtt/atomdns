@@ -67,7 +67,7 @@ def install(root):
 Description=Shadow1 persistent veth and physical egress guards
 After=network-online.target
 Wants=network-online.target
-Before=mosdns.service {PREFIX}.service
+Before=atomdns.service {PREFIX}.service
 {common}
 [Service]
 Type=oneshot
@@ -82,7 +82,7 @@ WantedBy=multi-user.target
         f'{PREFIX}.service': f'''[Unit]
 Description=Shadow1 unattended 48h capture replay collector
 Requires=shadow1-isolation.service
-After=shadow1-isolation.service mosdns.service
+After=shadow1-isolation.service atomdns.service
 OnFailure={PREFIX}-failed.service
 {common}
 [Service]
@@ -122,7 +122,7 @@ UMask=0077
 ''',
         f'{PREFIX}-boot.service': f'''[Unit]
 Description=Shadow1 record interrupted run after reboot without replay resume
-After=mosdns.service shadow1-isolation.service
+After=atomdns.service shadow1-isolation.service
 Requires=shadow1-isolation.service
 [Service]
 Type=oneshot
@@ -170,8 +170,8 @@ def start(root):
     # Reset its start limiter only here, before creating a fresh run manifest;
     # ordinary automatic restarts never reset this budget.
     command('systemctl', 'reset-failed', f'{PREFIX}.service')
-    assert command('systemctl', 'is-active', 'mosdns.service').strip() == 'active'
-    assert command('systemctl', 'is-enabled', 'mosdns.service').strip() == 'enabled'
+    assert command('systemctl', 'is-active', 'atomdns.service').strip() == 'active'
+    assert command('systemctl', 'is-enabled', 'atomdns.service').strip() == 'enabled'
     isolation_probe(root / 'network')
     probe = load(root / 'network/isolation-probe.json')
     assert probe['answer']['rcode'] == 0 and probe['answer']['has_answer']
@@ -181,7 +181,7 @@ def start(root):
                 'boot_id': boot_id(), 'duration_seconds': 172800,
                 'source_head': '5cc3bdb5612727ea1f711a4d09669be3c098661a',
                 'event_hours': [6,18,30,42], 'start_guard': counters(),
-                'rust_baseline': command('systemctl','show','mosdns.service','-p','MainPID','-p','NRestarts','-p','ActiveState').splitlines()}
+                'rust_baseline': command('systemctl','show','atomdns.service','-p','MainPID','-p','NRestarts','-p','ActiveState').splitlines()}
     atomic(root / 'run.json', manifest)
     hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in pathlib.Path(__file__).parent.glob('*.py')}
     atomic(root / 'tool-hashes.json', hashes)
@@ -190,7 +190,7 @@ def start(root):
 
 
 def finish(root):
-    # Disable all future task events first; never stop mosdns.service.
+    # Disable all future task events first; never stop atomdns.service.
     command('systemctl', 'stop', *EVENT_TIMERS, f'{PREFIX}-end.timer')
     command('systemctl', 'stop', f'{PREFIX}.service')
     if not (root / 'stop-status.json').exists():
@@ -201,7 +201,7 @@ def finish(root):
     generate(root)
     print(json.dumps({'report': str(root/'final-summary.json'), 'guard': counters(),
                       'namespace_pids': command('ip','netns','pids','shadow1-replay').split(),
-                      'rust_active': command('systemctl','is-active','mosdns.service').strip()}))
+                      'rust_active': command('systemctl','is-active','atomdns.service').strip()}))
 
 
 def segment_exit(root):

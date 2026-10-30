@@ -1,7 +1,7 @@
+use atomdns_native_host::{HostAssembly, TcpServer, UdpServer, compile_yaml};
+use atomdns_upstream_core::TransportCancellation;
 use hickory_proto::op::{Message, Query};
 use hickory_proto::rr::{Name, RecordType};
-use mosdns_native_host::{HostAssembly, TcpServer, UdpServer, compile_yaml};
-use mosdns_upstream_core::TransportCancellation;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, UdpSocket};
 use std::time::Duration;
@@ -155,7 +155,7 @@ fn real_ipv6_udp_and_tcp_context() {
 
 #[test]
 fn unknown_and_mapped_embedding_identity_with_file_or_and_negation() {
-    use mosdns_sequence_core::{
+    use atomdns_sequence_core::{
         ClientContext, ClientTransport, ExecutionControl, ExecutionState, MachineStep,
         ResponseState,
     };
@@ -181,7 +181,7 @@ plugins:
     type: udp_server
     args: {entry: main, listen: '127.0.0.1:19901', enable_audit: false}
 ";
-    let config = mosdns_native_host::compile_yaml_with_base(yaml, &root).unwrap();
+    let config = atomdns_native_host::compile_yaml_with_base(yaml, &root).unwrap();
     std::fs::remove_file(root.join("clients.txt")).unwrap();
     for (client, rcode) in [
         (ClientContext::default(), 0),
@@ -202,7 +202,7 @@ plugins:
             0,
         ),
     ] {
-        let (header, question) = mosdns_dns_core::parse_query(&query()).unwrap();
+        let (header, question) = atomdns_dns_core::parse_query(&query()).unwrap();
         let mut state = ExecutionState::new(header, question);
         state.query.client = client;
         let mut machine = config
