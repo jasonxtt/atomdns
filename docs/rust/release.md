@@ -87,6 +87,14 @@
 
 v0.5.0 起 `config.url` 指向 file 仓库（此前指向 Release 资产）；已发布的 v0.4.x 与 v0.5.0 的清单仍指向各自 Release 里的包，不受影响。
 
+## v0.6.1 升级须知（2026-10-30；兼容低版本 Linux，更新器支持切换 v3 与 Alpine）
+
+- 配置 schema 仍为 6，**没有新配置包**。
+- 程序包改在 ubuntu-22.04 上构建，glibc 要求从 2.39 降到 2.35，Debian 12 及更新的系统可以直接运行（v0.6.0 的 `amd64` 包在 Debian 12 上报 `GLIBC_2.39 not found`，需要手动换成 v0.6.1 一次）。
+- 新增 `atomdns-linux-amd64-musl.tar.gz`（静态 musl），给 Alpine 等 musl 系统；在线更新在 musl 构建或 Alpine 上只装这个包。
+- 系统管理里“强制更新”后面新增“切换到 v3”按钮（CPU 支持 x86-64-v3 且当前不是 v3 时出现）；已运行 v3 的程序更新时继续装 v3 包。
+- 资产：五种程序包（在线更新默认只认 `amd64`）、`atomdns-webui.tar.gz`、清单、全新安装包 `config_rust.zip`。
+
 ## v0.6.0 升级须知（2026-10-30；项目改名 AtomDNS，配置 schema 仍为 6）
 
 - 程序、crate、环境变量（`ATOMDNS_*`）、指标（`atomdns_*`）、发布资产（`atomdns-*`）和更新来源（`jasonxtt/atomdns`）都改名；WebUI 显示 AtomDNS，左上角换成新图标。**没有新配置包**。
