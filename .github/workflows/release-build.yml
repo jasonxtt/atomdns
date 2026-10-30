@@ -12,15 +12,15 @@ on:
 
 jobs:
   build:
-    # Pinned, not ubuntu-latest: the glibc amd64 programs need at least the runner's glibc, and the
-    # production hosts (Debian 13, glibc 2.41) must keep running them.
-    runs-on: ubuntu-24.04
+    # Pinned, not ubuntu-latest: the glibc amd64 programs need at least the runner's glibc (2.35 here),
+    # so Debian 12 (2.36) and newer hosts, including production (Debian 13, glibc 2.41), keep running them.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@1.96.0
         with:
-          targets: aarch64-unknown-linux-musl,armv7-unknown-linux-musleabihf
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,armv7-unknown-linux-musleabihf
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -38,16 +38,22 @@ jobs:
         env:
           TAG: ${{ inputs.tag }}
         run: |
-          VARIANTS="amd64 amd64-v3 arm64 armv7" scripts/build-rust-release.sh "${TAG}" release/rust
+          VARIANTS="amd64 amd64-v3 amd64-musl arm64 armv7" scripts/build-rust-release.sh "${TAG}" release/rust
       - name: Check the artifacts
         working-directory: release/rust
         run: |
           ls -l
           jq '.version, (.artifacts | keys)' atomdns-update-manifest.json
-          for variant in amd64 amd64-v3 arm64 armv7; do
+          for variant in amd64 amd64-v3 amd64-musl arm64 armv7; do
             mkdir "verify-${variant}"
             tar -xzf "atomdns-linux-${variant}.tar.gz" -C "verify-${variant}"
             file "verify-${variant}/atomdns"
+            if [ "${variant}" = amd64 ] || [ "${variant}" = amd64-v3 ]; then
+              # the glibc programs must not need a newer glibc than the Debian 12 baseline (2.36)
+              need="$(objdump -T "verify-${variant}/atomdns" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n 1)"
+              echo "${variant} needs ${need}"
+              [ "$(printf '%s\nGLIBC_2.36\n' "${need}" | sort -V | tail -n 1)" = "GLIBC_2.36" ]
+            fi
             "./verify-${variant}/atomdns" version
             rm -r "verify-${variant}"
           done

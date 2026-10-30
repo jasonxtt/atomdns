@@ -33,6 +33,12 @@ pub(crate) const REQUIRED_CONFIG_PACKAGE_ID: &str = "rust-config-schema-6";
 pub(crate) const CHANNEL: &str = "rust";
 /// The release asset holding the executable (a `tar.gz` with a file named `atomdns`).
 pub(crate) const RELEASE_ASSET: &str = "atomdns-linux-amd64.tar.gz";
+/// The same program built with `-C target-cpu=x86-64-v3`. Never picked on its own: it is
+/// installed only by a running v3 build (to stay on v3) or by an explicit `prefer_v3` request.
+pub(crate) const RELEASE_ASSET_V3: &str = "atomdns-linux-amd64-v3.tar.gz";
+/// The static musl build, for Alpine and other musl systems (a glibc program does not start
+/// there). Installed by a running musl build and by a program that finds itself on Alpine.
+pub(crate) const RELEASE_ASSET_MUSL: &str = "atomdns-linux-amd64-musl.tar.gz";
 /// The executable's name inside `RELEASE_ASSET`.
 pub(crate) const RELEASE_BINARY: &str = "atomdns";
 /// The release asset holding the WebUI: the files of `<config root>/ui/main/` at the top
@@ -72,6 +78,76 @@ pub(crate) fn architecture() -> &'static str {
 /// Whether this build can install an update at all.
 pub(crate) fn platform_supported() -> bool {
     cfg!(all(target_os = "linux", target_arch = "x86_64"))
+}
+
+/// Whether this CPU runs the x86-64-v3 build (AVX2, BMI1/2, FMA, F16C, LZCNT, MOVBE).
+pub(crate) fn cpu_supports_v3() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        std::is_x86_feature_detected!("avx2")
+            && std::is_x86_feature_detected!("bmi1")
+            && std::is_x86_feature_detected!("bmi2")
+            && std::is_x86_feature_detected!("fma")
+            && std::is_x86_feature_detected!("f16c")
+            && std::is_x86_feature_detected!("lzcnt")
+            && std::is_x86_feature_detected!("movbe")
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        false
+    }
+}
+
+/// Whether this program was built for x86-64-v3 (decided at compile time).
+pub(crate) fn current_is_v3() -> bool {
+    cfg!(all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        target_feature = "bmi2",
+        target_feature = "fma"
+    ))
+}
+
+/// Whether updates should install the musl package: this program is a musl build, or it runs
+/// on Alpine (a glibc build there needs a compatibility layer, and a musl one is the better fit).
+pub(crate) fn wants_musl() -> bool {
+    cfg!(target_env = "musl") || Path::new("/etc/alpine-release").exists()
+}
+
+/// The program asset an update installs: the v3 one when the running build is v3 (an update
+/// does not move a v3 install back to the baseline) or when `prefer_v3` asks for the switch;
+/// the musl one on musl systems (`musl`, no v3 variant exists there); otherwise the baseline.
+/// `Err` when v3 is asked for explicitly and cannot be served.
+pub(crate) fn pick_program_asset(
+    release: &Release,
+    prefer_v3: bool,
+    cpu_v3: bool,
+    running_v3: bool,
+    musl: bool,
+) -> Result<&'static str, String> {
+    if musl {
+        if prefer_v3 {
+            return Err("musl 构建没有 v3 版本".to_owned());
+        }
+        return if release.asset(RELEASE_ASSET_MUSL).is_some() {
+            Ok(RELEASE_ASSET_MUSL)
+        } else {
+            Err("未找到适用于 musl（Alpine）的安装包".to_owned())
+        };
+    }
+    if prefer_v3 && !running_v3 {
+        if !cpu_v3 {
+            return Err("此 CPU 不支持 x86-64-v3，无法切换".to_owned());
+        }
+        if release.asset(RELEASE_ASSET_V3).is_none() {
+            return Err("未找到 v3 优化构建包".to_owned());
+        }
+        return Ok(RELEASE_ASSET_V3);
+    }
+    if running_v3 && release.asset(RELEASE_ASSET_V3).is_some() {
+        return Ok(RELEASE_ASSET_V3);
+    }
+    Ok(RELEASE_ASSET)
 }
 
 /// `X.Y.Z` of a `vX.Y.Z` tag.
@@ -255,14 +331,17 @@ pub(crate) fn health_summary(root: &Path) -> serde_json::Value {
 }
 
 /// What `GET /api/v1/update/status` returns (Go's `UpdateStatus`; empty optional fields
-/// are left out, as there). `amd64_v3_capable`/`current_is_v3` do not exist here: the
-/// native build has no GOAMD64 levels.
+/// are left out, as there). `amd64_v3_capable` and `current_is_v3` are reported only when true.
 #[derive(Clone, Debug, Default, Serialize)]
 pub(crate) struct UpdateStatus {
     pub(crate) current_version: String,
     pub(crate) latest_version: String,
     pub(crate) release_url: String,
     pub(crate) architecture: String,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) amd64_v3_capable: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) current_is_v3: bool,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub(crate) asset_name: String,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -416,6 +495,8 @@ impl Manager {
             latest_version: release.tag_name.clone(),
             release_url: format!("{RELEASE_PAGE}{}", release.tag_name),
             architecture: architecture().to_owned(),
+            amd64_v3_capable: cpu_supports_v3() && !wants_musl(),
+            current_is_v3: current_is_v3(),
             published_at: release.published_at.clone(),
             checked_at: now_text(),
             cache_expires_at: after_text(CACHE_TTL),
@@ -425,7 +506,14 @@ impl Manager {
                 .unwrap_or_default(),
             ..UpdateStatus::default()
         };
-        match release.asset(RELEASE_ASSET) {
+        let asset_name = pick_program_asset(
+            &release,
+            false,
+            status.amd64_v3_capable,
+            status.current_is_v3,
+            wants_musl(),
+        );
+        match asset_name.ok().and_then(|name| release.asset(name)) {
             Some(asset) => {
                 status.asset_name = asset.name.clone();
                 status.download_url = asset.browser_download_url.clone();
@@ -678,6 +766,8 @@ mod tests {
         }
         for key in [
             "asset_name",
+            "amd64_v3_capable",
+            "current_is_v3",
             "pending_restart",
             "rollback_performed",
             "message",
@@ -685,5 +775,58 @@ mod tests {
         ] {
             assert!(!keys.contains(&key.to_owned()), "{key}");
         }
+    }
+
+    fn release_with(names: &[&str]) -> Release {
+        Release {
+            assets: names
+                .iter()
+                .map(|name| Asset {
+                    name: (*name).to_owned(),
+                    ..Asset::default()
+                })
+                .collect(),
+            ..Release::default()
+        }
+    }
+
+    #[test]
+    fn the_program_asset_is_the_baseline_unless_v3_is_running_or_asked_for() {
+        let both = release_with(&[RELEASE_ASSET, RELEASE_ASSET_V3]);
+        let baseline_only = release_with(&[RELEASE_ASSET]);
+        // A baseline install is never moved to v3 by a plain update.
+        assert_eq!(
+            pick_program_asset(&both, false, true, false, false),
+            Ok(RELEASE_ASSET)
+        );
+        // The explicit switch.
+        assert_eq!(
+            pick_program_asset(&both, true, true, false, false),
+            Ok(RELEASE_ASSET_V3)
+        );
+        assert!(pick_program_asset(&both, true, false, false, false).is_err());
+        assert!(pick_program_asset(&baseline_only, true, true, false, false).is_err());
+        // A running v3 build stays on v3, and falls back to the baseline when the release has no v3.
+        assert_eq!(
+            pick_program_asset(&both, false, true, true, false),
+            Ok(RELEASE_ASSET_V3)
+        );
+        assert_eq!(
+            pick_program_asset(&baseline_only, false, true, true, false),
+            Ok(RELEASE_ASSET)
+        );
+    }
+
+    #[test]
+    fn a_musl_system_gets_the_musl_package_and_never_v3() {
+        let all = release_with(&[RELEASE_ASSET, RELEASE_ASSET_V3, RELEASE_ASSET_MUSL]);
+        let no_musl = release_with(&[RELEASE_ASSET, RELEASE_ASSET_V3]);
+        assert_eq!(
+            pick_program_asset(&all, false, true, false, true),
+            Ok(RELEASE_ASSET_MUSL)
+        );
+        assert!(pick_program_asset(&all, true, true, false, true).is_err());
+        // No silent fall back to a glibc package that cannot run there.
+        assert!(pick_program_asset(&no_musl, false, true, false, true).is_err());
     }
 }

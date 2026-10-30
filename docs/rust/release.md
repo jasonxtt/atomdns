@@ -10,7 +10,7 @@
 | 仓库 | `jasonxtt/atomdns` |
 | tag / Release 名 | `vX.Y.Z`（只认这一种写法；`rust-v*`、`lite-v*`、`vX.Y`、`vX.Y.Z-rc1` 都会被更新器忽略） |
 | 程序 | `atomdns`（`rust/native-host` 的 cargo bin；crate 名仍是 `atomdns-native-host`） |
-| 发布包 | `atomdns-linux-amd64.tar.gz`（包内只有一个文件 `atomdns`；v0.5.0 起另有 `-amd64-v3`、`-arm64`、`-armv7`，只有 `amd64` 参与在线更新） |
+| 发布包 | `atomdns-linux-amd64.tar.gz`（包内只有一个文件 `atomdns`；v0.5.0 起另有 `-amd64-v3`、`-amd64-musl`、`-arm64`、`-armv7`，在线更新默认只装 `amd64`；`amd64-musl` 在 musl/Alpine 系统上由更新器自动选用；`amd64-v3` 仅在 UI 点“切换到 v3”或已运行 v3 时由更新器安装） |
 | 界面包 | `atomdns-webui.tar.gz`（v0.4.0 起；顶层即 `<配置根>/ui/main/` 的文件，`ui-manifest.json` 的 `ui_version` 等于 tag） |
 | 清单 | `atomdns-update-manifest.json`（`format 1`、`channel "rust"`、`version` 等于 tag、各发布包的 sha256） |
 | 程序自报版本 | `atomdns version` 与 `GET /api/v1/system/health` 的 `version` 都等于 tag |
@@ -141,14 +141,15 @@ v0.5.0 起 `config.url` 指向 file 仓库（此前指向 Release 资产）；�
 
   | 资产 | 目标 | 说明 |
   | --- | --- | --- |
-  | `atomdns-linux-amd64.tar.gz` | x86_64，glibc | 通用基线；**在线更新只认这一个** |
-  | `atomdns-linux-amd64-v3.tar.gz` | x86_64，glibc | `-C target-cpu=x86-64-v3`（需要 AVX2 等，约 2013 年后的 CPU），手动安装 |
+  | `atomdns-linux-amd64.tar.gz` | x86_64，glibc ≥ 2.35（Debian 12 及更新） | 通用基线；**在线更新只认这一个** |
+  | `atomdns-linux-amd64-v3.tar.gz` | x86_64，glibc | `-C target-cpu=x86-64-v3`（需要 AVX2 等，约 2013 年后的 CPU），手动安装，或在 UI 的更新区点“切换到 v3” |
   | `atomdns-linux-arm64.tar.gz` | aarch64，静态 musl | 手动安装；glibc 与 OpenWrt 都能跑 |
+  | `atomdns-linux-amd64-musl.tar.gz` | x86_64，静态 musl | Alpine 等 musl 系统（glibc 包在这些系统上无法启动）；在线更新在运行 musl 构建、或发现 `/etc/alpine-release` 时只装这个包，不提供 v3 |
   | `atomdns-linux-armv7.tar.gz` | armv7 硬浮点，静态 musl | 手动安装 |
 
   非 amd64 平台的在线更新尚未支持（更新器只在 linux x86_64 上可用，清单里多出的包会被忽略）；这些平台升级时下载对应包、替换 `atomdns` 并重启，`ui/main` 用 `atomdns-webui.tar.gz` 手动换。
-  ARM 包是静态 musl 构建，内存分配器与 glibc 不同，常驻内存没有按 x86 的数据测过。
-- **构建**：`VARIANTS="amd64 amd64-v3 arm64 armv7" scripts/build-rust-release.sh vX.Y.Z` 一次出齐；ARM 包需要 `cargo-zigbuild` 与 qemu-user binfmt，
+  musl 包（含 ARM）的内存分配器与 glibc 不同，没有 glibc 专用的 `mallopt`/`malloc_trim` 调优，常驻内存没有按 glibc 的数据测过。
+- **构建**：`VARIANTS="amd64 amd64-v3 amd64-musl arm64 armv7" scripts/build-rust-release.sh vX.Y.Z` 一次出齐；ARM 包需要 `cargo-zigbuild` 与 qemu-user binfmt，
   所以统一用 GitHub Actions 的手动工作流 `release-build.yml`（只构建、不发布，产物在 Actions 的 `release-<tag>` 里下载）。
 
 ## v0.4.2 升级须知（配置 schema 5，2026-10-29；在线订阅多格式、订阅分组、命中标签改名）

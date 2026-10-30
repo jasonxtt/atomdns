@@ -4,10 +4,11 @@
 # the files of <config root>/ui/main/ at the top level) and atomdns-update-manifest.json. Nothing is
 # published; attach the files to a GitHub release named like the tag by hand or from CI.
 #   scripts/build-rust-release.sh vX.Y.Z [out-dir]
-# VARIANTS="amd64 amd64-v3 arm64 armv7" builds more program packages (default: amd64). amd64-v3 is
-# the glibc build with -C target-cpu=x86-64-v3; arm64/armv7 are static musl builds made with
+# VARIANTS="amd64 amd64-v3 amd64-musl arm64 armv7" builds more program packages (default: amd64). amd64-v3 is
+# the glibc build with -C target-cpu=x86-64-v3; amd64-musl (Alpine), arm64 and armv7 are static musl builds made with
 # cargo-zigbuild and need qemu-user binfmt to run `atomdns version` (CI: .github/workflows/release-build.yml).
-# Only atomdns-linux-amd64.tar.gz is used by the in-app updater; the others are for manual installs.
+# The in-app updater installs amd64 by default, amd64-v3 on request (or when v3 is running) and amd64-musl
+# on musl/Alpine systems; arm64 and armv7 are for manual installs.
 # PREBUILT=<path to an already built atomdns> replaces the amd64 build (it must report the same tag).
 # PREBUILT_WEBUI=<atomdns-webui.tar.gz> skips the WebUI build (its ui_version must be the tag).
 # RUST_CONFIG_PACKAGE=<config_rust_up.zip> is passed on to generate-rust-update-manifest.sh.
@@ -38,9 +39,10 @@ for VARIANT in ${VARIANTS:-amd64}; do
   case "${VARIANT}" in
     amd64) ;;
     amd64-v3) FLAGS="-C target-cpu=x86-64-v3" ;;
+    amd64-musl) TARGET="x86_64-unknown-linux-musl"; SUBCOMMAND="zigbuild" ;;
     arm64) TARGET="aarch64-unknown-linux-musl"; SUBCOMMAND="zigbuild" ;;
     armv7) TARGET="armv7-unknown-linux-musleabihf"; SUBCOMMAND="zigbuild" ;;
-    *) echo "unknown variant ${VARIANT} (amd64, amd64-v3, arm64, armv7)" >&2; exit 1 ;;
+    *) echo "unknown variant ${VARIANT} (amd64, amd64-v3, amd64-musl, arm64, armv7)" >&2; exit 1 ;;
   esac
   BIN="${STAGE}/${VARIANT}/atomdns"
   mkdir -p "${STAGE}/${VARIANT}"

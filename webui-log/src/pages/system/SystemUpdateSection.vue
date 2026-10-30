@@ -184,15 +184,15 @@ function startRestartWatch() {
   }, 1000)
 }
 
-async function applyUpdate(force = false) {
+async function applyUpdate(force = false, preferV3 = false) {
   if (!supportsOperation('system.update')) return
-  if (update.loading || (!force && !hasUpdate.value)) {
+  if (update.loading || (!force && !preferV3 && !hasUpdate.value)) {
     return
   }
   clearTopNotice()
   update.loading = true
   try {
-    const response = await postJSON('/api/v1/update/apply', { force, prefer_v3: false })
+    const response = await postJSON('/api/v1/update/apply', { force, prefer_v3: preferV3 })
     const status = response?.status || response
     update.status = status
     setSuccess(String(response?.notes || status?.message || '更新请求已提交'))
@@ -239,6 +239,7 @@ onBeforeUnmount(() => {
       <SettingRow label="安装更新" layout="form" description="下载并校验新版本后原地切换；新版本起不来会自动回到旧版本">
         <button class="btn tiny primary" :disabled="update.loading || !hasUpdate" @click="applyUpdate(false)">立即更新</button>
         <button class="btn tiny danger" :disabled="update.loading || !update.status?.download_url" title="即使版本相同也重新安装" @click="applyUpdate(true)">强制更新</button>
+        <button v-if="update.status?.amd64_v3_capable && !update.status?.current_is_v3" class="btn tiny secondary" :disabled="update.loading" title="此 CPU 支持 x86-64-v3：切换到针对新 CPU 优化的构建（版本号不变）" @click="applyUpdate(false, true)">切换到 v3</button>
       </SettingRow>
     </CapabilityBoundary>
   </SettingSection>
