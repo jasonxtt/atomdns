@@ -11,8 +11,8 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use mosdns_native_host::{HostAssembly, QueryTerminalOutcome};
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_native_host::{HostAssembly, QueryTerminalOutcome};
+use atomdns_upstream_core::TransportCancellation;
 
 struct TempDir(PathBuf);
 
@@ -254,9 +254,9 @@ fn real_queries_run_rcode_tag_setter_drop_resp_and_sleep() {
         let refused = &records[2];
         assert_eq!(
             refused.response,
-            mosdns_native_host::ResponseState::Dns {
+            atomdns_native_host::ResponseState::Dns {
                 rcode: 5,
-                source: mosdns_native_host::ResponseSource::Local
+                source: atomdns_native_host::ResponseSource::Local
             },
             "{refused:?}"
         );
@@ -276,9 +276,9 @@ fn real_queries_run_rcode_tag_setter_drop_resp_and_sleep() {
         let emptied = &records[1];
         assert_eq!(
             emptied.response,
-            mosdns_native_host::ResponseState::Dns {
+            atomdns_native_host::ResponseState::Dns {
                 rcode: 0,
-                source: mosdns_native_host::ResponseSource::Local
+                source: atomdns_native_host::ResponseSource::Local
             },
             "{emptied:?}"
         );

@@ -19,4 +19,4 @@ export function buildManifest({ version, now = new Date() }) {
 }
 
 /** The release asset holding the package (rust/native-host/src/update/mod.rs WEBUI_ASSET). */
-export const ARCHIVE_NAME = 'rtdns-webui.tar.gz'
+export const ARCHIVE_NAME = 'atomdns-webui.tar.gz'

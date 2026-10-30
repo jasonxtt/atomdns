@@ -12,8 +12,8 @@ use std::net::{SocketAddr, TcpListener as StdTcpListener, UdpSocket as StdUdpSoc
 use std::path::PathBuf;
 use std::time::Duration;
 
-use mosdns_native_host::{HostAssembly, HostOptions, load_and_compile};
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_native_host::{HostAssembly, HostOptions, load_and_compile};
+use atomdns_upstream_core::TransportCancellation;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// One owned fixture directory holding a config and its real rule files.
@@ -26,7 +26,7 @@ impl Fixture {
         let root = std::env::temp_dir()
             .canonicalize()
             .expect("canonical temporary directory")
-            .join(format!("mosdns-http-{name}-{}", std::process::id()));
+            .join(format!("atomdns-http-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("rules")).expect("fixture directory");
         Self { root }
@@ -852,7 +852,7 @@ fn native_supervisor_health_matches_cli_identity_and_closes_with_listeners() {
         assert_eq!(health["ready"], true);
         assert_eq!(
             health["version"],
-            mosdns_native_host::build_identity::VERSION
+            atomdns_native_host::build_identity::VERSION
         );
         assert_eq!(health["runtime"], "rust");
         shutdown.cancel();
@@ -1092,7 +1092,7 @@ fn external_ui_packages_use_any_directory_name_and_a_manifest_decides_mounting()
         ("ui/pg/ui-manifest.json", GOOD),
         ("ui/a/index.html", "<html>a</html>"),
         ("ui/a/ui-manifest.json", GOOD),
-        // No manifest: generic static pages exactly as before (not a mosdns UI package).
+        // No manifest: generic static pages exactly as before (not a atomdns UI package).
         ("ui/plain/index.html", "<html>plain</html>"),
         ("ui/newer/index.html", "x"),
         ("ui/newer/ui-manifest.json", TOO_NEW),
@@ -1125,7 +1125,7 @@ fn external_ui_packages_use_any_directory_name_and_a_manifest_decides_mounting()
                 ),
                 (
                     Some(true),
-                    Some("mosdns_ui"),
+                    Some("atomdns_ui"),
                     Some("v9.9"),
                     Some("2026-10-17T00:00:00Z")
                 ),
@@ -1143,13 +1143,13 @@ fn external_ui_packages_use_any_directory_name_and_a_manifest_decides_mounting()
             (
                 Some(true),
                 Some("static"),
-                Some("非 mosdns UI 包（无 manifest）")
+                Some("非 atomdns UI 包（无 manifest）")
             )
         );
         assert!(plain["ui_version"].is_null());
         for (name, kind, reason) in [
-            ("newer", "mosdns_ui", "需要接口级别 2"),
-            ("broken", "mosdns_ui", "不是合法的 JSON"),
+            ("newer", "atomdns_ui", "需要接口级别 2"),
+            ("broken", "atomdns_ui", "不是合法的 JSON"),
             ("log", "unusable", "保留名"),
         ] {
             let entry = find(name);

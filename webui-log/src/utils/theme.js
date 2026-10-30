@@ -2,7 +2,7 @@
 // `data-theme` on <html> always carries the resolved 'light' or 'dark'.
 import { ref } from 'vue'
 
-export const THEME_STORAGE_KEY = 'rtdns-theme'
+export const THEME_STORAGE_KEY = 'atomdns-theme'
 export const THEME_MODES = Object.freeze(['system', 'light', 'dark'])
 export const THEME_LABELS = Object.freeze({ system: '跟随系统', light: '浅色', dark: '深色' })
 

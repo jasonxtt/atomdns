@@ -39,7 +39,7 @@ def command(args, **kwargs):
 
 
 def service_identity():
-    return subprocess.check_output(["systemctl", "show", "mosdns", "-p", "MainPID", "-p", "ActiveState"])
+    return subprocess.check_output(["systemctl", "show", "atomdns", "-p", "MainPID", "-p", "ActiveState"])
 
 
 class Rig:
@@ -400,7 +400,7 @@ def main(args):
         ctx["audit_ports"] = json.loads((work / "audit-ports.json").read_text())
         prepared = work / "native"
         new_tree = args.inputs / "config_rust_new"
-        # `rtdns check` on both trees: zero gaps.
+        # `atomdns check` on both trees: zero gaps.
         for role, binary, tree in (("before", args.before, prepared), ("after", args.after, None)):
             if tree is None:
                 continue

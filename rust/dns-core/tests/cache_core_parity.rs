@@ -1,5 +1,5 @@
-//! Byte/field parity between `mosdns-dns-core` and the existing
-//! `mosdns-cache-core` wire walk.
+//! Byte/field parity between `atomdns-dns-core` and the existing
+//! `atomdns-cache-core` wire walk.
 //!
 //! The cache wire behavior lives in `cache-core/src/wire.rs` behind
 //! `NativeCache::{store, lookup}`. This test stores a fixed response
@@ -9,8 +9,8 @@
 //! semantic change" evidence: if a later slice routes cache-core's wire walk
 //! through dns-core, these vectors must stay identical.
 
-use mosdns_cache_core::{CacheConfig, NativeCache};
-use mosdns_dns_core::age_response_ttls;
+use atomdns_cache_core::{CacheConfig, NativeCache};
+use atomdns_dns_core::age_response_ttls;
 
 const RESPONSE_TTL_OFFSET: usize = 35;
 

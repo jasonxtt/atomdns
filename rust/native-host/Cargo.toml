@@ -1,31 +1,31 @@
 [package]
-name = "mosdns-native-host"
+name = "atomdns-native-host"
 version = "0.5.2"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [[bin]]
-name = "rtdns"
+name = "atomdns"
 path = "src/main.rs"
 
 [[bin]]
-name = "mosdns-settings-migrate"
+name = "atomdns-settings-migrate"
 path = "src/bin/settings_migrate.rs"
 
 [dependencies]
 flate2 = "=1.1.9"
 hickory-proto = { version = "0.25.2", default-features = false }
-# Rule-source downloads (M1-a2): the same reviewed pins `mosdns-upstream-core`
+# Rule-source downloads (M1-a2): the same reviewed pins `atomdns-upstream-core`
 # already resolves (HTTP/1.1 client connection only, no pooled client).
 http-body-util = { version = "=0.1.3", default-features = false }
 hyper = { version = "=1.11.0", default-features = false, features = ["client", "http1"] }
 hyper-util = { version = "=0.1.20", default-features = false, features = ["tokio"] }
-mosdns-cache-core = { path = "../cache-core" }
-mosdns-dns-core = { path = "../dns-core" }
-mosdns-matcher-core = { path = "../matcher-core" }
-mosdns-sequence-core = { path = "../sequence-core" }
-mosdns-upstream-core = { path = "../upstream-core" }
+atomdns-cache-core = { path = "../cache-core" }
+atomdns-dns-core = { path = "../dns-core" }
+atomdns-matcher-core = { path = "../matcher-core" }
+atomdns-sequence-core = { path = "../sequence-core" }
+atomdns-upstream-core = { path = "../upstream-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 getrandom = { version = "0.4.3", default-features = false, features = ["std"] }

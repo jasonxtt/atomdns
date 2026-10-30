@@ -71,7 +71,7 @@ async fn on_joined_thread<T: 'static>(
 ) -> Result<T, String> {
     let joined = tokio::task::spawn_blocking(move || {
         std::thread::Builder::new()
-            .name("rtdns-apply-compile".into())
+            .name("atomdns-apply-compile".into())
             .spawn(move || Joined(work()))
             .map_err(|error| format!("cannot start the compile thread: {error}"))?
             .join()
@@ -114,7 +114,7 @@ mod tests {
             std::thread::current().name().map(str::to_owned)
         }))
         .unwrap();
-        assert_eq!(name.as_deref(), Some("rtdns-apply-compile"));
+        assert_eq!(name.as_deref(), Some("atomdns-apply-compile"));
     }
 
     #[test]

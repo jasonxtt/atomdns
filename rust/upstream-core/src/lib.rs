@@ -52,7 +52,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use mosdns_dns_core::parse_query;
+use atomdns_dns_core::parse_query;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 

@@ -12,7 +12,7 @@ VmHWM/VmRSS afterwards (HWM reset before each apply); a last reading after
 --final-wait seconds. Prints one JSON object (kB for memory, ms for time).
 
 Usage:
-  measure-settings-apply.py --binary ./mosdns --snapshot DIR --work DIR [--applies 4] [--qps 200]
+  measure-settings-apply.py --binary ./atomdns --snapshot DIR --work DIR [--applies 4] [--qps 200]
 """
 
 import argparse

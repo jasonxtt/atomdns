@@ -2,7 +2,7 @@
 
 > **Phase 6b（2026-10-18）**：下文提到的 `native_management` 托管模式已从代码中删除（含 `ManagedProfile`、`webinfo/native_management.*` 事务存储与托管 HTTP 处理）；相关条目仅作历史记录。
 
-来源：原生 `mosdns check` 对 `config_all`（`file` 仓库 `28c6493`，与 `86e6a65` 无差异）的
+来源：原生 `atomdns check` 对 `config_all`（`file` 仓库 `28c6493`，与 `86e6a65` 无差异）的
 原始输出 [config_all-check.txt](validation-records/10-06-config-check/config_all-check.txt)，
 以及仅用于看下一层的[派生探测](validation-records/10-06-config-check/README.md#派生探测probe)。
 输入、构建与快照说明见该目录 README。本清单以 `check` 输出为准，取代
@@ -92,8 +92,8 @@ M1-0 之前的读法如下：
 `/api/v1/upstream/{tags,config,runtime}`、`/api/v1/overrides`、`/api/v1/domain-generation` 在非托管模式下由设置层提供。契约见 [native-settings](contracts/native-settings.md)，记录见
 [validation-records/10-08-m1-f1](validation-records/10-08-m1-f1/README.md)。
 
-**M1-f2 已完成（`2b9d0bea`）**：原生配置包 `config_rust`（在 `file` 仓库 `mosdns/config/config_rust/`，配置包基线 `0412666`，附 `README-rust.md` 差异说明与等价性论证）、
-一次性迁移工具 `mosdns-settings-migrate`（`native-host` 内独立二进制，逻辑在 `settings_migrate.rs`，复现 Go 的 `use_socks_proxy` 推断与 `foreign`/`foreignecs` 全局代理回退，无法映射项写入报告并以退出码 1 提示）、
+**M1-f2 已完成（`2b9d0bea`）**：原生配置包 `config_rust`（在 `file` 仓库 `atomdns/config/config_rust/`，配置包基线 `0412666`，附 `README-rust.md` 差异说明与等价性论证）、
+一次性迁移工具 `atomdns-settings-migrate`（`native-host` 内独立二进制，逻辑在 `settings_migrate.rs`，复现 Go 的 `use_socks_proxy` 推断与 `foreign`/`foreignecs` 全局代理回退，无法映射项写入报告并以退出码 1 提示）、
 WebUI 两套 shell 的设置页接线（上游页代理开关、覆盖页立即生效与“已修改/恢复默认”、替换规则面板在原生下隐藏；Go 路径不变）。
 附带的 Rust 改动：`socks5_proxy` 的 `addr` 可为空（= 不使用代理，用户 2026-10-09 决定）；设置版上游列表不再返回 `use_proxy` 字段；`unsupported_features` 在设置版上游页下不再列 `socks_proxy`；`check` 的 aliapi `EFFECTIVE` 值对真正走代理的条目加 ` [proxy]` 标记。
 记录见 [validation-records/10-09-m1-f2](validation-records/10-09-m1-f2/README.md)。**仍待**：E2E-1 验收；托管模式下的上游覆盖（M1-e）。
@@ -165,7 +165,7 @@ listener、`log.level`/`log.file`。`switch*`、`cache`、`ip_set`、`domain_set
 
 原生按**声明文件所在目录**解析 include 文件里的相对路径（5B 设计，见
 [feature-coverage C01](feature-coverage.md)）；`config_all` 依赖 Go 以**配置根目录**
-（进程工作目录 `/cus/mosdns`）解析。于是 `sub_config/*.yaml` 中的 `rule/…`、`gen/…`、
+（进程工作目录 `/cus/atomdns`）解析。于是 `sub_config/*.yaml` 中的 `rule/…`、`gen/…`、
 `srs/…`、`cache/…` 都被解析到 `sub_config/` 下：
 
 - `domain_set` 的 `gen/*.txt` 报缺失（2 处 GAP）；
@@ -195,7 +195,7 @@ special_groups 生成都挂在该开关上。**用户决定（2026-10-06）：�
 
 ## 4. 生产快照与 `config_all` 的差异
 
-对生产快照（Go v0.7.3，`/cus/mosdns`）的 `check` 输出
+对生产快照（Go v0.7.3，`/cus/atomdns`）的 `check` 输出
 [prod-snapshot-check.txt](validation-records/10-06-config-check/prod-snapshot-check.txt)
 与 `config_all` 的**逐字节相同**。快照与包内 `config_all` 的配置差异只有：
 `sub_config/special_groups.yaml` 多一个空行（运行时生成）以及两个不被 include 的

@@ -175,7 +175,7 @@ def run(args):
     assert os.geteuid() == 0, "VM root required"
     args.work.mkdir(mode=0o700)
     script = pathlib.Path(__file__).resolve()
-    service = subprocess.check_output(["systemctl", "show", "mosdns", "-p", "MainPID", "-p", "ActiveState"])
+    service = subprocess.check_output(["systemctl", "show", "atomdns", "-p", "MainPID", "-p", "ActiveState"])
     owned, spaces, streams = [], [], []
     def command(argv):
         subprocess.run(list(map(str, argv)), check=True)
@@ -249,7 +249,7 @@ def run(args):
             command(["ip", "netns", "delete", ns])
         for stream in streams:
             stream.close()
-        after = subprocess.check_output(["systemctl", "show", "mosdns", "-p", "MainPID", "-p", "ActiveState"])
+        after = subprocess.check_output(["systemctl", "show", "atomdns", "-p", "MainPID", "-p", "ActiveState"])
         (args.work / "cleanup.json").write_text(json.dumps({"processes_exited": all(p.poll() is not None for p in owned), "namespaces_deleted": spaces, "original_service_unchanged": service == after}, indent=2))
         assert service == after, "original service changed"
 

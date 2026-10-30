@@ -1,7 +1,7 @@
 //! Real native DNS and HTTP cache lifecycle contract.
 mod common;
-use mosdns_native_host::{CacheTestClock, HostAssembly, HostOptions, compile_yaml_with_base};
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_native_host::{CacheTestClock, HostAssembly, HostOptions, compile_yaml_with_base};
+use atomdns_upstream_core::TransportCancellation;
 use std::net::{SocketAddr, TcpListener, UdpSocket};
 use std::rc::Rc;
 use std::sync::{
@@ -135,7 +135,7 @@ fn named_inventory_metrics_management_and_restart_use_real_owners() {
             .config()
             .caches
             .iter()
-            .find(|item| item.kind == mosdns_native_host::CacheKind::Quick)
+            .find(|item| item.kind == atomdns_native_host::CacheKind::Quick)
             .unwrap()
             .tag;
         for action in ["show", "save", "dump", "load_dump", "flush"] {
@@ -154,7 +154,7 @@ fn named_inventory_metrics_management_and_restart_use_real_owners() {
             if upstream.count.load(Ordering::SeqCst) == 2
                 && host
                     .cache()
-                    .get(mosdns_native_host::CacheId(0))
+                    .get(atomdns_native_host::CacheId(0))
                     .unwrap()
                     .pending_refreshes()
                     == 0
@@ -169,11 +169,11 @@ fn named_inventory_metrics_management_and_restart_use_real_owners() {
         assert_eq!(status, 200);
         let metrics = String::from_utf8(metrics).unwrap();
         for line in [
-            "mosdns_cache_query_total{tag=\"alpha\"} 3",
-            "mosdns_cache_hit_total{tag=\"alpha\"} 2",
-            "mosdns_cache_lazy_hit_total{tag=\"alpha\"} 1",
-            "mosdns_cache_size_current{tag=\"alpha\"} 1",
-            "mosdns_cache_query_total{tag=\"beta\"} 1",
+            "atomdns_cache_query_total{tag=\"alpha\"} 3",
+            "atomdns_cache_hit_total{tag=\"alpha\"} 2",
+            "atomdns_cache_lazy_hit_total{tag=\"alpha\"} 1",
+            "atomdns_cache_size_current{tag=\"alpha\"} 1",
+            "atomdns_cache_query_total{tag=\"beta\"} 1",
         ] {
             assert!(
                 metrics.lines().any(|actual| actual == line),
@@ -184,7 +184,7 @@ fn named_inventory_metrics_management_and_restart_use_real_owners() {
         assert_eq!(
             metrics
                 .lines()
-                .filter(|line| line.starts_with("mosdns_cache_"))
+                .filter(|line| line.starts_with("atomdns_cache_"))
                 .count(),
             8,
             "the cache section is unchanged (process figures are a separate section)"
@@ -242,9 +242,9 @@ fn named_inventory_metrics_management_and_restart_use_real_owners() {
             );
         }
         host.cache()
-            .get(mosdns_native_host::CacheId(0))
+            .get(atomdns_native_host::CacheId(0))
             .unwrap()
-            .inject_persist_fault(mosdns_native_host::PersistFault::Rename);
+            .inject_persist_fault(atomdns_native_host::PersistFault::Rename);
         assert_eq!(http(api, "GET", "/plugins/alpha/save", &[]).await.0, 500);
         assert!(
             !http(api, "GET", "/plugins/alpha/show", &[])
@@ -320,7 +320,7 @@ fn named_inventory_metrics_management_and_restart_use_real_owners() {
         assert!(
             String::from_utf8(metrics)
                 .unwrap()
-                .contains("mosdns_cache_size_current{tag=\"alpha\"} 0")
+                .contains("atomdns_cache_size_current{tag=\"alpha\"} 0")
         );
         stop.cancel();
         serving.await.unwrap().unwrap();
@@ -342,7 +342,7 @@ fn native_process_sigterm_drains_owners_and_reports_all_final_save_failures_with
         );
         let config = root.join("config.yaml");
         std::fs::write(&config, yaml).unwrap();
-        let mut command = Command::new(env!("CARGO_BIN_EXE_rtdns"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_atomdns"));
         command
             .args(["start", "-c"])
             .arg(&config)
@@ -423,7 +423,7 @@ fn inventory_tags_roundtrip_through_encoded_plugin_urls_and_prometheus_labels() 
             String::from_utf8(metrics)
                 .unwrap()
                 .lines()
-                .any(|line| line == format!("mosdns_cache_query_total{{tag={quoted}}} 0"))
+                .any(|line| line == format!("atomdns_cache_query_total{{tag={quoted}}} 0"))
         );
         stop.cancel();
         serving.await.unwrap().unwrap();

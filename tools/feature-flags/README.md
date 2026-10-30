@@ -7,7 +7,7 @@ row comparison) and `tools/e2e-1` (`prepare.py`, `mock.py`, `dnswire.py`).
 
 ```sh
 python3 tools/feature-flags/run.py --inputs /private/inputs --work /private/run \
-  --before /private/rtdns-before --after /private/rtdns-after --migrate /private/mosdns-settings-migrate --names 500
+  --before /private/atomdns-before --after /private/atomdns-after --migrate /private/atomdns-settings-migrate --names 500
 ```
 
 `inputs/` as for `tools/route-learner` (`config_all`, `config_rust` = OLD tree, `config_rust_new`, `snapshot/…`, outside the repository).

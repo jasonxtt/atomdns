@@ -8,7 +8,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use mosdns_native_host::{CompiledConfig, ConfigError, compile_yaml_with_base, load_and_compile};
+use atomdns_native_host::{CompiledConfig, ConfigError, compile_yaml_with_base, load_and_compile};
 
 /// Unwraps a configuration rejection, because `CompiledConfig` carries no
 /// `Debug` impl and therefore cannot be inspected by `expect_err`.
@@ -34,7 +34,7 @@ struct Fixture {
 impl Fixture {
     fn new(name: &str) -> Self {
         let root =
-            std::env::temp_dir().join(format!("mosdns-managed-{name}-{}", std::process::id()));
+            std::env::temp_dir().join(format!("atomdns-managed-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("fixture directory");
         Self { root }

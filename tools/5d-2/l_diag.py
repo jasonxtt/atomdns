@@ -12,7 +12,7 @@ late_wrong WITH its content and timestamps, then classifies each one:
   question_differs the answer's question is not the request's (cross-talk)
 
 Usage (VM root):
-    python3 tools/5d-2/l_diag.py run  --work prepared --binary mosdns-native --role native --output L-native-r1 --seed 501
+    python3 tools/5d-2/l_diag.py run  --work prepared --binary atomdns-native --role native --output L-native-r1 --seed 501
     python3 tools/5d-2/l_diag.py send ...   (internal: executed inside the namespace)
 """
 import argparse

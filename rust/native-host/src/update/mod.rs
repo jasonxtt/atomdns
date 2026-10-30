@@ -1,6 +1,6 @@
 //! Online update of the native program, its configuration package and its WebUI.
 //!
-//! Releases come from GitHub Releases of `jasonxtt/rtdns`, tags `vX.Y.Z` only. An
+//! Releases come from GitHub Releases of `jasonxtt/atomdns`, tags `vX.Y.Z` only. An
 //! update downloads the program, the WebUI when `<root>/ui/main` exists (`webui.rs`)
 //! and, when the release needs a newer configuration package, that package; verifies every sha256; pre-checks the candidate; and then
 //! hands over to a guard process (`update-guard`, see `guard.rs`) that replaces the
@@ -21,7 +21,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_upstream_core::TransportCancellation;
 use serde::{Deserialize, Serialize};
 
 /// The configuration package schema this program requires; bump together with
@@ -31,18 +31,18 @@ pub(crate) const REQUIRED_CONFIG_SCHEMA: u32 = 6;
 pub(crate) const REQUIRED_CONFIG_PACKAGE_ID: &str = "rust-config-schema-6";
 /// The `channel` of the configuration package and of the update manifest.
 pub(crate) const CHANNEL: &str = "rust";
-/// The release asset holding the executable (a `tar.gz` with a file named `rtdns`).
-pub(crate) const RELEASE_ASSET: &str = "rtdns-linux-amd64.tar.gz";
+/// The release asset holding the executable (a `tar.gz` with a file named `atomdns`).
+pub(crate) const RELEASE_ASSET: &str = "atomdns-linux-amd64.tar.gz";
 /// The executable's name inside `RELEASE_ASSET`.
-pub(crate) const RELEASE_BINARY: &str = "rtdns";
+pub(crate) const RELEASE_BINARY: &str = "atomdns";
 /// The release asset holding the WebUI: the files of `<config root>/ui/main/` at the top
 /// level of a `tar.gz`. Listed in the manifest's `artifacts` like the program (a new
 /// top-level manifest field would make older updaters refuse the manifest).
-pub(crate) const WEBUI_ASSET: &str = "rtdns-webui.tar.gz";
+pub(crate) const WEBUI_ASSET: &str = "atomdns-webui.tar.gz";
 /// The release asset naming every artifact's sha256 and the configuration package.
-pub(crate) const MANIFEST_ASSET: &str = "rtdns-update-manifest.json";
-const DEFAULT_API_URL: &str = "https://api.github.com/repos/jasonxtt/rtdns/releases?per_page=100";
-const RELEASE_PAGE: &str = "https://github.com/jasonxtt/rtdns/releases/tag/";
+pub(crate) const MANIFEST_ASSET: &str = "atomdns-update-manifest.json";
+const DEFAULT_API_URL: &str = "https://api.github.com/repos/jasonxtt/atomdns/releases?per_page=100";
+const RELEASE_PAGE: &str = "https://github.com/jasonxtt/atomdns/releases/tag/";
 const TAG_PREFIX: &str = "v";
 const CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(20);
@@ -55,10 +55,10 @@ pub(crate) const MAX_CONFIG_PACKAGE_BYTES: usize = 64 << 20;
 pub(crate) const MAX_WEBUI_ARCHIVE_BYTES: usize = 32 << 20;
 pub(crate) const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// The release listing endpoint; `MOSDNS_UPDATE_API_URL` replaces it (tests, mirrors).
+/// The release listing endpoint; `ATOMDNS_UPDATE_API_URL` replaces it (tests, mirrors).
 /// Nothing downloaded from anywhere skips the sha256 checks.
 pub(crate) fn api_url() -> String {
-    std::env::var("MOSDNS_UPDATE_API_URL")
+    std::env::var("ATOMDNS_UPDATE_API_URL")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_API_URL.to_owned())
@@ -177,7 +177,7 @@ pub(crate) fn latest_release(releases: Vec<Release>) -> Option<(Version, Release
         .max_by_key(|(version, _)| *version)
 }
 
-/// `rtdns-update-manifest.json`.
+/// `atomdns-update-manifest.json`.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UpdateManifest {
@@ -547,14 +547,15 @@ mod tests {
     }
 
     #[test]
-    fn the_update_source_is_the_rtdns_repository() {
+    fn the_update_source_is_the_atomdns_repository() {
         for url in [DEFAULT_API_URL, RELEASE_PAGE] {
-            assert!(url.contains("jasonxtt/rtdns/"), "{url}");
+            assert!(url.contains("jasonxtt/atomdns/"), "{url}");
             assert!(!url.contains("jasonxtt/mosdns"), "{url}");
+            assert!(!url.contains("jasonxtt/rtdns"), "{url}");
         }
-        assert_eq!(RELEASE_ASSET, "rtdns-linux-amd64.tar.gz");
-        assert_eq!(MANIFEST_ASSET, "rtdns-update-manifest.json");
-        assert_eq!(RELEASE_BINARY, "rtdns");
+        assert_eq!(RELEASE_ASSET, "atomdns-linux-amd64.tar.gz");
+        assert_eq!(MANIFEST_ASSET, "atomdns-update-manifest.json");
+        assert_eq!(RELEASE_BINARY, "atomdns");
     }
 
     fn release(tag: &str, draft: bool, prerelease: bool) -> Release {
@@ -636,7 +637,7 @@ mod tests {
         );
         let manifest = parse_manifest(with_webui.as_bytes(), "v1.2.3").unwrap();
         assert_eq!(manifest.artifacts[WEBUI_ASSET].sha256, "c".repeat(64));
-        assert_eq!(WEBUI_ASSET, "rtdns-webui.tar.gz");
+        assert_eq!(WEBUI_ASSET, "atomdns-webui.tar.gz");
     }
 
     #[test]

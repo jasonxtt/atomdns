@@ -18,15 +18,15 @@ use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use fixtures::FixtureSet;
-use mosdns_upstream_core::secure::{
+use atomdns_upstream_core::secure::{
     DohEndpoint, DohProtocolError, DohUpstream, SecureError, SecureResponse, SecureTransport,
     TlsPolicy,
 };
-use mosdns_upstream_core::{
+use atomdns_upstream_core::{
     CloseResult, CloseTransition, ExchangeContext, ExchangeRequest, SideEffectState,
     TransportCancellation, UpstreamError,
 };
+use fixtures::FixtureSet;
 use rustls::ServerConfig;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener as AsyncTcpListener, TcpStream};
@@ -631,7 +631,7 @@ fn a_non_200_status_is_a_typed_protocol_error() {
         assert_eq!(
             error,
             SecureError::DohProtocol(
-                mosdns_upstream_core::secure::DohProtocolError::UnexpectedStatus { status: 500 }
+                atomdns_upstream_core::secure::DohProtocolError::UnexpectedStatus { status: 500 }
             ),
             "expected a typed status rejection"
         );
@@ -664,7 +664,7 @@ fn a_redirect_is_not_followed() {
         assert_eq!(
             error,
             SecureError::DohProtocol(
-                mosdns_upstream_core::secure::DohProtocolError::UnexpectedStatus { status: 302 }
+                atomdns_upstream_core::secure::DohProtocolError::UnexpectedStatus { status: 302 }
             ),
             "a redirect must be reported as a status rejection, never followed"
         );
@@ -1777,7 +1777,7 @@ fn an_oversized_outbound_query_is_rejected_before_any_connection() {
             .expect_err("a query beyond the DNS maximum must be rejected");
         assert_eq!(
             error,
-            SecureError::DohRequest(mosdns_upstream_core::secure::DohRequestError::QueryTooLarge)
+            SecureError::DohRequest(atomdns_upstream_core::secure::DohRequestError::QueryTooLarge)
         );
         assert_eq!(error.side_effect(), SideEffectState::NotSent);
 

@@ -23,9 +23,9 @@ test('failures, an unsupported catalog and unknown/malformed schema are errors, 
 })
 test('metrics preserve missing values, exact tags, escaped labels and genuine zero', () => {
   assert.deepEqual(parseCacheMetrics('', 'missing'), { query_total: null, hit_total: null, lazy_hit_total: null, size_current: null })
-  const text = 'mosdns_cache_query_total{tag="a"} 0\nmosdns_cache_hit_total{tag="a"} 2\nmosdns_cache_lazy_hit_total{tag="a"} NaN\nmosdns_cache_size_current{tag="a"} 7\nmosdns_cache_query_total{tag="aa"} 55'
+  const text = 'atomdns_cache_query_total{tag="a"} 0\natomdns_cache_hit_total{tag="a"} 2\natomdns_cache_lazy_hit_total{tag="a"} NaN\natomdns_cache_size_current{tag="a"} 7\natomdns_cache_query_total{tag="aa"} 55'
   assert.deepEqual(parseCacheMetrics(text, 'a'), { query_total: 0, hit_total: 2, lazy_hit_total: null, size_current: 7 })
-  assert.equal(parseCacheMetrics('mosdns_cache_size_current{tag="a\\"b\\\\c\\nd"} 9', 'a"b\\c\nd').size_current, 9)
+  assert.equal(parseCacheMetrics('atomdns_cache_size_current{tag="a\\"b\\\\c\\nd"} 9', 'a"b\\c\nd').size_current, 9)
 })
 test('partial batch failures retain specific tags and actual successful count', () => {
   assert.deepEqual(summarizeCacheFlush([{ tag: 'alpha' }, { tag: 'beta' }, { tag: 'gamma' }], [{ status: 'fulfilled' }, { status: 'rejected' }, { status: 'fulfilled' }]), { succeeded: 2, failed: ['beta'] })

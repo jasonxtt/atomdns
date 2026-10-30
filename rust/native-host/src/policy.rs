@@ -1,7 +1,7 @@
 //! Immutable startup response-policy descriptors; no request-time file I/O.
 use crate::config::ConfigError;
-use mosdns_matcher_core::{IpPrefixList, MixMatcher, normalize};
-use mosdns_sequence_core::{ExecutableId, ExecutionState, ExecutorError};
+use atomdns_matcher_core::{IpPrefixList, MixMatcher, normalize};
+use atomdns_sequence_core::{ExecutableId, ExecutionState, ExecutorError};
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read};
 use std::net::IpAddr;
@@ -40,7 +40,7 @@ mod special_group_cname_tests {
                 .set_id(91)
                 .add_query(Query::query(qname.clone(), kind));
             let raw = query.to_vec().unwrap();
-            let (header, question) = mosdns_dns_core::parse_query(&raw).unwrap();
+            let (header, question) = atomdns_dns_core::parse_query(&raw).unwrap();
             let mut state = ExecutionState::new(header, question);
             state.routing.matched_group = Some("special_50".into());
             state.routing.final_upstream = Some("actual_supplier".into());
@@ -96,7 +96,7 @@ mod special_group_cname_tests {
             state.set_raw_response(wire.clone());
             assert!(!apply_wire_policy(&ResponsePolicy::CnameRemover, &mut state, &raw).unwrap());
             assert_eq!(state.routing, route);
-            let mosdns_sequence_core::ResponseState::Raw(after) = &state.response else {
+            let atomdns_sequence_core::ResponseState::Raw(after) = &state.response else {
                 panic!("raw response")
             };
             if !changes {
@@ -517,7 +517,7 @@ pub(crate) fn apply_wire_policy(
             if !matches!(state.query.question.qtype, 1 | 28) {
                 return Ok(false);
             }
-            let mosdns_sequence_core::ResponseState::Raw(wire) = &state.response else {
+            let atomdns_sequence_core::ResponseState::Raw(wire) = &state.response else {
                 return Ok(false);
             };
             let mut message = hickory_proto::op::Message::from_vec(wire.as_bytes())
@@ -585,14 +585,14 @@ pub(crate) fn apply_wire_policy(
             };
             let count = u16::try_from(data.len())
                 .map_err(|_| ExecutorError::new("too many hosts addresses"))?;
-            let mut wire = mosdns_dns_core::synthesize_response(&state.query.header, q, 0)
+            let mut wire = atomdns_dns_core::synthesize_response(&state.query.header, q, 0)
                 .map_err(|_| ExecutorError::new("cannot construct hosts response"))?;
             wire[2] |= query_wire.get(2).copied().unwrap_or(0) & 1;
             wire[6..8].copy_from_slice(&count.to_be_bytes());
             if data.is_empty() {
                 wire[8..10].copy_from_slice(&1_u16.to_be_bytes());
-                let mut soa = encode_name("fake-ns.mosdns.fake.root.");
-                soa.extend(encode_name("fake-mbox.mosdns.fake.root."));
+                let mut soa = encode_name("fake-ns.atomdns.fake.root.");
+                soa.extend(encode_name("fake-mbox.atomdns.fake.root."));
                 for field in [2_021_110_400_u32, 1800, 900, 604800, 86400] {
                     soa.extend(field.to_be_bytes());
                 }
@@ -610,10 +610,10 @@ pub(crate) fn apply_wire_policy(
         }
         ResponsePolicy::Ttl(policy) => {
             let wire = match &state.response {
-                mosdns_sequence_core::ResponseState::None => return Ok(false),
-                mosdns_sequence_core::ResponseState::Raw(wire) => wire.as_bytes().to_vec(),
-                mosdns_sequence_core::ResponseState::Synthesized(response) => {
-                    mosdns_dns_core::synthesize_response(
+                atomdns_sequence_core::ResponseState::None => return Ok(false),
+                atomdns_sequence_core::ResponseState::Raw(wire) => wire.as_bytes().to_vec(),
+                atomdns_sequence_core::ResponseState::Synthesized(response) => {
+                    atomdns_dns_core::synthesize_response(
                         &state.query.header,
                         &state.query.question,
                         u8::try_from(response.rcode())
@@ -624,14 +624,14 @@ pub(crate) fn apply_wire_policy(
             };
             let patched = match policy {
                 TtlPolicy::Fixed(0) => {
-                    mosdns_dns_core::observe_response_ttl(&wire).map_err(|error| {
+                    atomdns_dns_core::observe_response_ttl(&wire).map_err(|error| {
                         ExecutorError::new(format!("invalid TTL response: {error:?}"))
                     })?;
                     return Ok(false);
                 }
-                TtlPolicy::Fixed(ttl) => mosdns_dns_core::replace_response_ttls(&wire, *ttl),
+                TtlPolicy::Fixed(ttl) => atomdns_dns_core::replace_response_ttls(&wire, *ttl),
                 TtlPolicy::Range { min, max } => {
-                    mosdns_dns_core::clamp_response_ttls(&wire, *min, *max)
+                    atomdns_dns_core::clamp_response_ttls(&wire, *min, *max)
                 }
             }
             .map_err(|error| ExecutorError::new(format!("invalid TTL response: {error:?}")))?;
@@ -678,7 +678,7 @@ mod wire_tests {
         let mut message = Message::new();
         message.add_query(query);
         let wire = message.to_vec().unwrap();
-        let (header, question) = mosdns_dns_core::parse_query(&wire).unwrap();
+        let (header, question) = atomdns_dns_core::parse_query(&wire).unwrap();
         (ExecutionState::new(header, question), wire)
     }
     #[test]

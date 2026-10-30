@@ -13,8 +13,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use mosdns_native_host::{BoundHost, HostAssembly};
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_native_host::{BoundHost, HostAssembly};
+use atomdns_upstream_core::TransportCancellation;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -277,8 +277,8 @@ fn flags_only(tree: &Tree, extra: &str, rules: &str) {
     );
 }
 
-fn compile(tree: &Tree) -> Result<mosdns_native_host::CompiledConfig, String> {
-    mosdns_native_host::load_and_compile(&tree.path("config.yaml"))
+fn compile(tree: &Tree) -> Result<atomdns_native_host::CompiledConfig, String> {
+    atomdns_native_host::load_and_compile(&tree.path("config.yaml"))
         .map_err(|error| error.to_string())
 }
 
@@ -292,7 +292,7 @@ fn compile_error(tree: &Tree, what: &str) -> String {
 
 /// `key -> (value, source)` from the effective report.
 fn effective(
-    config: &mosdns_native_host::CompiledConfig,
+    config: &atomdns_native_host::CompiledConfig,
 ) -> std::collections::BTreeMap<String, (String, String)> {
     config
         .settings_report()
@@ -307,11 +307,11 @@ fn effective(
         .collect()
 }
 
-fn value(config: &mosdns_native_host::CompiledConfig, key: &str) -> String {
+fn value(config: &atomdns_native_host::CompiledConfig, key: &str) -> String {
     effective(config)[key].0.clone()
 }
 
-/// Starts the host the way `rtdns start` does (with the startup migration).
+/// Starts the host the way `atomdns start` does (with the startup migration).
 fn start(tree: &Tree) -> HostAssembly {
     HostAssembly::from_config_file(&tree.path("config.yaml")).expect("assembles")
 }
@@ -643,7 +643,7 @@ fn check_shows_the_legacy_values_and_writes_nothing() {
     let tree = Tree::new("check");
     flags_only(&tree, "", "");
     tree.switches(&[(3, "B"), (6, "A")]);
-    let report = mosdns_native_host::check_config(&tree.path("config.yaml")).expect("check runs");
+    let report = atomdns_native_host::check_config(&tree.path("config.yaml")).expect("check runs");
     let text = report.to_string();
     assert!(
         text.contains("EFFECTIVE feature_flag core_mode value=safe source=legacy"),
@@ -1108,9 +1108,9 @@ fn a_change_before_the_migration_stores_the_legacy_values_too() {
     config(&tree, &ports, &compat, &safe);
     tree.switches(&[(3, "B"), (16, "A")]);
     // `load_and_compile` + `with_options` is the path without the startup migration.
-    let compiled = mosdns_native_host::load_and_compile(&tree.path("config.yaml")).unwrap();
+    let compiled = atomdns_native_host::load_and_compile(&tree.path("config.yaml")).unwrap();
     let host =
-        HostAssembly::with_options(compiled, mosdns_native_host::HostOptions::default()).unwrap();
+        HostAssembly::with_options(compiled, atomdns_native_host::HostOptions::default()).unwrap();
     host.block_on(async {
         let (shutdown, task) = serve(&host).await;
         let listed = json(&api(ports.api, "GET", "/api/v1/flags", "").await.body);

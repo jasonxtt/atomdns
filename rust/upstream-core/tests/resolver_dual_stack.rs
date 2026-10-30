@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use mosdns_upstream_core::{
+use atomdns_upstream_core::{
     AddressFamily, BootstrapEndpoint, BootstrapResolver, Clock, ConfigVersion, ExchangeContext,
     FamilyCandidate, ResolutionMode, ResolutionPolicy, ResolutionTarget, ResolverError,
     ServerIdentity, Transport, TransportCancellation,
@@ -1155,8 +1155,8 @@ fn dual_close_is_idempotent_and_drains() {
         let second = resolver.close().await;
         // The documented contract: the first close performs the transition, and a
         // repeated close converges on the already-closed result.
-        assert_eq!(first, mosdns_upstream_core::CloseResult::Closed);
-        assert_eq!(second, mosdns_upstream_core::CloseResult::AlreadyClosed);
+        assert_eq!(first, atomdns_upstream_core::CloseResult::Closed);
+        assert_eq!(second, atomdns_upstream_core::CloseResult::AlreadyClosed);
         assert_eq!(resolver.in_flight_resolutions(), 0, "all work drained");
         fixture.stop().await;
     });
@@ -1186,7 +1186,7 @@ fn a_dual_selection_composes_numerically_and_keeps_secure_identity() {
 
         // Plain numeric endpoint receives the selected address.
         let endpoint =
-            mosdns_upstream_core::ResolverComposition::endpoint(&published, Transport::Udp)
+            atomdns_upstream_core::ResolverComposition::endpoint(&published, Transport::Udp)
                 .expect("endpoint");
         assert_eq!(
             endpoint.address(),
@@ -1196,13 +1196,13 @@ fn a_dual_selection_composes_numerically_and_keeps_secure_identity() {
 
         // DoT keeps the configured SNI identity, not the numeric address.
         let identity = ServerIdentity::new("secure.example.org").expect("identity");
-        let dot = mosdns_upstream_core::ResolverComposition::dot_endpoint(&published, &identity)
+        let dot = atomdns_upstream_core::ResolverComposition::dot_endpoint(&published, &identity)
             .expect("dot");
         assert_eq!(dot.dial(), SocketAddr::new(IpAddr::V4(V4), 853));
         assert_eq!(dot.identity().dns_name(), Some("secure.example.org"));
 
         // DoH keeps the original URL authority and path.
-        let doh = mosdns_upstream_core::ResolverComposition::doh_endpoint(
+        let doh = atomdns_upstream_core::ResolverComposition::doh_endpoint(
             &published,
             "https://secure.example.org/dns-query",
         )
@@ -1232,7 +1232,7 @@ fn a_dual_aaaa_selection_still_keeps_the_secure_identity() {
         assert_eq!(published.family(), AddressFamily::Ipv6);
 
         let identity = ServerIdentity::new("aaaasecure.example.org").expect("identity");
-        let dot = mosdns_upstream_core::ResolverComposition::dot_endpoint(&published, &identity)
+        let dot = atomdns_upstream_core::ResolverComposition::dot_endpoint(&published, &identity)
             .expect("dot");
         assert_eq!(dot.dial(), SocketAddr::new(IpAddr::V6(V6), 853));
         assert_eq!(
@@ -1265,7 +1265,7 @@ fn a_dual_a_selection_composes_a_doq_endpoint_without_rewriting_identity() {
         assert_eq!(published.address(), IpAddr::V4(V4), "A is preferred");
 
         let identity = ServerIdentity::new("adoq.example.org").expect("identity");
-        let doq = mosdns_upstream_core::ResolverComposition::doq_endpoint(&published, &identity)
+        let doq = atomdns_upstream_core::ResolverComposition::doq_endpoint(&published, &identity)
             .expect("doq");
         assert_eq!(
             doq.dial(),
@@ -1304,7 +1304,7 @@ fn a_dual_aaaa_selection_composes_a_doq_endpoint_without_rewriting_identity() {
         assert_eq!(published.family(), AddressFamily::Ipv6);
 
         let identity = ServerIdentity::new("aaaadoq.example.org").expect("identity");
-        let doq = mosdns_upstream_core::ResolverComposition::doq_endpoint(&published, &identity)
+        let doq = atomdns_upstream_core::ResolverComposition::doq_endpoint(&published, &identity)
             .expect("doq");
         assert_eq!(
             doq.dial(),
@@ -1335,7 +1335,7 @@ fn a_dual_aaaa_selection_composes_a_doq_endpoint_without_rewriting_identity() {
 /// so those later concerns extend the result type rather than replace it.
 #[test]
 fn the_quic_composition_boundary_is_a_numeric_selection_plus_caller_identity() {
-    let published = mosdns_upstream_core::resolve_numeric("192.0.2.55:853".parse().expect("addr"))
+    let published = atomdns_upstream_core::resolve_numeric("192.0.2.55:853".parse().expect("addr"))
         .expect("literal");
     // The result the DoQ consumer receives is exactly the same shape as for the
     // existing transports: one numeric address, one caller port.
@@ -1348,7 +1348,7 @@ fn the_quic_composition_boundary_is_a_numeric_selection_plus_caller_identity() {
     assert!(published.ttl().is_zero());
 
     let identity = ServerIdentity::new("doq.example.org").expect("identity");
-    let doq = mosdns_upstream_core::ResolverComposition::doq_endpoint(&published, &identity)
+    let doq = atomdns_upstream_core::ResolverComposition::doq_endpoint(&published, &identity)
         .expect("doq");
     assert_eq!(
         doq.dial(),
@@ -1403,14 +1403,14 @@ fn dual_mode_is_independent_of_the_target_declared_family() {
 // Helpers over a published snapshot
 // ---------------------------------------------------------------------------
 
-fn snapshot4(snapshot: &mosdns_upstream_core::ResolutionSnapshot) -> Resolved {
+fn snapshot4(snapshot: &atomdns_upstream_core::ResolutionSnapshot) -> Resolved {
     match snapshot.candidate(AddressFamily::Ipv4) {
         Some(FamilyCandidate::Address(destination)) => Resolved(*destination),
         other => panic!("expected an IPv4 address candidate, got {other:?}"),
     }
 }
 
-fn snapshot6(snapshot: &mosdns_upstream_core::ResolutionSnapshot) -> Resolved {
+fn snapshot6(snapshot: &atomdns_upstream_core::ResolutionSnapshot) -> Resolved {
     match snapshot.candidate(AddressFamily::Ipv6) {
         Some(FamilyCandidate::Address(destination)) => Resolved(*destination),
         other => panic!("expected an IPv6 address candidate, got {other:?}"),
@@ -1419,7 +1419,7 @@ fn snapshot6(snapshot: &mosdns_upstream_core::ResolutionSnapshot) -> Resolved {
 
 /// A tiny wrapper so the helpers can be used with `Debug` in failure output.
 #[derive(Debug)]
-struct Resolved(mosdns_upstream_core::ResolvedDestination);
+struct Resolved(atomdns_upstream_core::ResolvedDestination);
 
 impl Resolved {
     fn ttl(&self) -> Duration {

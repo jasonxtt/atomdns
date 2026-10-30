@@ -86,20 +86,20 @@ pub use restart::{
     RestartTarget, capture as capture_restart_target, captured as restart_target, take_pending,
 };
 
-/// `rtdns update-guard --transaction <file>`: the update guard (see `update/guard.rs`). It
+/// `atomdns update-guard --transaction <file>`: the update guard (see `update/guard.rs`). It
 /// replaces this process and returns only when even the final `exec` failed.
 #[must_use]
 pub fn run_update_guard(transaction: &std::path::Path) -> String {
     update::guard::run(transaction)
 }
 
-/// Called by `rtdns start`: a candidate started by the update guard asks to be stopped
+/// Called by `atomdns start`: a candidate started by the update guard asks to be stopped
 /// together with it.
 pub fn arm_update_candidate() {
     update::guard::arm_parent_death_signal();
 }
 
-/// Called by `rtdns start` before the configuration is loaded: rolls back an interrupted
+/// Called by `atomdns start` before the configuration is loaded: rolls back an interrupted
 /// update and returns the program and arguments to run again (`None`: nothing to recover).
 ///
 /// # Errors

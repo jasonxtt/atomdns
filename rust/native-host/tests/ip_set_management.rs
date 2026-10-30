@@ -2,8 +2,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use mosdns_native_host::HostAssembly;
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_native_host::HostAssembly;
+use atomdns_upstream_core::TransportCancellation;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 struct Tree(PathBuf);
@@ -174,7 +174,7 @@ fn post_survives_an_actual_process_restart() {
     runtime.block_on(async {
         for restart in 0..2 {
             let mut process = Process(
-                std::process::Command::new(env!("CARGO_BIN_EXE_rtdns"))
+                std::process::Command::new(env!("CARGO_BIN_EXE_atomdns"))
                     .args(["start", "-d"])
                     .arg(&tree.0)
                     .args(["-c", "config.yaml"])

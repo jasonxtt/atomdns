@@ -1,9 +1,9 @@
 # Fixed-response test upstream
 
 Pinned CoreDNS1.15.0 provides reusable offline DNS fixtures on `mos-test`.
-This infrastructure does not deploy rtdns or change production. Run tools as root
+This infrastructure does not deploy atomdns or change production. Run tools as root
 on the dedicated test host. Raw production names, zones, CA/private keys and
-per-query evidence stay under private `/opt/rtdns-test-upstream`.
+per-query evidence stay under private `/opt/atomdns-test-upstream`.
 
 ## Components
 
@@ -12,14 +12,14 @@ per-query evidence stay under private `/opt/rtdns-test-upstream`.
   existing binaries. Certificate renewal is explicit: stop, archive the old cert
   folder privately, regenerate, record new fingerprints and requalify.
 - `fixture.py`: generates frozen Corefile/zone files and per-supplier endpoint
-  manifest. `--source` reads a complete frozen rtdns root without editing it;
+  manifest. `--source` reads a complete frozen atomdns root without editing it;
   `--groups`+`--names` accepts the included synthetic sample format instead.
 - `service.py`: installs the disabled-by-default systemd unit and manages only
   owned bridge/veth/namespace names. `start`, `stop`, `reset`, `status`, `check`.
 - `check.py`: actual UDP/TCP/DoT/DoH/DoQ, CNAME/complex/negative/large-answer
   checks; `--full` also verifies every generated A/AAAA against the frozen zone.
 - `prepare_case.py`, `case.py`, `proxy.py`: retain config rules, capacities,
-  provider identities, proxy flags and group concurrency in a disposable rtdns
+  provider identities, proxy flags and group concurrency in a disposable atomdns
   namespace attached only to the test bridge. The SOCKS proxy only connects to
   declared fixture endpoints, on CPU2, in the SUT namespace so delays apply.
 - `functional.py`: BASE/control ordered DNS+route+learner checks through the
@@ -34,15 +34,15 @@ directory for production-copy/state verification. No new Rust dependency.
 
 ## Initial provisioning
 
-Copy the tools directories to `/opt/rtdns-test-upstream/tools` (excluding bytecode,
+Copy the tools directories to `/opt/atomdns-test-upstream/tools` (excluding bytecode,
 Finder metadata and private data). From the installation root:
 
 ```sh
 python3 tools/test-upstream/install.py --certificates
-python3 tools/test-upstream/fixture.py --groups tools/test-upstream/sample-groups.json --names tools/test-upstream/sample-names.json --output /opt/rtdns-test-upstream/fixtures/sample-v1
+python3 tools/test-upstream/fixture.py --groups tools/test-upstream/sample-groups.json --names tools/test-upstream/sample-names.json --output /opt/atomdns-test-upstream/fixtures/sample-v1
 ```
 
-Write the literal fixture ID `sample-v1` to `/opt/rtdns-test-upstream/active`;
+Write the literal fixture ID `sample-v1` to `/opt/atomdns-test-upstream/active`;
 then:
 
 ```sh
@@ -50,7 +50,7 @@ python3 tools/test-upstream/service.py install-unit
 python3 tools/test-upstream/service.py start
 python3 tools/test-upstream/service.py check
 python3 tools/test-upstream/service.py status
-python3 tools/test-upstream/check.py --output /opt/rtdns-test-upstream/results/NEW-selfcheck --full
+python3 tools/test-upstream/check.py --output /opt/atomdns-test-upstream/results/NEW-selfcheck --full
 python3 tools/test-upstream/service.py reset
 python3 tools/test-upstream/service.py stop
 ```
@@ -63,7 +63,7 @@ private deployment currently uses `v2`, not the public synthetic sample.
 ## Network and timing contract
 
 The service owns `rtup-br` (`198.51.100.1/24`), `rtup-host`/`rtup-peer` and
-namespace `rtdns-upstream` (`198.51.100.2`). No default route exists there. Test
+namespace `atomdns-upstream` (`198.51.100.2`). No default route exists there. Test
 cases attach a separate veth/namespace at `.3`; they also have no default route.
 Do not add default routes or change host DNS/proxy/eth0 qdiscs. Cleanup refuses
 unowned interface aliases and a bridge still used by another client.

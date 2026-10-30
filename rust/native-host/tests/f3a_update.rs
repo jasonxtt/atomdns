@@ -1,4 +1,4 @@
-//! F-3a online update, against the real `rtdns` binary and a local release server (no
+//! F-3a online update, against the real `atomdns` binary and a local release server (no
 //! public network): status/check with the cache, the refusal paths (sha256, manifest,
 //! package, pre-flight), a full guarded update (same process id, new files, confirmed),
 //! automatic rollback when the candidate fails, start-up recovery after the guard is
@@ -402,7 +402,7 @@ fn config_package(content: &str, edit: impl Fn(&mut serde_json::Value)) -> Vec<u
     ])
 }
 
-/// `rtdns-webui.tar.gz` whose `index.html` is `marker` (and `ui_version` too).
+/// `atomdns-webui.tar.gz` whose `index.html` is `marker` (and `ui_version` too).
 fn webui_package(marker: &str) -> Vec<u8> {
     let manifest = format!(r#"{{"manifest_schema":1,"ui_version":"{marker}","api_level":1}}"#);
     tar_gz_files(&[
@@ -428,7 +428,7 @@ fn manifest_json(tag: &str, archive: &[u8], config: Option<(&str, &[u8])>) -> Ve
         "format": 1, "channel": "rust", "version": tag,
         "required_config_schema": if config.is_some() { 6 } else { 0 },
         "config_package_id": "rust-config-schema-6",
-        "artifacts": {"rtdns-linux-amd64.tar.gz": {"sha256": sha256(archive)}},
+        "artifacts": {"atomdns-linux-amd64.tar.gz": {"sha256": sha256(archive)}},
     });
     if let Some((url, bytes)) = config {
         manifest["config"] = serde_json::json!({"url": url, "sha256": sha256(bytes)});
@@ -448,13 +448,13 @@ fn binary() -> &'static Vec<u8> {
             .arg("--strip-all")
             .arg("-o")
             .arg(&stripped)
-            .arg(env!("CARGO_BIN_EXE_rtdns"))
+            .arg(env!("CARGO_BIN_EXE_atomdns"))
             .status()
             .is_ok_and(|status| status.success());
         let bytes = std::fs::read(if ok {
             stripped.as_path()
         } else {
-            Path::new(env!("CARGO_BIN_EXE_rtdns"))
+            Path::new(env!("CARGO_BIN_EXE_atomdns"))
         })
         .unwrap();
         let _ = std::fs::remove_file(&stripped);
@@ -463,7 +463,7 @@ fn binary() -> &'static Vec<u8> {
 }
 
 fn current_version() -> String {
-    let output = Command::new(env!("CARGO_BIN_EXE_rtdns"))
+    let output = Command::new(env!("CARGO_BIN_EXE_atomdns"))
         .arg("version")
         .output()
         .unwrap();
@@ -509,7 +509,7 @@ impl Host {
         if let Some(marker) = ui {
             install_ui(&root, marker);
         }
-        let exe = root.join("mosdns");
+        let exe = root.join("atomdns");
         std::fs::write(&exe, binary()).unwrap();
         std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
         let (stub, upstream) = Stub::start();
@@ -547,11 +547,11 @@ impl Host {
             .arg(&self.root)
             .arg("-c")
             .arg(self.root.join("config_custom.yaml"))
-            .env("MOSDNS_UPDATE_API_URL", self.server.url("/releases"))
+            .env("ATOMDNS_UPDATE_API_URL", self.server.url("/releases"))
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
         if let Some(seconds) = health_timeout {
-            command.env("MOSDNS_UPDATE_HEALTH_TIMEOUT_SECS", seconds.to_string());
+            command.env("ATOMDNS_UPDATE_HEALTH_TIMEOUT_SECS", seconds.to_string());
         }
         let mut attempt = 0;
         let mut child = loop {
@@ -628,7 +628,7 @@ impl Host {
         self.publish_with_ui(tag, program, config, None);
     }
 
-    /// The same with the release's `rtdns-webui.tar.gz`.
+    /// The same with the release's `atomdns-webui.tar.gz`.
     fn publish_with_ui(
         &self,
         tag: &str,
@@ -636,32 +636,33 @@ impl Host {
         config: Option<&[u8]>,
         webui: Option<&[u8]>,
     ) {
-        let archive = tar_gz("rtdns", program);
+        let archive = tar_gz("atomdns", program);
         let config_url = self.server.url(&format!("/dl/{tag}/config_rust_up.zip"));
         let mut manifest = manifest_json(
             tag,
             &archive,
             config.map(|bytes| (config_url.as_str(), bytes)),
         );
-        let mut assets = vec!["rtdns-linux-amd64.tar.gz", "rtdns-update-manifest.json"];
+        let mut assets = vec!["atomdns-linux-amd64.tar.gz", "atomdns-update-manifest.json"];
         if let Some(bytes) = webui {
             let mut value: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
-            value["artifacts"]["rtdns-webui.tar.gz"] = serde_json::json!({"sha256": sha256(bytes)});
+            value["artifacts"]["atomdns-webui.tar.gz"] =
+                serde_json::json!({"sha256": sha256(bytes)});
             manifest = serde_json::to_vec(&value).unwrap();
             self.server.set(
-                &format!("/dl/{tag}/rtdns-webui.tar.gz"),
+                &format!("/dl/{tag}/atomdns-webui.tar.gz"),
                 "application/gzip",
                 bytes.to_vec(),
             );
-            assets.push("rtdns-webui.tar.gz");
+            assets.push("atomdns-webui.tar.gz");
         }
         self.server.set(
-            &format!("/dl/{tag}/rtdns-linux-amd64.tar.gz"),
+            &format!("/dl/{tag}/atomdns-linux-amd64.tar.gz"),
             "application/gzip",
             archive,
         );
         self.server.set(
-            &format!("/dl/{tag}/rtdns-update-manifest.json"),
+            &format!("/dl/{tag}/atomdns-update-manifest.json"),
             "application/json",
             manifest,
         );
@@ -714,7 +715,7 @@ fn status_and_check_use_the_cache_ignore_other_tag_families_and_degrade_on_failu
     // Everything but `v99.0.0` is newer than it, so it would win if it were accepted.
     host.server.list(vec![
         host.server
-            .release("v99.0.0", false, false, &["rtdns-linux-amd64.tar.gz"]),
+            .release("v99.0.0", false, false, &["atomdns-linux-amd64.tar.gz"]),
         host.server.release("rust-v99.9.0", false, false, &[]),
         host.server.release("lite-v99.9.0", false, false, &[]),
         host.server.release("openwrt-v99.9.0", false, false, &[]),
@@ -733,12 +734,12 @@ fn status_and_check_use_the_cache_ignore_other_tag_families_and_degrade_on_failu
     assert_eq!(status["update_available"], true);
     assert_eq!(status["cached"], false);
     assert_eq!(status["architecture"], "linux/amd64");
-    assert_eq!(status["asset_name"], "rtdns-linux-amd64.tar.gz");
+    assert_eq!(status["asset_name"], "atomdns-linux-amd64.tar.gz");
     assert!(
         status["download_url"]
             .as_str()
             .unwrap()
-            .ends_with("/v99.0.0/rtdns-linux-amd64.tar.gz")
+            .ends_with("/v99.0.0/atomdns-linux-amd64.tar.gz")
     );
     assert_eq!(status["config_schema_required"], 6);
     assert!(status.get("pending_restart").is_none() && status.get("rollback_performed").is_none());
@@ -813,9 +814,9 @@ fn an_update_is_refused_without_touching_anything_when_a_check_fails() {
 
     // The archive does not match the manifest's sha256.
     host.publish("v99.0.0", &real, None);
-    let wrong = tar_gz("rtdns", b"tampered");
+    let wrong = tar_gz("atomdns", b"tampered");
     host.server.set(
-        "/dl/v99.0.0/rtdns-linux-amd64.tar.gz",
+        "/dl/v99.0.0/atomdns-linux-amd64.tar.gz",
         "application/gzip",
         wrong,
     );
@@ -834,7 +835,7 @@ fn an_update_is_refused_without_touching_anything_when_a_check_fails() {
         "v99.0.0",
         false,
         false,
-        &["rtdns-linux-amd64.tar.gz"],
+        &["atomdns-linux-amd64.tar.gz"],
     )]);
     let reply = apply(&host);
     assert_eq!(reply.status, 502);
@@ -851,9 +852,9 @@ fn an_update_is_refused_without_touching_anything_when_a_check_fails() {
     // The manifest names another version.
     host.publish("v99.0.0", &real, None);
     host.server.set(
-        "/dl/v99.0.0/rtdns-update-manifest.json",
+        "/dl/v99.0.0/atomdns-update-manifest.json",
         "application/json",
-        manifest_json("v99.0.1", &tar_gz("rtdns", &real), None),
+        manifest_json("v99.0.1", &tar_gz("atomdns", &real), None),
     );
     let reply = apply(&host);
     assert_eq!(reply.status, 502);
@@ -864,16 +865,16 @@ fn an_update_is_refused_without_touching_anything_when_a_check_fails() {
     );
     nothing_changed(&host);
 
-    // The archive has no `rtdns` file.
+    // The archive has no `atomdns` file.
     let no_binary = tar_gz("README", b"text");
     host.publish("v99.0.0", &real, None);
     host.server.set(
-        "/dl/v99.0.0/rtdns-linux-amd64.tar.gz",
+        "/dl/v99.0.0/atomdns-linux-amd64.tar.gz",
         "application/gzip",
         no_binary.clone(),
     );
     host.server.set(
-        "/dl/v99.0.0/rtdns-update-manifest.json",
+        "/dl/v99.0.0/atomdns-update-manifest.json",
         "application/json",
         manifest_json("v99.0.0", &no_binary, None),
     );
@@ -1182,7 +1183,7 @@ fn without_ui_main_an_update_neither_downloads_nor_creates_the_webui() {
     assert!(!host.root.join("ui").exists(), "no ui/ is created");
     assert_eq!(
         host.server
-            .count(&format!("/dl/{version}/rtdns-webui.tar.gz")),
+            .count(&format!("/dl/{version}/atomdns-webui.tar.gz")),
         0
     );
     assert_eq!(
@@ -1209,7 +1210,7 @@ fn with_ui_main_a_release_without_a_webui_asset_is_refused_untouched() {
     let good = webui_package("NEW-UI");
     host.publish_with_ui(&version, &program, None, Some(&good));
     host.server.set(
-        &format!("/dl/{version}/rtdns-webui.tar.gz"),
+        &format!("/dl/{version}/atomdns-webui.tar.gz"),
         "application/gzip",
         webui_package("TAMPERED"),
     );
@@ -1340,7 +1341,7 @@ fn the_export_is_a_zip_of_this_hosts_configuration_directory_only() {
             .contains("content-type: application/zip")
     );
     assert!(
-        reply.headers.contains("filename=\"mosdns_backup_"),
+        reply.headers.contains("filename=\"atomdns_backup_"),
         "{}",
         reply.headers
     );

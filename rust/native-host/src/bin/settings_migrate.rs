@@ -1,9 +1,9 @@
-//! `mosdns-settings-migrate --from <go-config-dir> [-d <root>] -c <config> --out <dir>`:
+//! `atomdns-settings-migrate --from <go-config-dir> [-d <root>] -c <config> --out <dir>`:
 //! one-time migration of the reference host's override files (M1-f2).
 
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: mosdns-settings-migrate --from <reference-config-dir> [-d <native-root>] -c <native-config> --out <output-dir>\n\
+const USAGE: &str = "usage: atomdns-settings-migrate --from <reference-config-dir> [-d <native-root>] -c <native-config> --out <output-dir>\n\
 writes <output-dir>/settings.json and migration-report.txt; never changes the inputs.\n\
 exit code: 0 everything mapped, 1 some item needs a person (see the report), 2 error";
 
@@ -34,19 +34,19 @@ fn main() {
         eprintln!("{USAGE}");
         std::process::exit(2);
     };
-    let options = mosdns_native_host::settings_migrate::Options {
+    let options = atomdns_native_host::settings_migrate::Options {
         from,
         config,
         dir,
         out,
     };
-    match mosdns_native_host::settings_migrate::run(&options) {
+    match atomdns_native_host::settings_migrate::run(&options) {
         Ok(outcome) => {
             print!("{}", outcome.report);
             std::process::exit(outcome.exit_code);
         }
         Err(error) => {
-            eprintln!("mosdns-settings-migrate: {error}");
+            eprintln!("atomdns-settings-migrate: {error}");
             std::process::exit(2);
         }
     }

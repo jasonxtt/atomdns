@@ -8,7 +8,7 @@ Concise cross-session handover for the Rust migration on branch `rust`.
 
 User decision (2026-10-06): the first production replacement is gated on the
 user's own `config_all` running natively (milestone M1); plugins it does not
-use are deferred, not removed. Production `mosdns` is 1 vCPU / 957 MB, so the
+use are deferred, not removed. Production `atomdns` is 1 vCPU / 957 MB, so the
 single-threaded runtime model stays (no concurrency spike) and memory is a
 first-class goal with an RSS budget in 5D. Order: native `check` command and
 ledger convergence (`10-06-rust-native-config-check-ledger`), merge `main`,
@@ -112,10 +112,10 @@ no actionable issue, matched all129 source/manifests locally/remotely and reran
 
 ## Branch and worktree
 
-- Since 2026-10-21 the work lives in `/Users/tom/github/rtdns` (`jasonxtt/rtdns`, branch `main`); the old worktree `/Users/tom/github/mosdns-rust` and the `rust` branch of `jasonxtt/mosdns` are no longer used for new work (history and commit IDs are the same).
+- Since 2026-10-21 the work lives in `/Users/tom/github/atomdns` (`jasonxtt/atomdns`, branch `main`); the old worktree `/Users/tom/github/mosdns-rust` and the `rust` branch of `jasonxtt/mosdns` are no longer used for new work (history and commit IDs are the same).
 - Original base commit `3896a4a7e0ce4311b40a7e4c80c93f2c8b3b4f1d`, base release `v0.7.1` (Go).
 - This repository contains no Go source or cgo bridge (since Phase 6a, 2026-10-18); Go references are built from `/Users/tom/github/mosdns` with `tools/go-reference/build.sh`.
-- Production has run this program as `rtdns` since 2026-10-21. Releases and online updates come only from `jasonxtt/rtdns` (tags `vX.Y.Z`, assets `rtdns-linux-amd64.tar.gz` and `rtdns-update-manifest.json`; the program reports `vX.Y.Z`); the manually deployed `rust-v0.1.4` is replaced by hand with `v0.2.0` (see `docs/rust/release.md`). Older sections of this file use the old names (`mosdns` binary, `rust-v*`).
+- Production has run this program as `atomdns` since 2026-10-21. Releases and online updates come only from `jasonxtt/atomdns` (tags `vX.Y.Z`, assets `atomdns-linux-amd64.tar.gz` and `atomdns-update-manifest.json`; the program reports `vX.Y.Z`); the manually deployed `rust-v0.1.4` is replaced by hand with `v0.2.0` (see `docs/rust/release.md`). Older sections of this file use the old names (`atomdns` binary, `rust-v*`).
 
 ## Status as of 2026-09-24
 
@@ -235,7 +235,7 @@ authorized by this closure. Read the stage plan before choosing subsequent work.
 
 ## Non-negotiable constraints
 
-- Preserve the MosDNS **product contract**: YAML/config and sequence/plugin
+- Preserve the AtomDNS **product contract**: YAML/config and sequence/plugin
   semantics, final DNS/routing/audit behavior, API/WebUI workflows, metrics and
   persistent formats. Go internals and accidental quirks are not contract.
 - The final target is a **pure Rust-native host**. Existing Phase 1/2/3A hybrid

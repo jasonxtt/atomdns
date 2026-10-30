@@ -7,8 +7,8 @@ runtime Go dependency. Build only in the authorized VM, using cached Go and
 dependencies, `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`, `go build -p=2`.
 
 The Rust `udp_response` unit tests optionally invoke it using
-`MOSDNS_UDP_TRUNCATION_ORACLE=/absolute/go-truncate` and append numerical rows
-to `MOSDNS_UDP_TRUNCATION_REPORT=/private/oracle.jsonl`. Use a fresh report
+`ATOMDNS_UDP_TRUNCATION_ORACLE=/absolute/go-truncate` and append numerical rows
+to `ATOMDNS_UDP_TRUNCATION_REPORT=/private/oracle.jsonl`. Use a fresh report
 path and `--test-threads=1` for deterministic evidence. Section counts and TC
 must agree; byte equality is reported separately because an already-fitting
 Rust response preserves its existing compressed encoding and a signed

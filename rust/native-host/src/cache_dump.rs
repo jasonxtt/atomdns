@@ -1,7 +1,7 @@
 //! Bounded native codec for the existing mosdns_cache_v2 persistence format.
 use crate::cache::CacheAdapterError;
+use atomdns_cache_core::NativeSnapshotEntry;
 use flate2::{Compression, GzBuilder, bufread::GzDecoder};
-use mosdns_cache_core::NativeSnapshotEntry;
 use std::io::{Read, Write};
 
 pub(crate) const MAX_COMPRESSED: usize = 16 * 1024 * 1024;
@@ -55,7 +55,7 @@ fn validate_origin(value: &DumpOrigin) -> Result<(), CacheAdapterError> {
     }
     Ok(())
 }
-fn decode_origin(bytes: &[u8]) -> Result<mosdns_cache_core::NativeAttachment, CacheAdapterError> {
+fn decode_origin(bytes: &[u8]) -> Result<atomdns_cache_core::NativeAttachment, CacheAdapterError> {
     if bytes.len() > MAX_ORIGIN {
         return Err(bad());
     }
@@ -69,8 +69,8 @@ fn decode_origin(bytes: &[u8]) -> Result<mosdns_cache_core::NativeAttachment, Ca
         None => None,
         _ => return Err(bad()),
     };
-    Ok(mosdns_cache_core::NativeAttachment::new(
-        mosdns_sequence_core::ResponseOrigin {
+    Ok(atomdns_cache_core::NativeAttachment::new(
+        atomdns_sequence_core::ResponseOrigin {
             identity: std::sync::Arc::from(value.entry),
             peer: value.peer,
             transport,
@@ -92,7 +92,7 @@ fn encode_entry(entry: &NativeSnapshotEntry) -> Result<Vec<u8>, CacheAdapterErro
     if let Some(origin) = entry
         .attachment
         .as_ref()
-        .and_then(|attachment| attachment.downcast_ref::<mosdns_sequence_core::ResponseOrigin>())
+        .and_then(|attachment| attachment.downcast_ref::<atomdns_sequence_core::ResponseOrigin>())
     {
         if origin.identity.len() > MAX_ORIGIN / 8 {
             return Err(bad());
@@ -319,13 +319,13 @@ mod tests {
 
     #[test]
     fn origin_extension_roundtrip_legacy_and_malformed_are_bounded() {
-        let origin = mosdns_sequence_core::ResponseOrigin {
+        let origin = atomdns_sequence_core::ResponseOrigin {
             identity: std::sync::Arc::from("persisted_supplier"),
             peer: Some("127.0.0.1:25556".parse().unwrap()),
             transport: Some("udp"),
         };
         let mut item = NativeSnapshotEntry {
-            attachment: Some(mosdns_cache_core::NativeAttachment::new(origin.clone())),
+            attachment: Some(atomdns_cache_core::NativeAttachment::new(origin.clone())),
             key: vec![1],
             response: vec![2],
             domain_set: vec![],
@@ -338,7 +338,7 @@ mod tests {
                 .attachment
                 .as_ref()
                 .unwrap()
-                .downcast_ref::<mosdns_sequence_core::ResponseOrigin>(),
+                .downcast_ref::<atomdns_sequence_core::ResponseOrigin>(),
             Some(&origin)
         );
         item.attachment = None;

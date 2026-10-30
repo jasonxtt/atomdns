@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Barrier;
 
-use mosdns_upstream_core::{
+use atomdns_upstream_core::{
     AddressFamily, BootstrapEndpoint, BootstrapResolver, Clock, ConfigVersion, ExchangeContext,
     PublishedTarget, ResolutionPolicy, ResolutionTarget, ResolvedDestination, ResolverError,
     ServerIdentity, Transport, TransportCancellation,
@@ -273,7 +273,10 @@ fn owner_close_wins_over_publication() {
                 assert_eq!(resolver.state().published(), None, "no post-close publish");
             }
             Ok(_) => {
-                assert_ne!(closed, mosdns_upstream_core::CloseTransition::AlreadyClosed);
+                assert_ne!(
+                    closed,
+                    atomdns_upstream_core::CloseTransition::AlreadyClosed
+                );
             }
             other => panic!("unexpected outcome {other:?}"),
         }
@@ -339,7 +342,7 @@ fn numeric_bypass_honors_owner_close() {
         );
         assert_eq!(
             resolver.begin_close(),
-            mosdns_upstream_core::CloseTransition::BeganClosing
+            atomdns_upstream_core::CloseTransition::BeganClosing
         );
         let error = bounded(resolver.resolve(context(10)))
             .await
@@ -666,12 +669,12 @@ fn config_version_and_identity_contracts_still_hold() {
     let identity = ServerIdentity::new("secure.example.org").expect("identity");
     assert_eq!(identity.dns_name(), Some("secure.example.org"));
     let published: PublishedTarget =
-        mosdns_upstream_core::resolve_numeric("192.0.2.7:853".parse().expect("addr"))
+        atomdns_upstream_core::resolve_numeric("192.0.2.7:853".parse().expect("addr"))
             .expect("literal");
     assert_eq!(published.family(), AddressFamily::Ipv4);
     assert!(published.ttl().is_zero());
     assert_eq!(
-        mosdns_upstream_core::ResolverComposition::endpoint(&published, Transport::Udp)
+        atomdns_upstream_core::ResolverComposition::endpoint(&published, Transport::Udp)
             .expect("endpoint")
             .address(),
         "192.0.2.7:853".parse::<SocketAddr>().expect("addr")
@@ -1029,7 +1032,7 @@ fn external_state_access_cannot_publish_after_close() {
         // A close that wins the gate prevents any later publication.
         assert_eq!(
             resolver.begin_close(),
-            mosdns_upstream_core::CloseTransition::BeganClosing
+            atomdns_upstream_core::CloseTransition::BeganClosing
         );
         let error = bounded(resolver.resolve(context(5)))
             .await

@@ -1,8 +1,8 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use mosdns_dns_core::{QueryHeader, QuestionInfo};
-use mosdns_sequence_core::{
+use atomdns_dns_core::{QueryHeader, QuestionInfo};
+use atomdns_sequence_core::{
     DispatchMetadata, ExecutableSpec, ExecutableTarget, ExecutableTargetSpec, ExecutionCompletion,
     ExecutionControl, ExecutionError, ExecutionState, Executor, ExecutorError, ExecutorOutcome,
     FixtureRef, FixtureSpec, MatchOutcome, Matcher, MatcherError, MatcherSpecInput, ProgramError,
@@ -57,7 +57,7 @@ fn fixture_exec(name: &str) -> ExecutableSpec {
     }
 }
 
-fn entry(program: &mosdns_sequence_core::ValidatedProgram) -> SequenceId {
+fn entry(program: &atomdns_sequence_core::ValidatedProgram) -> SequenceId {
     program.sequence_id("main").expect("main entry")
 }
 
@@ -85,12 +85,12 @@ fn normalization_spec() -> ProgramSpec {
                         target: SequenceRef::new("target"),
                     }])),
                     RuleSpec::unconditional(Some(vec![ExecutableSpec::Try {
-                        target: mosdns_sequence_core::ExecutableTargetSpec::Sequence(
+                        target: atomdns_sequence_core::ExecutableTargetSpec::Sequence(
                             SequenceRef::new("same"),
                         ),
                     }])),
                     RuleSpec::unconditional(Some(vec![ExecutableSpec::Try {
-                        target: mosdns_sequence_core::ExecutableTargetSpec::Fixture(
+                        target: atomdns_sequence_core::ExecutableTargetSpec::Fixture(
                             FixtureRef::new("same"),
                         ),
                     }])),
@@ -115,7 +115,7 @@ fn normalization_spec() -> ProgramSpec {
 }
 
 fn inline_target(
-    program: &mosdns_sequence_core::ValidatedProgram,
+    program: &atomdns_sequence_core::ValidatedProgram,
     sequence: SequenceId,
     rule: usize,
 ) -> SequenceId {
@@ -126,7 +126,7 @@ fn inline_target(
 }
 
 fn assert_inline_fixture_rules(
-    program: &mosdns_sequence_core::ValidatedProgram,
+    program: &atomdns_sequence_core::ValidatedProgram,
     inline: SequenceId,
     expected_len: usize,
 ) {
@@ -136,7 +136,7 @@ fn assert_inline_fixture_rules(
         assert_eq!(
             rule.executable,
             Some(ValidatedExecutable::Fixture {
-                target: mosdns_sequence_core::ExecutableId(0)
+                target: atomdns_sequence_core::ExecutableId(0)
             })
         );
     }
@@ -160,7 +160,7 @@ fn normalization_assigns_stable_ids_and_resolves_typed_targets() {
     assert!(matches!(
         main.rules[2].executable,
         Some(ValidatedExecutable::Fixture {
-            target: mosdns_sequence_core::ExecutableId(0)
+            target: atomdns_sequence_core::ExecutableId(0)
         })
     ));
 
@@ -192,7 +192,7 @@ fn normalization_assigns_stable_ids_and_resolves_typed_targets() {
     assert_eq!(
         main.rules[7].executable,
         Some(ValidatedExecutable::Try {
-            target: ExecutableTarget::Fixture(mosdns_sequence_core::ExecutableId(0))
+            target: ExecutableTarget::Fixture(atomdns_sequence_core::ExecutableId(0))
         })
     );
 }
@@ -355,7 +355,7 @@ fn state_writing_fixture(
 fn single_fixture_program(
     name: &str,
     fixture: FixtureSpec,
-) -> mosdns_sequence_core::ValidatedProgram {
+) -> atomdns_sequence_core::ValidatedProgram {
     ProgramSpec::new(
         vec![SequenceSpec::new(
             "main",

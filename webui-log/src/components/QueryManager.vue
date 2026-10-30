@@ -566,8 +566,8 @@ function handleGlobalRefresh() {
 
 onMounted(async () => {
   // Registered first: a filter handed over from the overview arrives right after mounting.
-  window.addEventListener('mosdns-log-refresh', handleGlobalRefresh)
-  window.addEventListener('mosdns-open-log-filter-ready', handleOpenLogFilter)
+  window.addEventListener('atomdns-log-refresh', handleGlobalRefresh)
+  window.addEventListener('atomdns-open-log-filter-ready', handleOpenLogFilter)
   await Promise.all([
     loadAliases(),
     loadSpecialGroups()
@@ -578,8 +578,8 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('mosdns-log-refresh', handleGlobalRefresh)
-  window.removeEventListener('mosdns-open-log-filter-ready', handleOpenLogFilter)
+  window.removeEventListener('atomdns-log-refresh', handleGlobalRefresh)
+  window.removeEventListener('atomdns-open-log-filter-ready', handleOpenLogFilter)
 })
 </script>
 

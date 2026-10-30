@@ -8,7 +8,7 @@
 use std::io::{BufRead, BufWriter, Write};
 use std::path::PathBuf;
 
-use mosdns_native_host::{CompiledConfig, MapperOutcome, compile_yaml_with_roots};
+use atomdns_native_host::{CompiledConfig, MapperOutcome, compile_yaml_with_roots};
 use serde_json::{Value, json};
 
 fn wire(name: &str) -> Vec<u8> {
@@ -72,7 +72,7 @@ fn answer(config: &CompiledConfig, request: &Value) -> Value {
                 .as_array()
                 .map(|names| names.iter().filter_map(Value::as_str).collect())
                 .unwrap_or_default();
-            let mut matcher = mosdns_matcher_core::RegexMatcher::new();
+            let mut matcher = atomdns_matcher_core::RegexMatcher::new();
             match matcher.add(pattern) {
                 Ok(()) => json!({"valid": true, "class": "ok",
                     "matches": names.iter().map(|name| matcher.is_match(name)).collect::<Vec<_>>()}),

@@ -30,7 +30,7 @@ testutils/
 demo/
 /.playwright-mcp/
 /.spec-workflow/
-/mosdns
+/atomdns
 
 # macOS metadata
 .DS_Store

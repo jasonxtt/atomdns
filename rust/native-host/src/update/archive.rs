@@ -1,7 +1,7 @@
 //! Minimal, bounded archive readers and writers for the updater.
 //!
 //! No `zip`/`tar` crate is available offline, and the updater only needs four small
-//! things: pull the `rtdns` executable out of a release `tar.gz`, unpack the WebUI
+//! things: pull the `atomdns` executable out of a release `tar.gz`, unpack the WebUI
 //! `tar.gz` into a fresh directory, read a configuration package (a zip of stored or
 //! deflated files), and write a stored zip for the configuration export. Every reader bounds entry counts and sizes before it
 //! allocates, rejects anything it does not understand, and never trusts a name.
@@ -589,10 +589,10 @@ mod tests {
             ("./", b'5', b""),
             ("pax", b'x', b"30 mtime=1\n"),
             ("README", b'0', &[1; 700]),
-            ("./bin/mosdns", b'0', b"ELF-binary"),
+            ("./bin/atomdns", b'0', b"ELF-binary"),
         ]);
         assert_eq!(
-            extract_tar_gz_file(&archive, "mosdns", 1 << 20, 1 << 20).unwrap(),
+            extract_tar_gz_file(&archive, "atomdns", 1 << 20, 1 << 20).unwrap(),
             b"ELF-binary"
         );
         assert!(
@@ -728,32 +728,33 @@ mod tests {
 
     #[test]
     fn a_directory_or_link_named_like_the_executable_is_not_the_executable() {
-        let archive = tar_gz(&[("mosdns", b'5', b""), ("x/mosdns", b'2', b"")]);
-        assert!(extract_tar_gz_file(&archive, "mosdns", 1 << 20, 1 << 20).is_err());
+        let archive = tar_gz(&[("atomdns", b'5', b""), ("x/atomdns", b'2', b"")]);
+        assert!(extract_tar_gz_file(&archive, "atomdns", 1 << 20, 1 << 20).is_err());
     }
 
     #[test]
     fn size_and_scan_limits_and_truncation_are_errors_not_allocations() {
-        let archive = tar_gz(&[("mosdns", b'0', &[7; 4000])]);
+        let archive = tar_gz(&[("atomdns", b'0', &[7; 4000])]);
         assert!(
-            extract_tar_gz_file(&archive, "mosdns", 3999, 1 << 20)
+            extract_tar_gz_file(&archive, "atomdns", 3999, 1 << 20)
                 .unwrap_err()
                 .contains("size")
         );
-        assert!(extract_tar_gz_file(&archive, "mosdns", 1 << 20, 1024).is_err());
+        assert!(extract_tar_gz_file(&archive, "atomdns", 1 << 20, 1024).is_err());
         assert!(
-            extract_tar_gz_file(&archive[..archive.len() / 2], "mosdns", 1 << 20, 1 << 20).is_err()
+            extract_tar_gz_file(&archive[..archive.len() / 2], "atomdns", 1 << 20, 1 << 20)
+                .is_err()
         );
-        assert!(extract_tar_gz_file(b"not gzip", "mosdns", 1 << 20, 1 << 20).is_err());
+        assert!(extract_tar_gz_file(b"not gzip", "atomdns", 1 << 20, 1 << 20).is_err());
         // An absurd declared size in the header is refused before anything is read.
-        let mut header = tar_header("mosdns", 0, b'0');
+        let mut header = tar_header("atomdns", 0, b'0');
         header[124] = 0x80;
         let mut tar = header.to_vec();
         tar.extend_from_slice(&[0_u8; 2 * BLOCK]);
         let mut gz = GzEncoder::new(Vec::new(), Compression::fast());
         gz.write_all(&tar).unwrap();
         let archive = gz.finish().unwrap();
-        assert!(extract_tar_gz_file(&archive, "mosdns", 1 << 20, 1 << 20).is_err());
+        assert!(extract_tar_gz_file(&archive, "atomdns", 1 << 20, 1 << 20).is_err());
     }
 
     fn deflate(data: &[u8]) -> Vec<u8> {

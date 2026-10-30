@@ -582,7 +582,7 @@ function openLogFilterFromOverview(value, exact = false) {
   }
   closeSlowDetail()
   closeRankingDetail()
-  window.dispatchEvent(new CustomEvent('mosdns-open-log-filter', {
+  window.dispatchEvent(new CustomEvent('atomdns-open-log-filter', {
     detail: {
       value: text,
       exact: Boolean(exact)
@@ -849,7 +849,7 @@ watch(upstreamStatSections, () => nextTick(fitUpstreamColumns))
 
 onMounted(() => {
   reloadOverview(false)
-  window.addEventListener('mosdns-log-refresh', handleGlobalRefresh)
+  window.addEventListener('atomdns-log-refresh', handleGlobalRefresh)
   if (typeof ResizeObserver === 'function' && upstreamWrap.value) {
     upstreamObserver = new ResizeObserver(() => {
       const width = upstreamWrap.value?.clientWidth || 0
@@ -863,7 +863,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   if (cpuFollowUpTimerId) window.clearTimeout(cpuFollowUpTimerId)
-  window.removeEventListener('mosdns-log-refresh', handleGlobalRefresh)
+  window.removeEventListener('atomdns-log-refresh', handleGlobalRefresh)
   upstreamObserver?.disconnect()
 })
 </script>

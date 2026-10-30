@@ -24,7 +24,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_upstream_core::TransportCancellation;
 
 use crate::cache::{CacheCatalog, NativeCacheAdapter};
 use crate::config::{CacheKind, CompiledConfig};
@@ -617,7 +617,7 @@ async fn process_connection(
                         .as_ref()
                         .map_or_else(Vec::new, |control| control.pending_cleanup()),
                     // Every directory under `<config root>/ui/` (`main` at `/`, others at `/<name>/`):
-                    // whether it is mounted and, for a mosdns UI package, its version or the
+                    // whether it is mounted and, for a atomdns UI package, its version or the
                     // reason it is refused. Never affects `ready`.
                     "external_ui": external_ui_json(external_ui.entries()),
                     // The kernel receive buffer each UDP listener was granted
@@ -770,10 +770,10 @@ fn capture_start(body: &[u8]) -> Response {
 }
 
 /// The health document's view of the UI directories: one object per directory under
-/// `ui/` — `name`, `path` (`/` for `main`, else `/<name>/`), `mounted`, `kind` (`mosdns_ui` with a manifest, `static` without one,
+/// `ui/` — `name`, `path` (`/` for `main`, else `/<name>/`), `mounted`, `kind` (`atomdns_ui` with a manifest, `static` without one,
 /// `unusable` for a reserved name or a non-directory), the package's `ui_version`/`built_at`
 /// when it has a compatible manifest, and a `reason` (why it is refused, or the note that a
-/// manifest-less directory is not a mosdns UI package).
+/// manifest-less directory is not a atomdns UI package).
 fn external_ui_json(entries: &[crate::external_ui::Entry]) -> serde_json::Value {
     use crate::external_ui::Kind;
     serde_json::Value::Array(
@@ -785,7 +785,7 @@ fn external_ui_json(entries: &[crate::external_ui::Entry]) -> serde_json::Value 
                     "path": if entry.name == crate::external_ui::MAIN { "/".to_owned() } else { format!("/{}/", entry.name) },
                     "mounted": entry.mounted,
                     "kind": match entry.kind {
-                        Kind::MosdnsUi => "mosdns_ui",
+                        Kind::AtomdnsUi => "atomdns_ui",
                         Kind::Static => "static",
                         Kind::Unusable => "unusable",
                     },
@@ -2680,7 +2680,7 @@ async fn dispatch(
             }
             crate::diag::debug_line!("Metrics endpoint accessed");
             let mut text = String::new();
-            // The reference's registry is name-sorted: `mosdns_aliapi_*` before `mosdns_cache_*`.
+            // The reference's registry is name-sorted: `atomdns_aliapi_*` before `atomdns_cache_*`.
             let snapshot = observer.metrics_snapshot();
             crate::upstream_metrics::render(
                 crate::upstream_metrics::series(config, &snapshot),
@@ -2690,7 +2690,7 @@ async fn dispatch(
             for (index, name) in names.iter().enumerate() {
                 use std::fmt::Write;
                 let kind = if index == 3 { "gauge" } else { "counter" };
-                let _ = writeln!(text, "# TYPE mosdns_cache_{name} {kind}");
+                let _ = writeln!(text, "# TYPE atomdns_cache_{name} {kind}");
                 for item in config
                     .caches
                     .iter()
@@ -2710,7 +2710,7 @@ async fn dispatch(
                         .replace('\n', "\\n");
                     let _ = writeln!(
                         text,
-                        "mosdns_cache_{name}{{tag=\"{tag}\"}} {}",
+                        "atomdns_cache_{name}{{tag=\"{tag}\"}} {}",
                         values[index]
                     );
                 }
@@ -3576,7 +3576,7 @@ mod tests {
     use std::fs;
     use std::sync::Arc;
 
-    use mosdns_upstream_core::TransportCancellation;
+    use atomdns_upstream_core::TransportCancellation;
     use tokio::sync::Semaphore;
 
     use super::{
@@ -3681,8 +3681,10 @@ mod tests {
     }
 
     fn test_root(name: &str) -> std::path::PathBuf {
-        let root =
-            std::env::temp_dir().join(format!("mosdns-native-audit-{name}-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "atomdns-native-audit-{name}-{}",
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("test root");
         root
@@ -3820,7 +3822,7 @@ mod tests {
             drop(observer.admit(
                 client.parse().unwrap(),
                 crate::observer::QueryTransport::Udp,
-                &mosdns_dns_core::QuestionInfo {
+                &atomdns_dns_core::QuestionInfo {
                     qname_wire: vec![1, label, 0],
                     qtype: 1,
                     qclass: 1,
@@ -3873,7 +3875,7 @@ mod tests {
     #[test]
     fn canceled_audit_read_releases_its_slot_only_after_worker_exit() {
         let observer = Arc::new(QueryObserver::new(true, [], 20_000));
-        let question = mosdns_dns_core::QuestionInfo {
+        let question = atomdns_dns_core::QuestionInfo {
             qname_wire: vec![3, b'r', b'e', b'c', 0],
             qtype: 1,
             qclass: 1,

@@ -1,5 +1,5 @@
 //! Standalone diagnostic, excluded from formal timing binaries.
-use mosdns_matcher_core::{ValuedDomainMatcher, ValuedRule};
+use atomdns_matcher_core::{ValuedDomainMatcher, ValuedRule};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::hash::{Hash, Hasher};
 use std::hint::black_box;
@@ -54,7 +54,7 @@ fn main() {
             .to_str()
             .unwrap();
         let items = if path.ends_with(".srs") {
-            mosdns_matcher_core::decode_domain_srs(&bytes, true)
+            atomdns_matcher_core::decode_domain_srs(&bytes, true)
                 .unwrap()
                 .rules
         } else {
@@ -138,7 +138,7 @@ fn main() {
     );
     // Optional private, byte-for-byte metadata evidence. Keep filesystem I/O
     // outside the heap/build/lookup measurement above; never publish names.
-    if let Some(path) = std::env::var_os("RTDNS_MEMORY_PROBE_OUTPUT") {
+    if let Some(path) = std::env::var_os("ATOMDNS_MEMORY_PROBE_OUTPUT") {
         use std::io::Write;
         let mut output = std::io::BufWriter::new(std::fs::File::create(path).unwrap());
         for name in queries.iter().step_by((queries.len() / 10000).max(1)) {

@@ -16,13 +16,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use base64::Engine as _;
-use fixtures::FixtureSet;
-use mosdns_upstream_core::secure::SecureResponse;
-use mosdns_upstream_core::{
+use atomdns_upstream_core::secure::SecureResponse;
+use atomdns_upstream_core::{
     DohEndpoint, DohReuseOwner, ExchangeContext, ExchangeRequest, SecureError, TlsPolicy,
     TransportCancellation,
 };
+use base64::Engine as _;
+use fixtures::FixtureSet;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener as AsyncTcpListener;
 use tokio_rustls::TlsAcceptor;
@@ -593,7 +593,7 @@ fn doh_reuse_honors_an_expired_deadline_without_dialing() {
             panic!("an expired deadline must be refused");
         };
         assert!(
-            matches!(error, mosdns_upstream_core::SecureError::Transport(_)),
+            matches!(error, atomdns_upstream_core::SecureError::Transport(_)),
             "an expired deadline is a typed transport control error, got {error:?}"
         );
         assert_eq!(server.accepts(), 0, "an expired deadline must not dial");
@@ -616,11 +616,11 @@ fn doh_reuse_close_is_idempotent_and_drops_the_session() {
 
         assert_eq!(
             owner.close().await,
-            mosdns_upstream_core::CloseResult::Closed
+            atomdns_upstream_core::CloseResult::Closed
         );
         assert_eq!(
             owner.close().await,
-            mosdns_upstream_core::CloseResult::AlreadyClosed,
+            atomdns_upstream_core::CloseResult::AlreadyClosed,
             "repeated close converges"
         );
         assert_eq!(owner.idle_connections(), 0, "close drops the session");

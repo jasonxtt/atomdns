@@ -26,7 +26,7 @@ def run(root, freeze, gate=False):
     five_d_1 = HERE.parent / '5d-1'
     paths = [five_d_1 / n for n in ('load.py', 'run.py', 'summarize.py', 'budget.py')]
     paths += [HERE.parent / 'e2e-1' / n for n in ('prepare.py', 'mock.py', 'dnswire.py')]
-    paths += [root / n for n in ('mosdns-go', 'mosdns-native')]
+    paths += [root / n for n in ('mosdns-go', 'atomdns-native')]
     paths += [p for p in (root / 'prepared').rglob('*') if p.is_file() and 'cache' not in p.parts]
     hashes = {str(p): digest(p) for p in paths}
     plan = []
@@ -44,7 +44,7 @@ def run(root, freeze, gate=False):
         if digest(freeze) != FROZEN or any(digest(p) != hashes[str(p)] for p in paths):
             raise ValueError('a pinned input changed during the matrix')
         argv = [sys.executable, str(five_d_1 / 'run.py'), 'run', '--work', str(root / 'prepared'),
-                '--output', str(root / item['name']), '--binary', str(root / ('mosdns-' + item['role'])),
+                '--output', str(root / item['name']), '--binary', str(root / ('atomdns-' + item['role'])),
                 '--role', item['role'], '--seed', str(item['seed']), '--freeze-record', str(freeze)]
         if item['role'] == 'native':
             argv += ['--oracle', str(root / 'prepared/native-oracle.json')]

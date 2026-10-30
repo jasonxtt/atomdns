@@ -1,5 +1,5 @@
 // Auto refresh of the current page, kept in this browser only.
-export const AUTO_REFRESH_STORAGE_KEY = 'rtdns-auto-refresh'
+export const AUTO_REFRESH_STORAGE_KEY = 'atomdns-auto-refresh'
 
 export function normalizeAutoRefreshState(state = {}) {
   return {
@@ -20,6 +20,6 @@ export function loadAutoRefreshState() {
 export function saveAutoRefreshState(state) {
   const normalized = normalizeAutoRefreshState(state)
   try { localStorage.setItem(AUTO_REFRESH_STORAGE_KEY, JSON.stringify(normalized)) } catch { /* kept for this page only */ }
-  window.dispatchEvent(new CustomEvent('mosdns-auto-refresh-update', { detail: normalized }))
+  window.dispatchEvent(new CustomEvent('atomdns-auto-refresh-update', { detail: normalized }))
   return normalized
 }

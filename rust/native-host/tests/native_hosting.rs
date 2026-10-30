@@ -27,7 +27,7 @@ fn basename_config_serves_its_external_mount_in_actual_process() {
         std::fs::write(root.join("config.yaml"), format!("log: {{level: error}}\napi: {{http: '127.0.0.1:{api}'}}\nplugins:\n  - tag: forward\n    type: forward\n    args: {{upstreams: [{{addr: 'udp://127.0.0.1:9'}}]}}\n  - tag: entry\n    type: sequence\n    args: [{{exec: $forward}}]\n  - tag: main\n    type: udp_server\n    args: {{entry: entry, listen: '127.0.0.1:{dns}', enable_audit: false}}\n")).unwrap();
         drop(tcp);
         drop(udp);
-        let mut command = Command::new(env!("CARGO_BIN_EXE_rtdns"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_atomdns"));
         command
             .args(["start", "-c", "config.yaml"])
             .current_dir(&root)

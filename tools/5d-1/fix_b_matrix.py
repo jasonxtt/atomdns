@@ -14,7 +14,7 @@ def run(root, freeze):
     here = pathlib.Path(__file__).resolve().parent
     paths = [here / name for name in ('load.py', 'run.py', 'fix_b_matrix.py')]
     paths += [here.parent / 'e2e-1' / name for name in ('prepare.py', 'mock.py', 'dnswire.py')]
-    paths += [root / name for name in ('mosdns-go', 'mosdns-native')]
+    paths += [root / name for name in ('mosdns-go', 'atomdns-native')]
     paths += [p for p in (root / 'prepared').rglob('*') if p.is_file()]
     hashes = {str(path): digest(path) for path in paths}
     plan = [dict(name=f'{role}-r{repeat}', role=role, seed=seed)
@@ -31,7 +31,7 @@ def run(root, freeze):
         if digest(freeze) != evidence['freeze_sha256'] or any(digest(p) != hashes[str(p)] for p in paths):
             raise ValueError('pinned input changed')
         argv = [sys.executable, str(here / 'run.py'), 'run', '--work', str(root / 'prepared'),
-                '--output', str(root / item['name']), '--binary', str(root / ('mosdns-' + item['role'])),
+                '--output', str(root / item['name']), '--binary', str(root / ('atomdns-' + item['role'])),
                 '--role', item['role'], '--seed', str(item['seed']), '--freeze-record', str(freeze),
                 '--rates', *map(str, evidence['rates'])]
         if item['role'] == 'native':

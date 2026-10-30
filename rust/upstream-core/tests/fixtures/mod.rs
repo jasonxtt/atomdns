@@ -145,8 +145,8 @@ impl FixtureSet {
     /// The keys are new on every call, which is what makes the material
     /// per-run rather than a committed constant.
     pub fn generate() -> Self {
-        let root_a = RootAuthority::generate("mosdns-slice1-synthetic-root-a");
-        let root_b = RootAuthority::generate("mosdns-slice1-synthetic-root-b");
+        let root_a = RootAuthority::generate("atomdns-slice1-synthetic-root-a");
+        let root_b = RootAuthority::generate("atomdns-slice1-synthetic-root-b");
 
         let good = root_a.issue_leaf("dns.example", (2024, 1, 1), (2036, 1, 1), 2001);
         let wrong_name = root_a.issue_leaf("other.example", (2024, 1, 1), (2036, 1, 1), 2002);

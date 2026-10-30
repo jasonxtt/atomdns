@@ -1,4 +1,4 @@
-use mosdns_native_host::compile_yaml;
+use atomdns_native_host::compile_yaml;
 fn config(enabled: bool, rules: &str, extra: &str) -> String {
     format!(
         "log: {{level: error}}\nplugins:\n  - tag: cache\n    type: cache\n    args: {{enable_ecs: {enabled}}}\n  - tag: ecs\n    type: ecs_handler\n    args: {{send: true}}\n  - tag: up\n    type: forward\n    args: {{upstreams: [{{addr: 'udp://127.0.0.1:19907'}}]}}\n{extra}  - tag: main\n    type: sequence\n    args:\n{rules}\n  - tag: listener\n    type: udp_server\n    args: {{entry: main, listen: '127.0.0.1:19908', enable_audit: false}}\n"
@@ -227,7 +227,7 @@ fn response(raw: &[u8], last: u8) -> Vec<u8> {
 }
 #[test]
 fn full_ecs_keys_partition_exact_network_family_and_mask() {
-    use mosdns_native_host::{CacheTestClock, NativeCacheAdapter};
+    use atomdns_native_host::{CacheTestClock, NativeCacheAdapter};
     let cache = NativeCacheAdapter::for_test(CacheTestClock::new(100))
         .unwrap()
         .with_ecs(true);
@@ -308,7 +308,7 @@ fn jump_inherited_continuation_is_checked_but_child_boundary_is_respected() {
 
 #[test]
 fn refresh_singleflight_uses_full_ecs_key() {
-    use mosdns_native_host::{CacheTestClock, NativeCacheAdapter};
+    use atomdns_native_host::{CacheTestClock, NativeCacheAdapter};
     use std::{cell::Cell, rc::Rc};
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -357,7 +357,7 @@ fn refresh_singleflight_uses_full_ecs_key() {
 
 #[test]
 fn family2_mapped_string_matches_go_without_changing_wire_family() {
-    use mosdns_native_host::{CacheTestClock, NativeCacheAdapter};
+    use atomdns_native_host::{CacheTestClock, NativeCacheAdapter};
     let cache = NativeCacheAdapter::for_test(CacheTestClock::new(100))
         .unwrap()
         .with_ecs(true);

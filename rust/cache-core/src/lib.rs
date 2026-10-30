@@ -1,4 +1,4 @@
-//! `MosDNS` Rust cache core: the safe [`NativeCache`] used by the native host.
+//! `AtomDNS` Rust cache core: the safe [`NativeCache`] used by the native host.
 //! (The former C ABI and its handle registry were removed with the Go bridge in Phase 6a.)
 
 #![allow(clippy::missing_errors_doc)]

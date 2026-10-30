@@ -88,12 +88,12 @@ async function restore(row) {
 
 onMounted(() => {
   load()
-  window.addEventListener('mosdns-log-refresh', load)
-  window.addEventListener('mosdns-capabilities-ready', load)
+  window.addEventListener('atomdns-log-refresh', load)
+  window.addEventListener('atomdns-capabilities-ready', load)
 })
 onBeforeUnmount(() => {
-  window.removeEventListener('mosdns-log-refresh', load)
-  window.removeEventListener('mosdns-capabilities-ready', load)
+  window.removeEventListener('atomdns-log-refresh', load)
+  window.removeEventListener('atomdns-capabilities-ready', load)
 })
 </script>
 

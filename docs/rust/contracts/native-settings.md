@@ -87,7 +87,7 @@ authority-file commit and startup recovery described in
 
 `config::settings::apply(definitions, settings)` runs inside the shared compile (`start`, `check`, hot apply): validate, resolve references to the literal forms the plugin compilers accept,
 overlay settings, and report every item (`kind`, `object`, `field`, `value`, `source` = `yaml` | `settings`). `domain_output` `enabled` is the plugin's setting (else the YAML `enabled`), and only while the master setting is on. A disabled list records and publishes nothing and injects nothing into the mapper layer.
-`mosdns check` prints `EFFECTIVE <kind> <object> <field>=<value> source=<source>` lines; `GET /api/v1/settings/effective` returns `{settings_file, items}`.
+`atomdns check` prints `EFFECTIVE <kind> <object> <field>=<value> source=<source>` lines; `GET /api/v1/settings/effective` returns `{settings_file, items}`.
 
 ## Hot apply
 
@@ -126,7 +126,7 @@ old generation still run on the DNS thread and can delay answers briefly; UDP qu
 
 ## Migration from the reference override files (M1-f2)
 
-`mosdns-settings-migrate --from <reference dir> [-d <root>] -c <config> --out <dir>` reads `config_overrides.json`, `upstream_overrides.json` and `domain_generation_settings.json`
+`atomdns-settings-migrate --from <reference dir> [-d <root>] -c <config> --out <dir>` reads `config_overrides.json`, `upstream_overrides.json` and `domain_generation_settings.json`
 (in `webinfo/`, `state/` or the directory itself), compiles the native configuration to get the YAML defaults, and writes `settings.json` (address/switch differences plus managed upstream lists) and `migration-report.txt` to `--out`. Mapped upstream lists remain stored even when equal to YAML so their enabled-count concurrency survives migration.
 It never changes its inputs or the native root. Exit code 0: everything mapped; 1: the report lists items that need a person (enabled signed-API entries, `so_mark`/`bind_to_device`/pipeline/HTTP3/QUIC/idle-timeout entries,
 an entry's own `socks5` that differs from the global one, `replacements`, tags the configuration does not have, an enabled entry without a tag); 2: usage, I/O, parse or the migrated settings do not load.

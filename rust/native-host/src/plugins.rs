@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use mosdns_sequence_core::{
+use atomdns_sequence_core::{
     ExecutionState, Executor, ExecutorError, ExecutorOutcome, MatchOutcome, Matcher, MatcherError,
     ResponseState, RoutingField, StateMutation,
 };
@@ -263,7 +263,7 @@ fn response_rcode(response: &ResponseState) -> Option<i64> {
             if wire[10] == 0 && wire[11] == 0 {
                 return Some(i64::from(wire[3] & 0x0f));
             }
-            mosdns_dns_core::observe_response_metadata(wire)
+            atomdns_dns_core::observe_response_metadata(wire)
                 .ok()
                 .map(|metadata| i64::from(metadata.rcode))
         }
@@ -326,9 +326,9 @@ pub(crate) fn parse_sleep_millis(args: &str) -> Result<Duration, String> {
 
 #[cfg(test)]
 mod tests {
-    use mosdns_sequence_core::ExecutionState;
+    use atomdns_sequence_core::ExecutionState;
 
-    use mosdns_sequence_core::{Executor, ResponseState, StateMutation};
+    use atomdns_sequence_core::{Executor, ResponseState, StateMutation};
 
     use super::{
         DropRespExecutor, FastMarkConfig, FlowSetterConfig, RcodeConfig, TagSetterConfig,
@@ -337,7 +337,7 @@ mod tests {
 
     fn state() -> ExecutionState {
         ExecutionState::new(
-            mosdns_dns_core::QueryHeader {
+            atomdns_dns_core::QueryHeader {
                 id: 1,
                 qr: false,
                 opcode: 0,
@@ -348,7 +348,7 @@ mod tests {
                 rd: false,
                 cd: false,
             },
-            mosdns_dns_core::QuestionInfo {
+            atomdns_dns_core::QuestionInfo {
                 qname_wire: vec![0],
                 qtype: 1,
                 qclass: 1,
@@ -462,7 +462,7 @@ mod tests {
     fn tag_setter_overwrites_clears_and_leaves_other_routing_alone() {
         let mut state = state();
         state.apply_mutation(StateMutation::SetRouting {
-            field: mosdns_sequence_core::RoutingField::MatchedRuleSource,
+            field: atomdns_sequence_core::RoutingField::MatchedRuleSource,
             value: Some("source".to_owned()),
         });
         TagSetterConfig::new("first")
@@ -491,7 +491,7 @@ mod tests {
         state.fast_flags = 1 << 4;
         state.apply_mutation(StateMutation::AddMark(9));
         state.apply_mutation(StateMutation::SetRouting {
-            field: mosdns_sequence_core::RoutingField::DomainSet,
+            field: atomdns_sequence_core::RoutingField::DomainSet,
             value: Some("tag".to_owned()),
         });
         DropRespExecutor.execute(&mut state).unwrap();

@@ -4,14 +4,14 @@
 use std::io::Write;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mosdns_native_host::CliCommand::Start { config, dir } =
-        mosdns_native_host::parse_args(std::env::args_os())?
+    let atomdns_native_host::CliCommand::Start { config, dir } =
+        atomdns_native_host::parse_args(std::env::args_os())?
     else {
         return Err("observer launcher requires start".into());
     };
-    mosdns_native_host::configure_process_memory();
-    let (config, root) = mosdns_native_host::resolve_config_paths(&config, dir.as_deref())?;
-    let host = mosdns_native_host::HostAssembly::from_config_file_in(&config, root.as_deref())?;
+    atomdns_native_host::configure_process_memory();
+    let (config, root) = atomdns_native_host::resolve_config_paths(&config, dir.as_deref())?;
+    let host = atomdns_native_host::HostAssembly::from_config_file_in(&config, root.as_deref())?;
     let mut output = std::fs::File::create(std::env::var("FIVE_D_OBSERVE_PATH")?)?;
     let began = std::time::Instant::now();
     host.block_on(async {

@@ -1,7 +1,7 @@
 """Runs a plan of 5D-2 scenarios one after another; every attempt is kept.
 
     python3 tools/5d-2/run_all.py --work prepared --root runs \
-        --go mosdns-go --native mosdns-native --plan F1,F2a:native=3,go=1
+        --go mosdns-go --native atomdns-native --plan F1,F2a:native=3,go=1
 
 A plan item is `NAME` (defaults: native x3 and, for F scenarios, go x1) or
 `NAME:native=N,go=M`. No retries, no replacement: a failed run is recorded and the

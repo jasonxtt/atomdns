@@ -6,8 +6,8 @@ import CapabilityBoundary from '../../components/CapabilityBoundary.vue'
 import SettingRow from '../../components/settings/SettingRow.vue'
 import { clearTopNotice, setError, setSuccess } from '../../utils/notice'
 
-const CONFIG_DIR_KEY = 'rtdns-config-dir'
-const BACKUP_FILENAME = 'rtdns_backup.zip'
+const CONFIG_DIR_KEY = 'atomdns-config-dir'
+const BACKUP_FILENAME = 'atomdns_backup.zip'
 
 function readConfigDir() {
   try { return localStorage.getItem(CONFIG_DIR_KEY) || '' } catch { return '' }
@@ -24,7 +24,7 @@ async function backupConfig() {
   if (!supportsOperation('system.config_management')) return
   const dir = String(configDir.value || '').trim()
   if (!dir) {
-    setError('请先输入 rtdns 的配置目录')
+    setError('请先输入 AtomDNS 的配置目录')
     return
   }
   clearTopNotice()
@@ -62,8 +62,8 @@ async function backupConfig() {
 <template>
   <!-- One tile of the 配置与UI group (mounted by SystemUpdateSection). -->
   <CapabilityBoundary operation="system.config_management">
-    <SettingRow label="备份配置" layout="form" description="把配置目录打包成 zip 下载（不含 backup、update 目录），目录须是 rtdns 实际使用的配置目录">
-      <input v-model="configDir" class="rt-setting-input" placeholder="/etc/rtdns" aria-label="配置目录" @change="saveConfigDir" />
+    <SettingRow label="备份配置" layout="form" description="把配置目录打包成 zip 下载（不含 backup、update 目录），目录须是 AtomDNS 实际使用的配置目录">
+      <input v-model="configDir" class="rt-setting-input" placeholder="/etc/atomdns" aria-label="配置目录" @change="saveConfigDir" />
       <button class="btn tiny primary" :disabled="backingUp" @click="backupConfig">{{ backingUp ? '备份中...' : '备份' }}</button>
     </SettingRow>
   </CapabilityBoundary>

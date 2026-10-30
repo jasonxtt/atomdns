@@ -6,9 +6,9 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use mosdns_dns_core::{inspect_response_header, parse_query, validate_response};
-use mosdns_native_host::{HostAssembly, HostOptions, UdpServer, compile_yaml};
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_dns_core::{inspect_response_header, parse_query, validate_response};
+use atomdns_native_host::{HostAssembly, HostOptions, UdpServer, compile_yaml};
+use atomdns_upstream_core::TransportCancellation;
 
 struct Peer {
     address: SocketAddr,
@@ -62,7 +62,7 @@ impl Peer {
     }
 }
 
-fn response_for(query: &[u8], question: &mosdns_dns_core::QuestionInfo) -> Vec<u8> {
+fn response_for(query: &[u8], question: &atomdns_dns_core::QuestionInfo) -> Vec<u8> {
     let (header, _) = parse_query(query).expect("query");
     let mut response = Vec::new();
     response.extend_from_slice(&header.id.to_be_bytes());

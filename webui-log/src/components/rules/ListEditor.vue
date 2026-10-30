@@ -134,10 +134,10 @@ function revert() {
 
 onMounted(() => {
   load()
-  window.addEventListener('mosdns-log-refresh', refresh)
+  window.addEventListener('atomdns-log-refresh', refresh)
 })
 onBeforeUnmount(() => {
-  window.removeEventListener('mosdns-log-refresh', refresh)
+  window.removeEventListener('atomdns-log-refresh', refresh)
   clearDirty(uid)
 })
 </script>

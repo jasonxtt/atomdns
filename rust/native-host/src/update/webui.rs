@@ -1,5 +1,5 @@
 //! The WebUI directory `<root>/ui/main` in an update: an online update replaces it with
-//! the release's `rtdns-webui.tar.gz` **only when it already exists** as a real directory,
+//! the release's `atomdns-webui.tar.gz` **only when it already exists** as a real directory,
 //! inside the same transaction as the program and the configuration package.
 //!
 //! Installing is two renames — the old directory into the transaction (`webui/previous`),

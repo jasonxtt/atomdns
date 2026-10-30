@@ -18,7 +18,7 @@ def run(root, freeze):
     here = pathlib.Path(__file__).resolve().parent
     paths = [here/name for name in ('load.py', 'run.py', 'scenario_f.py', 'fix_a_matrix.py')]
     paths += [here.parent/'e2e-1'/name for name in ('prepare.py', 'mock.py', 'dnswire.py')]
-    paths += [root/name for name in ('mosdns-go', 'mosdns-native')]
+    paths += [root/name for name in ('mosdns-go', 'atomdns-native')]
     paths += [root/'prepared-final'/name for name in ('weighted-corpus.json', 'oracle.json', 'native-oracle.json')]
     hashes = {str(path): digest(path) for path in paths}
     plan = [dict(name=f'{role}-{scenario}-r{repeat}', role=role, scenario=scenario, seed=seed)
@@ -34,7 +34,7 @@ def run(root, freeze):
         if digest(freeze) != evidence['freeze_sha256'] or any(digest(path) != hashes[str(path)] for path in paths):
             raise ValueError('pinned inputs changed during matrix')
         argv = [sys.executable, str(here/'run.py'), 'run', '--work', str(root/'prepared-final'),
-                '--output', str(root/item['name']), '--binary', str(root/('mosdns-'+item['role'])),
+                '--output', str(root/item['name']), '--binary', str(root/('atomdns-'+item['role'])),
                 '--role', item['role'], '--seed', str(item['seed']), '--freeze-record', str(freeze)]
         if item['role'] == 'native':
             argv += ['--oracle', str(root/'prepared-final/native-oracle.json')]

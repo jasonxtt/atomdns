@@ -1,6 +1,6 @@
 //! Startup-pinned UI registry and request-owned blocking file work: the WebUI
 //! `<config root>/ui/main/` at `/`, every other `ui/<name>/` at `/<name>/`.
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_upstream_core::TransportCancellation;
 #[cfg(target_os = "linux")]
 use std::collections::BTreeMap;
 use std::{io, path::Path, sync::Arc};
@@ -12,8 +12,8 @@ use tokio::{io::AsyncWriteExt, sync::mpsc};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) enum Kind {
-    /// It carries a `ui-manifest.json`: a mosdns UI package, mounted only when compatible.
-    MosdnsUi,
+    /// It carries a `ui-manifest.json`: a atomdns UI package, mounted only when compatible.
+    AtomdnsUi,
     /// No manifest: any static pages the operator put there, served as before.
     Static,
     /// Not served: a reserved or invalid name, or not a plain directory.
@@ -37,7 +37,7 @@ pub(crate) struct Entry {
 const MAX_LISTED: usize = 64;
 /// The note for a directory served without a manifest.
 #[cfg(target_os = "linux")]
-pub(crate) const NO_MANIFEST_NOTE: &str = "非 mosdns UI 包（无 manifest）";
+pub(crate) const NO_MANIFEST_NOTE: &str = "非 atomdns UI 包（无 manifest）";
 
 #[derive(Default)]
 pub(crate) struct Registry {
@@ -157,13 +157,13 @@ impl Registry {
                                     (true, Kind::Static, None, Some(NO_MANIFEST_NOTE.to_owned()))
                                 }
                                 Inspection::Package(Ok(info)) => {
-                                    (true, Kind::MosdnsUi, Some(info), None)
+                                    (true, Kind::AtomdnsUi, Some(info), None)
                                 }
                                 Inspection::Package(Err(reason)) => {
                                     crate::diag::warn_line!(
                                         "external UI package `ui/{name}` is not mounted: {reason}"
                                     );
-                                    (false, Kind::MosdnsUi, None, Some(reason))
+                                    (false, Kind::AtomdnsUi, None, Some(reason))
                                 }
                             };
                             if mounted && name == MAIN {
@@ -375,7 +375,7 @@ impl Registry {
 enum Inspection {
     /// No `ui-manifest.json`: generic static pages.
     NoManifest,
-    /// A mosdns UI package: compatible (`Ok`) or the reason it is refused.
+    /// A atomdns UI package: compatible (`Ok`) or the reason it is refused.
     Package(Result<crate::ui_manifest::UiInfo, String>),
 }
 
@@ -615,7 +615,7 @@ mod tests {
 
     /// A configuration root whose `ui/` holds one directory per `(name, files)` entry.
     fn root_with(label: &str, packages: &[(&str, &[(&str, &str)])]) -> std::path::PathBuf {
-        let root = std::env::temp_dir().join(format!("mosdns-ui-{label}-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("atomdns-ui-{label}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("ui")).unwrap();
         for (name, files) in packages {
@@ -666,7 +666,7 @@ mod tests {
         let registry = Registry::scan(Some(&root));
         for name in ["pg", "a"] {
             let found = entry(&registry, name);
-            assert!(found.mounted && found.kind == Kind::MosdnsUi && found.reason.is_none());
+            assert!(found.mounted && found.kind == Kind::AtomdnsUi && found.reason.is_none());
             assert_eq!(found.info.as_ref().unwrap().ui_version, "v9");
             assert_eq!(
                 found.info.as_ref().unwrap().built_at.as_deref(),
@@ -684,7 +684,7 @@ mod tests {
             ("no-index", "缺少 index.html"),
         ] {
             let found = entry(&registry, name);
-            assert!(!found.mounted && found.kind == Kind::MosdnsUi, "{name}");
+            assert!(!found.mounted && found.kind == Kind::AtomdnsUi, "{name}");
             assert!(
                 found.reason.as_deref().unwrap().contains(reason),
                 "{name}: {found:?}"
@@ -741,7 +741,7 @@ mod tests {
 
     #[test]
     fn symlinked_or_missing_ui_directories_are_listed_or_empty() {
-        let root = std::env::temp_dir().join(format!("mosdns-ui-links-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("atomdns-ui-links-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("ui/real")).unwrap();
         std::fs::write(root.join("ui/real/index.html"), "x").unwrap();
@@ -761,7 +761,7 @@ mod tests {
     }
     #[test]
     fn blocking_owner_retains_permits_and_shutdown_joins_started_io() {
-        let root = std::env::temp_dir().join(format!("mosdns-ui-owned-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("atomdns-ui-owned-{}", std::process::id()));
         std::fs::create_dir_all(root.join("ui/demo")).unwrap();
         std::fs::write(root.join("ui/demo/index.html"), "proof").unwrap();
         let gate = Arc::new(IoGate::default());
@@ -878,7 +878,7 @@ mod tests {
         std::os::unix::fs::symlink(root.join("secret.txt"), root.join("ui/main/link.txt")).unwrap();
         let registry = Registry::scan(Some(&root));
         let main = entry(&registry, "main");
-        assert!(main.mounted && main.kind == Kind::MosdnsUi);
+        assert!(main.mounted && main.kind == Kind::AtomdnsUi);
         assert!(registry.main.is_some() && !registry.mounts.contains_key("main"));
         let chunks = entry(&registry, "chunks");
         assert!(!chunks.mounted && chunks.reason.as_deref().unwrap().contains("保留名"));

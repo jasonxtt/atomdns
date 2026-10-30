@@ -4,7 +4,7 @@ import { lstatSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 const root = process.cwd()
-const version = process.env.MOSDNS_BUILD_VERSION
+const version = process.env.ATOMDNS_BUILD_VERSION
 if (!version?.trim() || /[\r\n]/.test(version)) throw new Error('invalid product version')
 const [mode, manifestPath, artifactPath] = process.argv.slice(2)
 const hash = p => createHash('sha256').update(readFileSync(path.resolve(root,p))).digest('hex')

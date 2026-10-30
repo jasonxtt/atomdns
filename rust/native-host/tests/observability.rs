@@ -1,4 +1,4 @@
-use mosdns_native_host::{HostAssembly, HostOptions};
+use atomdns_native_host::{HostAssembly, HostOptions};
 
 const UDP_CONFIG: &str = include_str!("../../../tests/phase5a-baseline/configs/forward-udp.yaml");
 
@@ -38,7 +38,7 @@ fn host_exposes_stable_empty_metrics_and_disabled_audit_snapshots() {
 #[test]
 fn audit_enabled_yaml_assembles_and_test_capacity_is_explicit() {
     let yaml = UDP_CONFIG.replace("enable_audit: false", "enable_audit: true");
-    let config = mosdns_native_host::compile_yaml(&yaml)
+    let config = atomdns_native_host::compile_yaml(&yaml)
         .expect("the existing listener audit flag is accepted");
     let options = HostOptions::default().with_audit_capacity(2);
     let host = HostAssembly::with_options(config, options)

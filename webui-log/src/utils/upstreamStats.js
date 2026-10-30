@@ -65,15 +65,15 @@ function assignMetricValue(bucket, field, value) {
 
 function metricRule(metricName) {
   switch (metricName) {
-    case 'mosdns_aliapi_query_total':
+    case 'atomdns_aliapi_query_total':
       return { field: 'queryTotal', groupLabel: 'metrics_tag', tagLabel: 'tag' }
-    case 'mosdns_aliapi_error_total':
+    case 'atomdns_aliapi_error_total':
       return { field: 'errorTotal', groupLabel: 'metrics_tag', tagLabel: 'tag' }
-    case 'mosdns_aliapi_upstream_winner_total':
+    case 'atomdns_aliapi_upstream_winner_total':
       return { field: 'winnerTotal', groupLabel: 'metrics_tag', tagLabel: 'tag' }
-    case 'mosdns_aliapi_response_latency_millisecond_sum':
+    case 'atomdns_aliapi_response_latency_millisecond_sum':
       return { field: 'latencySum', groupLabel: 'metrics_tag', tagLabel: 'tag' }
-    case 'mosdns_aliapi_response_latency_millisecond_count':
+    case 'atomdns_aliapi_response_latency_millisecond_count':
       return { field: 'latencyCount', groupLabel: 'metrics_tag', tagLabel: 'tag' }
     default:
       return null

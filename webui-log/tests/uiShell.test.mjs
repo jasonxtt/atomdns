@@ -144,20 +144,20 @@ test('CPU percent is CPU seconds over wall seconds between two samples, one core
 
 test('the process and cache figures are read from the metrics text', () => {
   const text = [
-    '# TYPE mosdns_cache_query_total counter',
-    'mosdns_cache_query_total{tag="cache_a"} 300',
-    'mosdns_cache_query_total{tag="cache_b"} 100',
-    'mosdns_cache_hit_total{tag="cache_a"} 270',
-    'mosdns_cache_hit_total{tag="cache_b"} 50',
-    'mosdns_cache_lazy_hit_total{tag="cache_a"} 7',
+    '# TYPE atomdns_cache_query_total counter',
+    'atomdns_cache_query_total{tag="cache_a"} 300',
+    'atomdns_cache_query_total{tag="cache_b"} 100',
+    'atomdns_cache_hit_total{tag="cache_a"} 270',
+    'atomdns_cache_hit_total{tag="cache_b"} 50',
+    'atomdns_cache_lazy_hit_total{tag="cache_a"} 7',
     'process_cpu_seconds_total 12.5',
     'process_resident_memory_bytes 52428800',
     'process_start_time_seconds 1700000000',
     'process_open_fds 31',
-    'mosdns_process_threads 6'
+    'atomdns_process_threads 6'
   ].join('\n')
   assert.equal(cacheHitPercent(text), 80)
-  assert.equal(cacheHitPercent('mosdns_cache_query_total{tag="a"} 0'), null)
+  assert.equal(cacheHitPercent('atomdns_cache_query_total{tag="a"} 0'), null)
   assert.deepEqual(parseProcessMetrics(text), { cpuSeconds: 12.5, residentBytes: 52428800, startTime: 1700000000, threads: 6, openFds: 31 })
   assert.deepEqual(parseProcessMetrics(''), { cpuSeconds: null, residentBytes: null, startTime: null, threads: null, openFds: null })
 })
@@ -169,20 +169,19 @@ test('the coverage note names the span of the retained records and their count',
   assert.equal(coverageText(undefined, '2026-10-23T11:00:00Z', 0), '审计保留记录 · 0 条')
 })
 
-test('the shell keeps the localStorage keys under the rtdns- prefix and shows no MosDNS name', () => {
+test('the shell keeps the localStorage keys under the atomdns- prefix and shows the AtomDNS name', () => {
   const rules = ['components/rules', 'pages/rules'].flatMap((dir) => readdirSync(new URL(`../src/${dir}`, import.meta.url)).map((name) => `../src/${dir}/${name}`))
   const sources = ['../src/App.vue', '../src/utils/theme.js', '../src/utils/autoRefresh.js', '../src/pages/system/SystemBackupSection.vue', ...rules]
   for (const path of sources) {
     const source = read(path)
-    for (const match of source.matchAll(/(?:STORAGE_KEY|_KEY) = '([^']+)'/g)) assert.match(match[1], /^rtdns-/, `${path}: ${match[1]}`)
-    assert.doesNotMatch(source, /MosDNS/, path)
+    for (const match of source.matchAll(/(?:STORAGE_KEY|_KEY) = '([^']+)'/g)) assert.match(match[1], /^atomdns-/, `${path}: ${match[1]}`)
   }
-  assert.match(read('../index.html'), /<title>rtdns<\/title>/)
+  assert.match(read('../index.html'), /<title>AtomDNS<\/title>/)
 })
 
 test('behaviour-sensitive table CSS is not reintroduced by the shell', () => {
   const css = read('../src/style.css')
-  const shell = css.slice(css.indexOf('/* ---- rtdns shell'))
+  const shell = css.slice(css.indexOf('/* ---- atomdns shell'))
   assert.ok(shell.length > 0)
   assert.doesNotMatch(shell, /table-layout:\s*fixed|overflow-wrap:\s*anywhere|calc\([^)]*%/)
 })
@@ -226,7 +225,7 @@ test('the rule pages show no internal terms or Go-era names', () => {
       // Visible text only: text nodes and the text attributes of the template part.
       const template = source.slice(source.indexOf('<template>'))
       const visible = [...template.matchAll(/>([^<>]+)</g), ...template.matchAll(/\b(?:hint|description|label|title|placeholder|aria-label)="([^"]+)"/g)].map((match) => match[1].replace(/\{\{.*?\}\}/g, '')).join('\n')
-      assert.doesNotMatch(visible, /requery|route_learner|domain_output|switch\d|MosDNS|Go 版|legacy|兼容分支|unified_matcher/, `${dir}/${name}`)
+      assert.doesNotMatch(visible, /requery|route_learner|domain_output|switch\d|Go 版|legacy|兼容分支|unified_matcher/, `${dir}/${name}`)
     }
   }
 })

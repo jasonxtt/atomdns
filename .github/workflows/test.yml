@@ -1,4 +1,4 @@
-name: Test rtdns
+name: Test atomdns
 
 # Manual only (user decision 2026-10-18): run from the Actions tab or
 # `gh workflow run test.yml --ref main`.

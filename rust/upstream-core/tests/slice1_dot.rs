@@ -19,15 +19,15 @@ use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use fixtures::{FixtureSet, ServerIdentityFixture};
-use mosdns_upstream_core::secure::{
+use atomdns_upstream_core::secure::{
     CertificateRejection, DotUpstream, SecureError, SecureResponse, SecureTransport,
     TlsHandshakeFailure, TlsPolicy,
 };
-use mosdns_upstream_core::{
+use atomdns_upstream_core::{
     CloseResult, CloseTransition, DotEndpoint, ExchangeContext, ExchangeRequest, ServerIdentity,
     SideEffectState, TransportCancellation, UpstreamError,
 };
+use fixtures::{FixtureSet, ServerIdentityFixture};
 use rustls::ServerConfig;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener as AsyncTcpListener, TcpStream};

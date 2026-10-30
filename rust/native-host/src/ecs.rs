@@ -1,5 +1,5 @@
 //! Strict native ECS policy profile, separate from the historical EDNS parser.
-use mosdns_sequence_core::ExecutorError;
+use atomdns_sequence_core::ExecutorError;
 use std::net::IpAddr;
 
 #[derive(Clone, Debug)]
@@ -109,7 +109,7 @@ pub(crate) struct QueryOpt {
 }
 /// Admission has already passed parse_query; validate the supported OPT and all options.
 pub(crate) fn query_opt(raw: &[u8]) -> Result<Option<QueryOpt>, ExecutorError> {
-    let (header, _) = mosdns_dns_core::parse_query(raw).map_err(|_| error("invalid ECS query"))?;
+    let (header, _) = atomdns_dns_core::parse_query(raw).map_err(|_| error("invalid ECS query"))?;
     let mut pos = 12;
     loop {
         let byte = *raw.get(pos).ok_or_else(|| error("short question"))?;
@@ -181,7 +181,7 @@ pub(crate) fn replace_query_ecs(
     let mut wire = raw[..offset].to_vec();
     if opt.is_none() && selected.is_some() {
         let (_, question) =
-            mosdns_dns_core::parse_query(raw).map_err(|_| error("invalid ECS query"))?;
+            atomdns_dns_core::parse_query(raw).map_err(|_| error("invalid ECS query"))?;
         wire.truncate(12);
         wire.extend_from_slice(&question.qname_wire);
         wire.extend_from_slice(&question.qtype.to_be_bytes());
@@ -221,7 +221,7 @@ pub(crate) fn response_wire(
     network_supplier: bool,
 ) -> Result<Vec<u8>, ExecutorError> {
     use hickory_proto::rr::rdata::opt::{EdnsCode, EdnsOption};
-    mosdns_dns_core::validate_response(raw).map_err(|_| error("invalid ECS response DNS"))?;
+    atomdns_dns_core::validate_response(raw).map_err(|_| error("invalid ECS response DNS"))?;
     let mut pos = 12;
     for _ in 0..u16::from_be_bytes([raw[4], raw[5]]) {
         pos = name_end(raw, pos)? + 4;

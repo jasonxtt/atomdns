@@ -13,7 +13,7 @@ cp -a "$SNAP" "$WORK/root"
 python3 "$TOOLS/extract.py" --root "$WORK/root" --config "$CONFIG" --out "$WORK/out"
 if [ -n "${ORACLE_GO:-}" ]; then cp "$ORACLE_GO" "$WORK/oracle-go"
 else "$SRC/tools/go-reference/build.sh" "$WORK/go-reference" m1a1-oracle && cp "$WORK/go-reference/m1a1-oracle" "$WORK/oracle-go"; fi
-(cd "$SRC/rust" && CARGO_TARGET_DIR="$TARGET" cargo build -p mosdns-native-host --example m1a1_oracle >/dev/null)
+(cd "$SRC/rust" && CARGO_TARGET_DIR="$TARGET" cargo build -p atomdns-native-host --example m1a1_oracle >/dev/null)
 NATIVE="$TARGET/debug/examples/m1a1_oracle"
 "$WORK/oracle-go" -root "$WORK/root" -config "$CONFIG" -in "$WORK/out/rules_request.jsonl" -out "$WORK/out/rules_answers.jsonl" 2>"$WORK/out/go-rules.err"
 python3 "$TOOLS/corpus.py" --root "$WORK/root" --config "$CONFIG" --tags "$WORK/out/tags.json" --rules "$WORK/out/rules_answers.jsonl" \

@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use mosdns_native_host::{BoundHost, CompiledConfig, HostAssembly, HostOptions};
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_native_host::{BoundHost, CompiledConfig, HostAssembly, HostOptions};
+use atomdns_upstream_core::TransportCancellation;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -263,7 +263,7 @@ plugins:
 }
 
 fn compile(tree: &Tree) -> CompiledConfig {
-    mosdns_native_host::load_and_compile(&tree.path("config.yaml")).expect("compiles")
+    atomdns_native_host::load_and_compile(&tree.path("config.yaml")).expect("compiles")
 }
 
 fn assemble(config: CompiledConfig) -> HostAssembly {
@@ -456,7 +456,7 @@ fn a_warm_response_keeps_the_current_learned_label_in_the_same_generation() {
         let warm = audit
             .records
             .iter()
-            .find(|row| row.cache_status == mosdns_native_host::CacheStatus::Hit)
+            .find(|row| row.cache_status == atomdns_native_host::CacheStatus::Hit)
             .expect("warm audit row");
         assert_eq!(warm.matched_rule_source.as_deref(), Some("r_direct|wl"));
         assert_eq!(warm.domain_set.as_deref(), Some("DIRECT|STATIC"));
@@ -1131,7 +1131,7 @@ fn bad_configurations_are_refused_with_the_path() {
             patch.0
         );
         tree.write("config.yaml", &yaml.replacen(patch.0, patch.1, 1));
-        let error = mosdns_native_host::load_and_compile(&tree.path("config.yaml"))
+        let error = atomdns_native_host::load_and_compile(&tree.path("config.yaml"))
             .err()
             .unwrap_or_else(|| panic!("{what} must fail"))
             .to_string();
@@ -1148,7 +1148,7 @@ fn bad_configurations_are_refused_with_the_path() {
         "  - tag: second\n    type: route_learner\n    args:\n      target_mapper: unified\n      categories:\n        - {tag: other, mark: 20, label: OTHER, ttl: 100}\n",
         "",
     );
-    let error = mosdns_native_host::load_and_compile(&tree.path("config.yaml"))
+    let error = atomdns_native_host::load_and_compile(&tree.path("config.yaml"))
         .err()
         .expect("second learner")
         .to_string();
@@ -1603,7 +1603,7 @@ fn a_bad_label_is_a_load_error_with_its_path() {
         ),
     ] {
         tree.write("config.yaml", &base.replace(from, to));
-        let error = mosdns_native_host::load_and_compile(&tree.path("config.yaml"))
+        let error = atomdns_native_host::load_and_compile(&tree.path("config.yaml"))
             .err()
             .unwrap_or_else(|| panic!("{path}: a bad label must fail"))
             .to_string();

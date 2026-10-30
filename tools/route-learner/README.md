@@ -1,17 +1,17 @@
 # route-learner differential (M2-2)
 
-VM Linux root, Python 3 + PyYAML, iproute2, util-linux and OpenSSL. This tool builds and deploys nothing. It compares **BEFORE** (the previous `rtdns` + the old `config_rust`, learning through
-`domain_output`) with **AFTER** (the new `rtdns` + the new `config_rust`, learning through `route_learner`) on the same corpus, mocks and learned state, and reports where DNS answers, audit routing
+VM Linux root, Python 3 + PyYAML, iproute2, util-linux and OpenSSL. This tool builds and deploys nothing. It compares **BEFORE** (the previous `atomdns` + the old `config_rust`, learning through
+`domain_output`) with **AFTER** (the new `atomdns` + the new `config_rust`, learning through `route_learner`) on the same corpus, mocks and learned state, and reports where DNS answers, audit routing
 fields or learned sets differ. It reuses `tools/e2e-1` (`prepare.py`, `mock.py`, the audit correlation of `replay.py`, `dnswire.py`).
 
 ```sh
 python3 tools/route-learner/run.py --inputs /private/inputs --work /private/run \
-  --before /private/rtdns-before --after /private/rtdns-after \
-  --migrate /private/mosdns-settings-migrate --names 1500 --groups ABDEF
+  --before /private/atomdns-before --after /private/atomdns-after \
+  --migrate /private/atomdns-settings-migrate --names 1500 --groups ABDEF
 ```
 
 `inputs/` holds `config_all` (only for e2e-1's preparation), `config_rust` (the OLD tree), `config_rust_new` (the NEW tree) and `snapshot/{rule,gen,srs,adguard,webinfo}` (production data;
-read-only, never in the repository). `--work` must not exist. Every host runs with its mocks in its own loopback-only namespace; the original system `mosdns` service is not touched and its identity is checked
+read-only, never in the repository). `--work` must not exist. Every host runs with its mocks in its own loopback-only namespace; the original system `atomdns` service is not touched and its identity is checked
 before and after (`cleanup.json`).
 
 | Group | Start state | Compared |

@@ -14,14 +14,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use fixtures::FixtureSet;
-use mosdns_upstream_core::quic::DOQ_ALPN;
-use mosdns_upstream_core::quic_reuse::{DoqReuseUpstream, MAX_STREAMS_PER_CONNECTION};
-use mosdns_upstream_core::secure::{SecureError, SecureResponse, TlsPolicy};
-use mosdns_upstream_core::{
+use atomdns_upstream_core::quic::DOQ_ALPN;
+use atomdns_upstream_core::quic_reuse::{DoqReuseUpstream, MAX_STREAMS_PER_CONNECTION};
+use atomdns_upstream_core::secure::{SecureError, SecureResponse, TlsPolicy};
+use atomdns_upstream_core::{
     ExchangeContext, ExchangeRequest, ServerIdentity, SideEffectState, TransportCancellation,
     UpstreamError,
 };
+use fixtures::FixtureSet;
 use quinn::crypto::rustls::QuicServerConfig;
 use rustls::ServerConfig;
 use tokio::sync::oneshot;
@@ -254,7 +254,7 @@ impl DoqServer {
 }
 
 fn upstream_with_tls(address: SocketAddr, tls: TlsPolicy) -> DoqReuseUpstream {
-    let endpoint = mosdns_upstream_core::quic::DoqEndpoint::new(
+    let endpoint = atomdns_upstream_core::quic::DoqEndpoint::new(
         address,
         ServerIdentity::new("dns.example").expect("valid identity"),
     )

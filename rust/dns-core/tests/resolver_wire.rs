@@ -1,5 +1,5 @@
 //! Public contract tests for the pure bootstrap DNS wire codec
-//! (`mosdns_dns_core::resolver`).
+//! (`atomdns_dns_core::resolver`).
 //!
 //! Slice 0 of the endpoint-resolution task: query construction, EDNS(0)
 //! advertisement, injected query IDs, exact response correlation, bounded
@@ -8,7 +8,7 @@
 
 use std::net::IpAddr;
 
-use mosdns_dns_core::{
+use atomdns_dns_core::{
     AddressFamily, CnameChainPolicy, QueryIdSource, RESOLVER_DEFAULT_MAX_CNAME_LINKS,
     RESOLVER_MAX_CNAME_LINKS, RESOLVER_UDP_PAYLOAD_SIZE, ResolverWireError, SelectedAddress,
     build_resolver_query, extract_edns_at, parse_query, parse_resolver_response,

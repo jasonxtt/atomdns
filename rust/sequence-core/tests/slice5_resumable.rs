@@ -1,5 +1,5 @@
-use mosdns_dns_core::{QueryHeader, QuestionInfo};
-use mosdns_sequence_core::{
+use atomdns_dns_core::{QueryHeader, QuestionInfo};
+use atomdns_sequence_core::{
     ExecutableId, ExecutableSpec, ExecutionCompletion, ExecutionControl, ExecutionError,
     ExecutionMachine, ExecutionState, Executor, ExecutorError, ExecutorOutcome, ExternalRef,
     ExternalSpec, FixtureRef, FixtureSpec, MachineStep, ProgramSpec, RuleSpec, SequenceSpec,
@@ -29,12 +29,12 @@ fn state() -> ExecutionState {
 
 struct MarkingMatcher;
 
-impl mosdns_sequence_core::Matcher for MarkingMatcher {
+impl atomdns_sequence_core::Matcher for MarkingMatcher {
     fn evaluate(
         &self,
         _state: &ExecutionState,
-    ) -> Result<mosdns_sequence_core::MatchOutcome, mosdns_sequence_core::MatcherError> {
-        Ok(mosdns_sequence_core::MatchOutcome::new(
+    ) -> Result<atomdns_sequence_core::MatchOutcome, atomdns_sequence_core::MatcherError> {
+        Ok(atomdns_sequence_core::MatchOutcome::new(
             true,
             Some(StateMutation::AddMark(77)),
         ))
@@ -62,7 +62,7 @@ impl Executor for FixedExecutor {
 
 fn sync_fixture_program(
     outcome: Result<ExecutorOutcome, ExecutorError>,
-) -> mosdns_sequence_core::ValidatedProgram {
+) -> atomdns_sequence_core::ValidatedProgram {
     ProgramSpec::new(
         vec![SequenceSpec::new(
             "main",
@@ -81,7 +81,7 @@ fn sync_fixture_program(
     .expect("sync parity program validates")
 }
 
-fn external_outcome_program() -> mosdns_sequence_core::ValidatedProgram {
+fn external_outcome_program() -> atomdns_sequence_core::ValidatedProgram {
     ProgramSpec::new(
         vec![SequenceSpec::new(
             "main",
@@ -99,10 +99,10 @@ fn external_outcome_program() -> mosdns_sequence_core::ValidatedProgram {
 }
 
 fn run_sync(
-    program: &mosdns_sequence_core::ValidatedProgram,
+    program: &atomdns_sequence_core::ValidatedProgram,
 ) -> (
     Result<ExecutionCompletion, ExecutionError>,
-    mosdns_sequence_core::StateSnapshot,
+    atomdns_sequence_core::StateSnapshot,
 ) {
     let entry = program.sequence_id("main").expect("main entry");
     let mut state = state();
@@ -112,10 +112,10 @@ fn run_sync(
 }
 
 fn run_owned_sync(
-    program: &mosdns_sequence_core::ValidatedProgram,
+    program: &atomdns_sequence_core::ValidatedProgram,
 ) -> (
     Result<ExecutionCompletion, ExecutionError>,
-    mosdns_sequence_core::StateSnapshot,
+    atomdns_sequence_core::StateSnapshot,
 ) {
     let entry = program.sequence_id("main").expect("main entry");
     let mut machine =
@@ -140,7 +140,7 @@ fn run_owned_external(
     outcome: Result<ExecutorOutcome, ExecutorError>,
 ) -> (
     Result<ExecutionCompletion, ExecutionError>,
-    mosdns_sequence_core::StateSnapshot,
+    atomdns_sequence_core::StateSnapshot,
 ) {
     let program = external_outcome_program();
     let entry = program.sequence_id("main").expect("main entry");
@@ -172,15 +172,15 @@ fn run_owned_external(
 
 fn nested_try_program(
     child_outcome: Result<ExecutorOutcome, ExecutorError>,
-) -> mosdns_sequence_core::ValidatedProgram {
+) -> atomdns_sequence_core::ValidatedProgram {
     ProgramSpec::new(
         vec![
             SequenceSpec::new(
                 "main",
                 vec![
                     RuleSpec::unconditional(Some(vec![ExecutableSpec::Try {
-                        target: mosdns_sequence_core::ExecutableTargetSpec::Sequence(
-                            mosdns_sequence_core::SequenceRef::new("child"),
+                        target: atomdns_sequence_core::ExecutableTargetSpec::Sequence(
+                            atomdns_sequence_core::SequenceRef::new("child"),
                         ),
                     }])),
                     RuleSpec::unconditional(Some(vec![ExecutableSpec::Fixture {
@@ -211,16 +211,16 @@ fn nested_try_program(
     .expect("nested parity program validates")
 }
 
-fn external_program() -> mosdns_sequence_core::ValidatedProgram {
+fn external_program() -> atomdns_sequence_core::ValidatedProgram {
     ProgramSpec::new(
         vec![SequenceSpec::new(
             "main",
             vec![
                 RuleSpec::new(
-                    vec![mosdns_sequence_core::MatcherSpecInput::new(
+                    vec![atomdns_sequence_core::MatcherSpecInput::new(
                         Box::new(MarkingMatcher),
                         false,
-                        mosdns_sequence_core::DispatchMetadata::None,
+                        atomdns_sequence_core::DispatchMetadata::None,
                     )],
                     Some(vec![ExecutableSpec::External {
                         target: ExternalRef::new("forward"),
@@ -428,12 +428,12 @@ fn owned_machine_rejects_a_missing_entry_before_execution() {
     assert!(matches!(
         ExecutionMachine::new(
             &program,
-            mosdns_sequence_core::SequenceId(999),
+            atomdns_sequence_core::SequenceId(999),
             state(),
             ExecutionControl::with_fuel(1),
         ),
         Err(ExecutionError::InvalidEntry(
-            mosdns_sequence_core::SequenceId(999)
+            atomdns_sequence_core::SequenceId(999)
         ))
     ));
 }

@@ -6,7 +6,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_upstream_core::TransportCancellation;
 use tokio::net::UdpSocket;
 use tokio::task::JoinSet;
 
@@ -229,7 +229,7 @@ async fn process_request(task: RequestTask) {
         enable_audit,
         _admission,
     } = task;
-    let Ok((header, question)) = mosdns_dns_core::parse_query(&raw) else {
+    let Ok((header, question)) = atomdns_dns_core::parse_query(&raw) else {
         // Malformed UDP input is isolated to this datagram and produces no
         // response, matching the frozen server behavior.
         observer.record_malformed();
@@ -256,9 +256,9 @@ async fn process_request(task: RequestTask) {
     let capture_audit_details = admitted.execution_checkpoint().capture_audit_details();
     let mut execution = execute_request(
         ExecutionRequest {
-            client: mosdns_sequence_core::ClientContext::from_peer(
+            client: atomdns_sequence_core::ClientContext::from_peer(
                 client_addr.ip(),
-                mosdns_sequence_core::ClientTransport::Udp,
+                atomdns_sequence_core::ClientTransport::Udp,
             ),
             config: &config,
             cache: &cache,
@@ -460,9 +460,9 @@ mod tests {
         CacheStatus, QueryObserver, QueryTerminalOutcome, QueryTransport, ResponseSource,
         ResponseState, TerminalObservation,
     };
-    use mosdns_dns_core::{parse_query, synthesize_response, validate_response};
-    use mosdns_sequence_core::{ExecutionControl, ExecutionState, ExecutorOutcome, MachineStep};
-    use mosdns_upstream_core::{LifecycleState, TransportCancellation};
+    use atomdns_dns_core::{parse_query, synthesize_response, validate_response};
+    use atomdns_sequence_core::{ExecutionControl, ExecutionState, ExecutorOutcome, MachineStep};
+    use atomdns_upstream_core::{LifecycleState, TransportCancellation};
     use tokio::net::UdpSocket;
     use tokio::sync::Notify;
     use tokio::task::JoinSet;
@@ -579,7 +579,7 @@ mod tests {
             let peer = receiver.local_addr().expect("receiver address");
             let cancellation = TransportCancellation::new();
             let observer = Arc::new(QueryObserver::new(true, ["phase5a_forward".to_owned()], 2));
-            let question = mosdns_dns_core::QuestionInfo {
+            let question = atomdns_dns_core::QuestionInfo {
                 qname_wire: vec![3, b'n', b'o', b'p', 0],
                 qtype: 1,
                 qclass: 1,

@@ -131,11 +131,11 @@ async function submitCapacity() {
 
 onMounted(() => {
   loadAuditStatusAndCapacity()
-  window.addEventListener('mosdns-log-refresh', loadAuditStatusAndCapacity)
+  window.addEventListener('atomdns-log-refresh', loadAuditStatusAndCapacity)
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('mosdns-log-refresh', loadAuditStatusAndCapacity)
+  window.removeEventListener('atomdns-log-refresh', loadAuditStatusAndCapacity)
 })
 </script>
 

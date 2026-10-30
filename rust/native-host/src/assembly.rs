@@ -7,9 +7,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::cache::{CacheAdapterError, CacheCatalog, CacheClock};
-use mosdns_dns_core::parse_query;
-use mosdns_upstream_core::secure::DotUpstream;
-use mosdns_upstream_core::{
+use atomdns_dns_core::parse_query;
+use atomdns_upstream_core::secure::DotUpstream;
+use atomdns_upstream_core::{
     AddressFamily, BootstrapEndpoint, BootstrapResolver, DohEndpoint, DohReuseOwner, DotEndpoint,
     Endpoint, ExchangeContext, ExchangeRequest, ExchangeResponse, ResolutionMode, ResolutionPolicy,
     ResolutionTarget, ReuseOwner, SecureReuseOwner, ServerIdentity, SideEffectState, SystemClock,
@@ -37,7 +37,7 @@ pub(crate) const DEFAULT_AUDIT_CAPACITY: usize = 100_000;
 pub struct HostOptions {
     pub(crate) refresh_environment: Option<Rc<crate::execution::RefreshEnvironment>>,
     pub request_deadline: Duration,
-    pub(crate) entry_sequence: Option<mosdns_sequence_core::SequenceId>,
+    pub(crate) entry_sequence: Option<atomdns_sequence_core::SequenceId>,
     pub cancellation: Option<TransportCancellation>,
     pub cache_clock: Rc<dyn CacheClock>,
     pub(crate) audit_clock: Arc<dyn AuditClock>,
@@ -802,7 +802,7 @@ impl std::error::Error for HostRunError {}
 /// validation and exchange execution to `upstream-core`; callers supply the
 /// runtime, deadline, and cancellation scope.
 pub struct ForwardAdapter {
-    executable: mosdns_sequence_core::ExecutableId,
+    executable: atomdns_sequence_core::ExecutableId,
     entry_index: usize,
     target: ForwardTargetConfig,
     resolver: Option<Rc<BootstrapResolver>>,
@@ -907,7 +907,7 @@ impl ForwardOwner {
     }
 }
 
-fn secure_response(response: mosdns_upstream_core::secure::SecureResponse) -> ExchangeResponse {
+fn secure_response(response: atomdns_upstream_core::secure::SecureResponse) -> ExchangeResponse {
     let request_id = response.request_id();
     let response_id = response.response_id();
     let truncated = response.truncated();
@@ -920,19 +920,19 @@ fn secure_response(response: mosdns_upstream_core::secure::SecureResponse) -> Ex
     )
 }
 
-fn secure_error(error: mosdns_upstream_core::SecureError) -> UpstreamError {
+fn secure_error(error: atomdns_upstream_core::SecureError) -> UpstreamError {
     match error {
-        mosdns_upstream_core::SecureError::Transport(error) => error,
-        mosdns_upstream_core::SecureError::DohProtocol(_)
-        | mosdns_upstream_core::SecureError::DohRequest(_) => UpstreamError::MalformedResponse,
-        mosdns_upstream_core::SecureError::Tls(_)
-        | mosdns_upstream_core::SecureError::TlsConfig(_)
-        | mosdns_upstream_core::SecureError::InvalidIdentity(_)
-        | mosdns_upstream_core::SecureError::InvalidServiceUrl(_)
-        | mosdns_upstream_core::SecureError::ZeroDialPort => UpstreamError::Connect,
-        mosdns_upstream_core::SecureError::DoqProtocolTrailingResponse
-        | mosdns_upstream_core::SecureError::DoqProtocolMissingResponseFin
-        | mosdns_upstream_core::SecureError::DoqProtocolNonzeroResponseId => {
+        atomdns_upstream_core::SecureError::Transport(error) => error,
+        atomdns_upstream_core::SecureError::DohProtocol(_)
+        | atomdns_upstream_core::SecureError::DohRequest(_) => UpstreamError::MalformedResponse,
+        atomdns_upstream_core::SecureError::Tls(_)
+        | atomdns_upstream_core::SecureError::TlsConfig(_)
+        | atomdns_upstream_core::SecureError::InvalidIdentity(_)
+        | atomdns_upstream_core::SecureError::InvalidServiceUrl(_)
+        | atomdns_upstream_core::SecureError::ZeroDialPort => UpstreamError::Connect,
+        atomdns_upstream_core::SecureError::DoqProtocolTrailingResponse
+        | atomdns_upstream_core::SecureError::DoqProtocolMissingResponseFin
+        | atomdns_upstream_core::SecureError::DoqProtocolNonzeroResponseId => {
             UpstreamError::MalformedResponse
         }
     }
@@ -955,7 +955,7 @@ fn capture_attempt(
     trace_id: Option<&str>,
     target: &ForwardTargetConfig,
     entry_index: usize,
-    question: &mosdns_dns_core::QuestionInfo,
+    question: &atomdns_dns_core::QuestionInfo,
     result: Result<&[u8], UpstreamAttemptOutcome>,
 ) {
     if let Some(trace_id) = trace_id.filter(|_| crate::capture::hint()) {
@@ -973,7 +973,7 @@ fn attempt_line(
     trace_id: &str,
     target: &ForwardTargetConfig,
     entry_index: usize,
-    question: &mosdns_dns_core::QuestionInfo,
+    question: &atomdns_dns_core::QuestionInfo,
     result: Result<&[u8], UpstreamAttemptOutcome>,
 ) -> String {
     use crate::capture::Field;
@@ -990,7 +990,7 @@ fn attempt_line(
     match result {
         Ok(wire) => {
             // The full rcode, including the OPT extension (BADVERS and up).
-            let rcode = mosdns_dns_core::observe_response_metadata(wire).map_or_else(
+            let rcode = atomdns_dns_core::observe_response_metadata(wire).map_or_else(
                 |_| u16::from(wire.get(3).map_or(0, |flags| flags & 0x0f)),
                 |m| m.rcode,
             );
@@ -1043,9 +1043,9 @@ fn tls_policy(
 /// entry; W3 populates one entry per validated route without introducing a
 /// fallback-to-first-upstream path.
 pub struct ForwardCatalog {
-    entry_indexes: BTreeMap<mosdns_sequence_core::ExecutableId, Vec<usize>>,
-    owners: BTreeMap<mosdns_sequence_core::ExecutableId, Vec<Rc<ForwardAdapter>>>,
-    concurrent: BTreeMap<mosdns_sequence_core::ExecutableId, usize>,
+    entry_indexes: BTreeMap<atomdns_sequence_core::ExecutableId, Vec<usize>>,
+    owners: BTreeMap<atomdns_sequence_core::ExecutableId, Vec<Rc<ForwardAdapter>>>,
+    concurrent: BTreeMap<atomdns_sequence_core::ExecutableId, usize>,
     rotation: RefCell<u64>,
 }
 
@@ -1118,7 +1118,7 @@ impl ForwardCatalog {
             }
         }
         let mut entry_indexes = BTreeMap::new();
-        let mut owners: BTreeMap<mosdns_sequence_core::ExecutableId, Vec<Rc<ForwardAdapter>>> =
+        let mut owners: BTreeMap<atomdns_sequence_core::ExecutableId, Vec<Rc<ForwardAdapter>>> =
             BTreeMap::new();
         let mut shared: BTreeMap<(usize, usize), Rc<ForwardAdapter>> = BTreeMap::new();
         let mut concurrent = BTreeMap::new();
@@ -1200,7 +1200,7 @@ impl ForwardCatalog {
     #[must_use]
     pub fn forward(
         &self,
-        executable: mosdns_sequence_core::ExecutableId,
+        executable: atomdns_sequence_core::ExecutableId,
     ) -> Option<&ForwardAdapter> {
         self.owners
             .get(&executable)
@@ -1209,7 +1209,7 @@ impl ForwardCatalog {
 
     pub(crate) fn runtime_targets(
         &self,
-        executable: mosdns_sequence_core::ExecutableId,
+        executable: atomdns_sequence_core::ExecutableId,
     ) -> Vec<String> {
         self.owners
             .get(&executable)
@@ -1251,7 +1251,7 @@ impl ForwardCatalog {
 impl ExchangeExecutor for ForwardCatalog {
     fn exchange<'a>(
         &'a self,
-        executable: mosdns_sequence_core::ExecutableId,
+        executable: atomdns_sequence_core::ExecutableId,
         query: &'a [u8],
         deadline: std::time::Instant,
         cancellation: TransportCancellation,
@@ -1275,7 +1275,7 @@ impl ExchangeExecutor for ForwardCatalog {
 
     fn exchange_invocation<'a>(
         &'a self,
-        executable: mosdns_sequence_core::ExecutableId,
+        executable: atomdns_sequence_core::ExecutableId,
         query: &'a [u8],
         deadline: std::time::Instant,
         cancellation: TransportCancellation,
@@ -1293,7 +1293,7 @@ impl ExchangeExecutor for ForwardCatalog {
             Err(_) => {
                 return Box::pin(async move {
                     Err(ExchangeError::Upstream(UpstreamError::InvalidRequest(
-                        mosdns_upstream_core::RequestError::Malformed,
+                        atomdns_upstream_core::RequestError::Malformed,
                     )))
                 });
             }
@@ -1478,7 +1478,7 @@ impl ExchangeExecutor for ForwardCatalog {
                     }
                     Err(_) => {
                         last_error.get_or_insert(UpstreamError::Runtime(
-                            mosdns_upstream_core::SideEffectState::NotSent,
+                            atomdns_upstream_core::SideEffectState::NotSent,
                         ));
                     }
                 }
@@ -1493,7 +1493,7 @@ impl ExchangeExecutor for ForwardCatalog {
                         UpstreamAttemptOutcome::Interrupted,
                     );
                     last_error.get_or_insert(UpstreamError::Runtime(
-                        mosdns_upstream_core::SideEffectState::NotSent,
+                        atomdns_upstream_core::SideEffectState::NotSent,
                     ));
                 }
             }
@@ -1523,7 +1523,7 @@ impl ExchangeExecutor for ForwardCatalog {
 
 impl ForwardAdapter {
     #[cfg(test)]
-    pub(crate) fn new(executable: mosdns_sequence_core::ExecutableId, endpoint: Endpoint) -> Self {
+    pub(crate) fn new(executable: atomdns_sequence_core::ExecutableId, endpoint: Endpoint) -> Self {
         let scheme = match endpoint.transport() {
             Transport::Udp => ForwardScheme::Udp,
             Transport::Tcp | Transport::Quic => ForwardScheme::Tcp,
@@ -1549,7 +1549,7 @@ impl ForwardAdapter {
     }
 
     pub(crate) fn new_entry(
-        executable: mosdns_sequence_core::ExecutableId,
+        executable: atomdns_sequence_core::ExecutableId,
         entry_index: usize,
         target: ForwardTargetConfig,
         tls_roots: Option<Arc<rustls::RootCertStore>>,
@@ -1619,7 +1619,7 @@ impl ForwardAdapter {
     }
 
     #[must_use]
-    pub const fn executable(&self) -> mosdns_sequence_core::ExecutableId {
+    pub const fn executable(&self) -> atomdns_sequence_core::ExecutableId {
         self.executable
     }
 
@@ -1734,10 +1734,10 @@ impl ForwardAdapter {
 
 /// The SOCKS5 route of a proxied target: the proxy resolves a host name when
 /// the target has no numeric address.
-fn socks5_route(target: &ForwardTargetConfig) -> Option<mosdns_upstream_core::socks5::Route> {
+fn socks5_route(target: &ForwardTargetConfig) -> Option<atomdns_upstream_core::socks5::Route> {
     let proxy = target.socks5.as_deref().filter(|_| target.proxied())?;
     let domain = target.dial_addr.is_none().then_some(target.host.as_str());
-    Some(mosdns_upstream_core::socks5::Route::new(proxy, domain))
+    Some(atomdns_upstream_core::socks5::Route::new(proxy, domain))
 }
 
 fn build_owner(
@@ -1822,8 +1822,8 @@ impl std::error::Error for AssemblyError {}
 mod tests {
     use std::time::{Duration, Instant};
 
-    use mosdns_sequence_core::ExecutableId;
-    use mosdns_upstream_core::{
+    use atomdns_sequence_core::ExecutableId;
+    use atomdns_upstream_core::{
         Endpoint, LifecycleState, Transport, TransportCancellation, UpstreamError,
     };
 
@@ -1886,7 +1886,7 @@ mod tests {
             insecure_skip_verify: false,
             socks5: None,
         };
-        let (_, question) = mosdns_dns_core::parse_query(&[
+        let (_, question) = atomdns_dns_core::parse_query(&[
             0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0, 5, b'c', b'a', b'p', b't', b'u', 0, 0,
             28, 0, 1,
         ])

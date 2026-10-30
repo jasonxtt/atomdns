@@ -1,4 +1,4 @@
-"""Once-only, reversible rtdns event scripts. Never contacts the Go host."""
+"""Once-only, reversible atomdns event scripts. Never contacts the Go host."""
 import argparse
 import functools
 import hashlib
@@ -17,7 +17,7 @@ from longrun_store import atomic
 from unattended import load
 
 BASE = 'http://127.0.0.1'
-DROP = pathlib.Path('/etc/systemd/system/mosdns.service.d/90-shadow1-48h-update.conf')
+DROP = pathlib.Path('/etc/systemd/system/atomdns.service.d/90-shadow1-48h-update.conf')
 
 
 def request(path, value=None, raw=False, timeout=10):
@@ -30,7 +30,7 @@ def request(path, value=None, raw=False, timeout=10):
 
 
 def service():
-    return dict(line.split('=', 1) for line in subprocess.check_output(['systemctl', 'show', 'mosdns.service',
+    return dict(line.split('=', 1) for line in subprocess.check_output(['systemctl', 'show', 'atomdns.service',
         '-p', 'MainPID', '-p', 'NRestarts', '-p', 'ActiveState'], text=True).splitlines())
 
 
@@ -52,7 +52,7 @@ def restart(root, event, version, record):
     intent = {'event': event, 'issued': now, 'until': now + 30, 'before': service()}
     atomic(root / 'restart-intent.json', intent)
     begin = time.monotonic()
-    subprocess.run(['systemctl', 'restart', 'mosdns.service'], check=True, timeout=25)
+    subprocess.run(['systemctl', 'restart', 'atomdns.service'], check=True, timeout=25)
     wait_ready(version)
     after = service()
     intent['after_pid'] = after['MainPID']
@@ -103,17 +103,17 @@ def restore_before_update(root, record):
     now = time.time()
     atomic(root / 'restart-intent.json', {'event': 3, 'issued': now, 'until': now + 30})
     try:
-        subprocess.run(['systemctl', 'stop', 'mosdns.service'], check=True, timeout=25)
-        target = pathlib.Path('/usr/local/bin/mosdns')
-        temp = target.with_name('mosdns.shadow1-48h-restore')
-        shutil.copy2(root / 'events/3-before-mosdns.private', temp)
+        subprocess.run(['systemctl', 'stop', 'atomdns.service'], check=True, timeout=25)
+        target = pathlib.Path('/usr/local/bin/atomdns')
+        temp = target.with_name('atomdns.shadow1-48h-restore')
+        shutil.copy2(root / 'events/3-before-atomdns.private', temp)
         temp.replace(target)
-        installed = pathlib.Path('/cus/mosdns/update/installed.json')
+        installed = pathlib.Path('/cus/atomdns/update/installed.json')
         if metadata['installed_existed']:
             shutil.copy2(root / 'events/3-before-installed.private.json', installed)
         else:
             installed.unlink(missing_ok=True)
-        subprocess.run(['systemctl', 'start', 'mosdns.service'], check=True, timeout=25)
+        subprocess.run(['systemctl', 'start', 'atomdns.service'], check=True, timeout=25)
         wait_ready(metadata['version'])
         record['failure_restored_previous_binary'] = True
     finally:
@@ -125,14 +125,14 @@ def restore_before_update(root, record):
 def update(root, record):
     release = root / 'releases'
     version = 'rust-v0.1.3'
-    expected = load(release / 'mosdns.manifest.json')['artifact']['sha256']
-    assert hashlib.sha256((release / 'mosdns').read_bytes()).hexdigest() == expected
+    expected = load(release / 'atomdns.manifest.json')['artifact']['sha256']
+    assert hashlib.sha256((release / 'atomdns').read_bytes()).hexdigest() == expected
     assert not DROP.exists(), 'refuse to replace an existing override'
     before_version = request('/api/v1/system/health')['body']['version']
     assert before_version != version, 'event must install a newer candidate'
-    backup = root / 'events/3-before-mosdns.private'
-    shutil.copy2('/usr/local/bin/mosdns', backup)
-    installed = pathlib.Path('/cus/mosdns/update/installed.json')
+    backup = root / 'events/3-before-atomdns.private'
+    shutil.copy2('/usr/local/bin/atomdns', backup)
+    installed = pathlib.Path('/cus/atomdns/update/installed.json')
     previous_installed = installed.read_bytes() if installed.exists() else None
     if previous_installed is not None:
         (root / 'events/3-before-installed.private.json').write_bytes(previous_installed)
@@ -151,7 +151,7 @@ def update(root, record):
     confirmed = False
     try:
         DROP.parent.mkdir(exist_ok=True)
-        DROP.write_text('[Service]\nEnvironment="MOSDNS_UPDATE_API_URL=http://127.0.0.1:18081/releases.json"\n')
+        DROP.write_text('[Service]\nEnvironment="ATOMDNS_UPDATE_API_URL=http://127.0.0.1:18081/releases.json"\n')
         subprocess.run(['systemctl', 'daemon-reload'], check=True)
         restart(root, 3, before_version, record)
         record['check'] = request('/api/v1/update/check', {}, timeout=30)
@@ -170,7 +170,7 @@ def update(root, record):
                 if health.get('ready') and health.get('version') == version:
                     record.setdefault('first_candidate_ready_seconds', item['elapsed'])
                     if health.get('update', {}).get('state') == 'idle':
-                        assert hashlib.sha256(pathlib.Path('/usr/local/bin/mosdns').read_bytes()).hexdigest() == expected
+                        assert hashlib.sha256(pathlib.Path('/usr/local/bin/atomdns').read_bytes()).hexdigest() == expected
                         record['confirmation_seconds'] = time.monotonic() - start
                         confirmed = True
                         observations.append(item)
@@ -193,8 +193,8 @@ def update(root, record):
                     restore_before_update(root, record)
                 else:
                     restart(root, 3, version, record)
-                environment = subprocess.check_output(['systemctl', 'show', 'mosdns.service', '-p', 'Environment'], text=True)
-                assert 'MOSDNS_UPDATE_API_URL' not in environment
+                environment = subprocess.check_output(['systemctl', 'show', 'atomdns.service', '-p', 'Environment'], text=True)
+                assert 'ATOMDNS_UPDATE_API_URL' not in environment
                 record['temporary_environment_removed'] = True
         finally:
             server.shutdown()

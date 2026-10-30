@@ -1707,7 +1707,7 @@ label.switch-table *,
 
 }
 
-/* ---- rtdns shell: sidebar layout, stat cards, value colours (UI redo part 1) ---- */
+/* ---- atomdns shell: sidebar layout, stat cards, value colours (UI redo part 1) ---- */
 
 .rt-shell {
   display: grid;
@@ -1741,6 +1741,8 @@ label.switch-table *,
 .rt-brand-mark {
   flex: none;
   margin-right: 2px;
+  border-radius: 6px;
+  object-fit: cover;
 }
 
 .rt-brand strong {

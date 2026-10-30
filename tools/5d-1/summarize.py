@@ -10,7 +10,7 @@ import statistics
 def cache(text):
     counts={}
     for line in text.splitlines():
-        match=re.match(r'(mosdns_cache_(?:hit|lazy_hit|query)_total)(?:\{[^}]*\})?\s+(\S+)',line)
+        match=re.match(r'(atomdns_cache_(?:hit|lazy_hit|query)_total)(?:\{[^}]*\})?\s+(\S+)',line)
         if match: counts[match[1]]=counts.get(match[1],0)+float(match[2])
     return counts
 
@@ -20,7 +20,7 @@ def primary_cache(text):
     # a different denominator and must not be called a request hit rate.
     counts={}
     for line in text.splitlines():
-        match=re.match(r'(mosdns_cache_(?:hit|lazy_hit|query)_total)\{([^}]*)\}\s+(\S+)',line)
+        match=re.match(r'(atomdns_cache_(?:hit|lazy_hit|query)_total)\{([^}]*)\}\s+(\S+)',line)
         if match and re.search(r'(?:^|,)tag="cache_all"(?:,|$)',match[2]):
             counts[match[1]]=float(match[3])
     return counts
@@ -36,12 +36,12 @@ def summarize(roots):
         metrics=json.loads((root/'load/metrics.json').read_text())
         start,end=cache(metrics['start']),cache(metrics['end'])
         delta={k:end.get(k,0)-start.get(k,0) for k in end}
-        query=delta.get('mosdns_cache_query_total',0)
-        hit=delta.get('mosdns_cache_hit_total',0)
+        query=delta.get('atomdns_cache_query_total',0)
+        hit=delta.get('atomdns_cache_hit_total',0)
         outer_start,outer_end=primary_cache(metrics['start']),primary_cache(metrics['end'])
         outer_delta={k:outer_end.get(k,0)-outer_start.get(k,0) for k in outer_end}
-        outer_query=outer_delta.get('mosdns_cache_query_total',0)
-        outer_hit=outer_delta.get('mosdns_cache_hit_total',0)
+        outer_query=outer_delta.get('atomdns_cache_query_total',0)
+        outer_hit=outer_delta.get('atomdns_cache_hit_total',0)
         mock_counts=collections.Counter()
         for line in (root/'runtime/mock.jsonl').open():
             event=json.loads(line)

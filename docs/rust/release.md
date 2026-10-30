@@ -1,21 +1,30 @@
-# 发版与手动替换（rtdns）
+# 发版与手动替换（atomdns）
 
 本文是操作说明，不会自动执行任何发布。契约见 [native-update.md](contracts/native-update.md)；
-示例路径（`/usr/local/bin/rtdns`、`/cus/rtdns`）按实际部署替换，文中不含任何生产地址。
+示例路径（`/usr/local/bin/atomdns`、`/cus/atomdns`）按实际部署替换，文中不含任何生产地址。
 
 ## 命名
 
 | 项 | 值 |
 | --- | --- |
-| 仓库 | `jasonxtt/rtdns` |
+| 仓库 | `jasonxtt/atomdns` |
 | tag / Release 名 | `vX.Y.Z`（只认这一种写法；`rust-v*`、`lite-v*`、`vX.Y`、`vX.Y.Z-rc1` 都会被更新器忽略） |
-| 程序 | `rtdns`（`rust/native-host` 的 cargo bin；crate 名仍是 `mosdns-native-host`） |
-| 发布包 | `rtdns-linux-amd64.tar.gz`（包内只有一个文件 `rtdns`；v0.5.0 起另有 `-amd64-v3`、`-arm64`、`-armv7`，只有 `amd64` 参与在线更新） |
-| 界面包 | `rtdns-webui.tar.gz`（v0.4.0 起；顶层即 `<配置根>/ui/main/` 的文件，`ui-manifest.json` 的 `ui_version` 等于 tag） |
-| 清单 | `rtdns-update-manifest.json`（`format 1`、`channel "rust"`、`version` 等于 tag、各发布包的 sha256） |
-| 程序自报版本 | `rtdns version` 与 `GET /api/v1/system/health` 的 `version` 都等于 tag |
+| 程序 | `atomdns`（`rust/native-host` 的 cargo bin；crate 名仍是 `atomdns-native-host`） |
+| 发布包 | `atomdns-linux-amd64.tar.gz`（包内只有一个文件 `atomdns`；v0.5.0 起另有 `-amd64-v3`、`-arm64`、`-armv7`，只有 `amd64` 参与在线更新） |
+| 界面包 | `atomdns-webui.tar.gz`（v0.4.0 起；顶层即 `<配置根>/ui/main/` 的文件，`ui-manifest.json` 的 `ui_version` 等于 tag） |
+| 清单 | `atomdns-update-manifest.json`（`format 1`、`channel "rust"`、`version` 等于 tag、各发布包的 sha256） |
+| 程序自报版本 | `atomdns version` 与 `GET /api/v1/system/health` 的 `version` 都等于 tag |
 
 发布版本的 `native-host` crate 版本（`rust/native-host/Cargo.toml`）应与 tag 一致；非发布构建自报 `v<crate 版本>`。
+
+### 从 rtdns 改名为 atomdns（2026-10-30，一次性手动步骤）
+
+项目由 rtdns 改名 atomdns，**没有桥接发布**：`v0.5.2` 及更早的 rtdns 程序只认 `jasonxtt/rtdns` 的 `rtdns-linux-amd64.tar.gz`，找不到 atomdns 的发布，需要手动换一次。
+
+- 先把 GitHub 仓库改名为 `jasonxtt/atomdns`（旧地址会重定向，但旧程序按旧资产名找不到文件）。
+- 在机器上：停服务 → 换程序（`/usr/local/bin/rtdns` → `/usr/local/bin/atomdns`）→ 配置根 `/cus/rtdns` 改为 `/cus/atomdns`（或在新单元里保持旧路径）→ 单元 `rtdns.service` 换成 `atomdns.service` → 启动。
+- 指标名由 `mosdns_*` 改为 `atomdns_*`、环境变量由 `MOSDNS_*` 改为 `ATOMDNS_*`：单元里的 `Environment=`、外部抓取/看板要同步改。
+- 缓存转储文件格式名 `mosdns_cache_v2` 不变，原有转储可直接读取。
 
 ## 发版步骤
 
@@ -27,26 +36,26 @@
    scripts/build-rust-release.sh v0.2.0 release/rust
    ```
 
-   产物：`release/rust/rtdns-linux-amd64.tar.gz`、`release/rust/rtdns-webui.tar.gz`、`release/rust/rtdns-update-manifest.json`。
+   产物：`release/rust/atomdns-linux-amd64.tar.gz`、`release/rust/atomdns-webui.tar.gz`、`release/rust/atomdns-update-manifest.json`。
    脚本会拒绝非 `vX.Y.Z` 的 tag，要求构建出的程序自报版本、界面包的 `ui_version` 都等于 tag，并核对 `scripts/rust-release-metadata.json`
    与 `update/mod.rs` 里的配置包标识和三个资产名（清单的 `artifacts` 必须同时有程序包与界面包）。脚本只构建，不发布。
 3. 核对：
 
    ```bash
    cd release/rust
-   sha256sum rtdns-linux-amd64.tar.gz rtdns-webui.tar.gz
-   jq '.version, .artifacts' rtdns-update-manifest.json
-   tar -tzf rtdns-webui.tar.gz | head
-   mkdir -p /tmp/rtdns-verify && tar -xzf rtdns-linux-amd64.tar.gz -C /tmp/rtdns-verify
-   /tmp/rtdns-verify/rtdns version
+   sha256sum atomdns-linux-amd64.tar.gz atomdns-webui.tar.gz
+   jq '.version, .artifacts' atomdns-update-manifest.json
+   tar -tzf atomdns-webui.tar.gz | head
+   mkdir -p /tmp/atomdns-verify && tar -xzf atomdns-linux-amd64.tar.gz -C /tmp/atomdns-verify
+   /tmp/atomdns-verify/atomdns version
    ```
 
    sha256 必须与清单一致，`version` 必须等于 tag。
 4. 在 GitHub 建 Release（tag 与 Release 同名，不是 draft、不是 prerelease），把上面三个文件作为资产上传，例如：
 
    ```bash
-   gh release create v0.2.0 release/rust/rtdns-linux-amd64.tar.gz release/rust/rtdns-webui.tar.gz release/rust/rtdns-update-manifest.json \
-     --repo jasonxtt/rtdns --title v0.2.0 --notes "说明"
+   gh release create v0.2.0 release/rust/atomdns-linux-amd64.tar.gz release/rust/atomdns-webui.tar.gz release/rust/atomdns-update-manifest.json \
+     --repo jasonxtt/atomdns --title v0.2.0 --notes "说明"
    ```
 
    这是对外发布动作，需要先得到负责人确认。
@@ -55,14 +64,14 @@
 
 ## 带配置包的发版顺序
 
-配置包与界面包放在 file 仓库的 `rtdns/` 目录（v0.5.0 起；布局见该目录的 README）：`config/full/config_rust/` 是配置源，`config/full/config_rust.zip` 是全新安装包，
-`config/incremental/config_rust_up.zip` 是在线更新用的增量包，`ui/rtdns-webui.tar.gz` 是最新版的界面包。
+配置包与界面包放在 file 仓库的 `atomdns/` 目录（v0.5.0 起；布局见该目录的 README）：`config/full/config_rust/` 是配置源，`config/full/config_rust.zip` 是全新安装包，
+`config/incremental/config_rust_up.zip` 是在线更新用的增量包，`ui/atomdns-webui.tar.gz` 是最新版的界面包。
 
-1. **出包**：在 file 仓库的 `rtdns/config/incremental/` 运行 `build_config_rust_up.sh`（`SCHEMA`/`PACKAGE_ID` 必须等于 `update/mod.rs` 的 `REQUIRED_CONFIG_SCHEMA`/`REQUIRED_CONFIG_PACKAGE_ID`），
+1. **出包**：在 file 仓库的 `atomdns/config/incremental/` 运行 `build_config_rust_up.sh`（`SCHEMA`/`PACKAGE_ID` 必须等于 `update/mod.rs` 的 `REQUIRED_CONFIG_SCHEMA`/`REQUIRED_CONFIG_PACKAGE_ID`），
    得到 `config_rust_up.zip`，核对包内 `manifest.json` 的 `config_schema`、`package_id`，以及托管文件列表（含新增文件、不含 `sub_config/special_groups.yaml`）。
 2. **提交并推送 file 仓库**，记下提交 ID。清单按 sha256 固定这份包，所以地址必须带**提交 ID**（不要用 `main`），已被某个版本引用的包文件不能再改。
 3. **填元数据**：`sha256sum config_rust_up.zip`，把 `scripts/rust-release-metadata.json` 的 `config.url`
-   （`https://raw.githubusercontent.com/jasonxtt/file/<提交 ID>/rtdns/config/incremental/config_rust_up.zip`）与 `config.sha256` 填上，`required_config_schema`/`config_package_id` 同步提高。
+   （`https://raw.githubusercontent.com/jasonxtt/file/<提交 ID>/atomdns/config/incremental/config_rust_up.zip`）与 `config.sha256` 填上，`required_config_schema`/`config_package_id` 同步提高。
 4. **提交**：版本号（`rust/native-host/Cargo.toml`、`rust/Cargo.lock`）与元数据一起提交。
 5. **构建程序与清单**：推送后 `config.url` 已能下载，脚本会自己下载并核对；也可以用本地文件：
 
@@ -72,8 +81,8 @@
 
    脚本核对该文件的 sha256 与包内 manifest 是否等于元数据，通过后清单带 `config{url,sha256}`。
 6. **建 Release**：程序包、界面包、清单，加全新安装包 `config_rust.zip`（见下一步）。增量包不再是 Release 资产。
-7. **全新安装包与界面**：用同一份 `rtdns-webui.tar.gz` 在 file 仓库运行 `rtdns/config/full/build_config_rust_zip.sh <rtdns-webui.tar.gz>` 重新生成 `config_rust.zip`（带 `ui/main/`），
-   并把 `rtdns-webui.tar.gz` 放进 `rtdns/ui/`，提交 file 仓库。Release 建好后，用 `curl -fsSL <config.url> | sha256sum` 再核对一次与元数据一致。
+7. **全新安装包与界面**：用同一份 `atomdns-webui.tar.gz` 在 file 仓库运行 `atomdns/config/full/build_config_rust_zip.sh <atomdns-webui.tar.gz>` 重新生成 `config_rust.zip`（带 `ui/main/`），
+   并把 `atomdns-webui.tar.gz` 放进 `atomdns/ui/`，提交 file 仓库。Release 建好后，用 `curl -fsSL <config.url> | sha256sum` 再核对一次与元数据一致。
    更新器只在 `applied_config_schema < required_config_schema` 时下载配置包。
 
 v0.5.0 起 `config.url` 指向 file 仓库（此前指向 Release 资产）；已发布的 v0.4.x 与 v0.5.0 的清单仍指向各自 Release 里的包，不受影响。
@@ -84,7 +93,7 @@ v0.5.0 起 `config.url` 指向 file 仓库（此前指向 Release 资产）；�
 - 内容区最宽 1600px，更宽的窗口里居中；概览的统计卡增加"运行时间"，共 8 张（宽屏 8 列、中等 4 列、窄屏 2 列）。
 - 上游 DNS 统计按卡片宽度逐步显示"分组、类型、地址"列，放得下才显示；分组名简写（国内组、FakeIP组、国外组、ECS组），窄屏仍是一行组标题。
 - 分流统计宽卡片里圆环在左、图例在右，更宽时显示次数。顶部的主题按钮只在浅色和深色间切换（"跟随系统"仍在系统管理里选）。
-- 资产同 v0.5.0：四种程序包（在线更新只认 `amd64`）、`rtdns-webui.tar.gz`、清单、全新安装包 `config_rust.zip`（已带 v0.5.2 界面）。
+- 资产同 v0.5.0：四种程序包（在线更新只认 `amd64`）、`atomdns-webui.tar.gz`、清单、全新安装包 `config_rust.zip`（已带 v0.5.2 界面）。
 
 ## v0.5.1 升级须知（配置 schema 6，2026-10-30；缓存与域名学习的参数可在 WebUI 调整）
 
@@ -117,19 +126,19 @@ v0.5.0 起 `config.url` 指向 file 仓库（此前指向 Release 资产）；�
 
 ## v0.5.0 升级须知（2026-10-30；WebUI 换新外观，新增多种平台程序包）
 
-- 配置 schema 仍为 5，**没有新配置包**（已发布的 v0.5.0 清单里的 `config` 仍指向 v0.4.2 Release 的 `config_rust_up.zip`；源码里的元数据已改指 file 仓库 `rtdns/config/incremental/` 的同一份文件，下一版起生效）：在线更新换程序，并在已安装 `ui/main` 时一并换成新界面，不动配置文件与用户数据。
+- 配置 schema 仍为 5，**没有新配置包**（已发布的 v0.5.0 清单里的 `config` 仍指向 v0.4.2 Release 的 `config_rust_up.zip`；源码里的元数据已改指 file 仓库 `atomdns/config/incremental/` 的同一份文件，下一版起生效）：在线更新换程序，并在已安装 `ui/main` 时一并换成新界面，不动配置文件与用户数据。
 - **界面**：整套 WebUI 换了外观（Rosé Pine 配色、明暗两套主题、侧栏二级菜单、移动端底部导航、Ctrl/Cmd+K 搜索页面）；概览、规则设置各页、日志、系统管理的版式都重排过，功能与接口不变。
   没有 `ui/main` 的部署（纯后端）不受影响；外置界面仍可放在 `ui/<名字>/`。
-- **程序包**：Release 现在带四种程序包，包内都只有一个文件 `rtdns`：
+- **程序包**：Release 现在带四种程序包，包内都只有一个文件 `atomdns`：
 
   | 资产 | 目标 | 说明 |
   | --- | --- | --- |
-  | `rtdns-linux-amd64.tar.gz` | x86_64，glibc | 通用基线；**在线更新只认这一个** |
-  | `rtdns-linux-amd64-v3.tar.gz` | x86_64，glibc | `-C target-cpu=x86-64-v3`（需要 AVX2 等，约 2013 年后的 CPU），手动安装 |
-  | `rtdns-linux-arm64.tar.gz` | aarch64，静态 musl | 手动安装；glibc 与 OpenWrt 都能跑 |
-  | `rtdns-linux-armv7.tar.gz` | armv7 硬浮点，静态 musl | 手动安装 |
+  | `atomdns-linux-amd64.tar.gz` | x86_64，glibc | 通用基线；**在线更新只认这一个** |
+  | `atomdns-linux-amd64-v3.tar.gz` | x86_64，glibc | `-C target-cpu=x86-64-v3`（需要 AVX2 等，约 2013 年后的 CPU），手动安装 |
+  | `atomdns-linux-arm64.tar.gz` | aarch64，静态 musl | 手动安装；glibc 与 OpenWrt 都能跑 |
+  | `atomdns-linux-armv7.tar.gz` | armv7 硬浮点，静态 musl | 手动安装 |
 
-  非 amd64 平台的在线更新尚未支持（更新器只在 linux x86_64 上可用，清单里多出的包会被忽略）；这些平台升级时下载对应包、替换 `rtdns` 并重启，`ui/main` 用 `rtdns-webui.tar.gz` 手动换。
+  非 amd64 平台的在线更新尚未支持（更新器只在 linux x86_64 上可用，清单里多出的包会被忽略）；这些平台升级时下载对应包、替换 `atomdns` 并重启，`ui/main` 用 `atomdns-webui.tar.gz` 手动换。
   ARM 包是静态 musl 构建，内存分配器与 glibc 不同，常驻内存没有按 x86 的数据测过。
 - **构建**：`VARIANTS="amd64 amd64-v3 arm64 armv7" scripts/build-rust-release.sh vX.Y.Z` 一次出齐；ARM 包需要 `cargo-zigbuild` 与 qemu-user binfmt，
   所以统一用 GitHub Actions 的手动工作流 `release-build.yml`（只构建、不发布，产物在 Actions 的 `release-<tag>` 里下载）。
@@ -185,30 +194,30 @@ v0.5.0 起 `config.url` 指向 file 仓库（此前指向 Release 资产）；�
 ### WebUI 从程序里拆出来
 
 - 程序**不再内嵌 WebUI**。WebUI 是 `<配置根>/ui/main/`，由 `/` 提供（不需要路径前缀）；其它 `ui/<名字>/` 照旧在 `/<名字>/`。没有 `ui/main/` 时 `/` 只显示"没有安装 WebUI"，接口照常（纯后端）。
-- 每个 Release 多一个资产 `rtdns-webui.tar.gz`。从 v0.4.0 起，在线更新**只在 `ui/main/` 已存在时**把它与程序、配置包放进同一个事务替换，失败一起回滚；没有 `ui/main/` 的机器保持纯后端。
+- 每个 Release 多一个资产 `atomdns-webui.tar.gz`。从 v0.4.0 起，在线更新**只在 `ui/main/` 已存在时**把它与程序、配置包放进同一个事务替换，失败一起回滚；没有 `ui/main/` 的机器保持纯后端。
 - 全新安装的 `config_rust.zip` 自带 `ui/main/`。
 
 ### 从 v0.3.0 升级（一次性手动步骤）
 
 v0.3.0 的更新器不认识界面资产：它会照常升级程序与配置包（schema 3 → 4），但不会放 `ui/main/`，而 v0.4.0 已不内嵌界面。**先放界面、再在线升级**：
 
-1. 从 v0.4.0 的 Release 下载 `rtdns-webui.tar.gz`，核对 sha256 与同一 Release 的 `rtdns-update-manifest.json` 里 `artifacts["rtdns-webui.tar.gz"].sha256` 一致：
+1. 从 v0.4.0 的 Release 下载 `atomdns-webui.tar.gz`，核对 sha256 与同一 Release 的 `atomdns-update-manifest.json` 里 `artifacts["atomdns-webui.tar.gz"].sha256` 一致：
 
    ```bash
-   sha256sum rtdns-webui.tar.gz
-   jq -r '.artifacts["rtdns-webui.tar.gz"].sha256' rtdns-update-manifest.json
+   sha256sum atomdns-webui.tar.gz
+   jq -r '.artifacts["atomdns-webui.tar.gz"].sha256' atomdns-update-manifest.json
    ```
 
-2. 解压到配置根（`rtdns start -d` 的目录）下的 `ui/main/`（v0.3.0 会把它当作外置界面挂在 `/main/`，不影响使用）：
+2. 解压到配置根（`atomdns start -d` 的目录）下的 `ui/main/`（v0.3.0 会把它当作外置界面挂在 `/main/`，不影响使用）：
 
    ```bash
-   mkdir -p /cus/rtdns/ui/main && tar -xzf rtdns-webui.tar.gz -C /cus/rtdns/ui/main
+   mkdir -p /cus/atomdns/ui/main && tar -xzf atomdns-webui.tar.gz -C /cus/atomdns/ui/main
    ```
 
 3. 在 v0.3.0 的界面里照常"在线更新"到 v0.4.0（自动切换）。
 4. 打开 `http://<主机>:<API 端口>/`，系统管理页"界面版本"应为 v0.4.0。
 
-已经先升级了的：`/` 会显示"没有安装 WebUI"，做第 1–2 步后重启一次（`systemctl restart rtdns` 或 `curl -X POST http://127.0.0.1:<API 端口>/api/v1/system/restart`）。
+已经先升级了的：`/` 会显示"没有安装 WebUI"，做第 1–2 步后重启一次（`systemctl restart atomdns` 或 `curl -X POST http://127.0.0.1:<API 端口>/api/v1/system/restart`）。
 回退到 v0.3.0 时 `ui/main/` 留着无害（v0.3.0 用内嵌界面，把它挂在 `/main/`）。
 
 ### 配置（schema 4）
@@ -239,14 +248,14 @@ v0.3.0 的更新器不认识界面资产：它会照常升级程序与配置包�
 - `/api/v1/appearance/*` 与能力 `appearance.server`；
 - `POST /api/v1/config/update_from_url`（"应用远程配置"；旧地址返回 404，配置包只随程序在线更新下发）。
 
-调用这些接口的外置界面（旧的 `ilog`、第三方控制台、自写脚本）升级后对应功能会失效，需要改用上面的新接口或停用。"备份配置"保留，下载文件名 `rtdns_backup.zip`。
+调用这些接口的外置界面（旧的 `ilog`、第三方控制台、自写脚本）升级后对应功能会失效，需要改用上面的新接口或停用。"备份配置"保留，下载文件名 `atomdns_backup.zip`。
 
 ### 内置 WebUI（v0.3.0 时）
 
 - 侧栏布局：概览、日志、规则设置（8 个子项：运行模式、上游设置、分流规则、请求屏蔽、域名学习、缓存设置、客户端、专属分流组）、系统管理（一页），
   地址形如 `#/overview`、`#/rules/upstream`，刷新保持当前页；`#/rules/rewrite` 跳到 `#/rules/routing`。
 - 外观只保留浅色 / 深色 / 跟随系统（存在浏览器里）；背景图、毛玻璃、透明度、文字与按钮颜色已删除。外置 UI 要背景图请放进自己的静态包。
-- **浏览器里的旧设置不迁移**（主题、自动刷新、配置目录等 `mosdns*` 键），首次打开新界面按默认值（跟随系统、自动刷新关闭），需要时重新设置一次。
+- **浏览器里的旧设置不迁移**（主题、自动刷新、配置目录等 `atomdns*` 键），首次打开新界面按默认值（跟随系统、自动刷新关闭），需要时重新设置一次。
 - 概览的实时趋势图已去掉，统计口径仍是审计保留记录；客户端别名从日志页挪到 规则设置 › 客户端；"高级替换规则"面板已删除（原生不支持）；域名学习页新增学习明细。
 - 配置包不再附带 `ui/ilog/`；包不管理已部署机器的 `ui/`，已有的 `ui/ilog/` 不受影响。
 
@@ -264,7 +273,7 @@ v0.3.0 的更新器不认识界面资产：它会照常升级程序与配置包�
 
 - `ui/ilog/`、`ui/ron/`、`ui/modify instruction`（旧页面，不用时）；
 - 外观：`webinfo/appearance_settings.json`、`appearance_text_settings.json`、`appearance_button_settings.json`、`panel_background.bin`、`panel_background_history/`；
-- Go 时代文件：`webinfo/upstream_overrides.json`、`config_overrides.json`、`domain_generation_settings.json`、`config_update_state.json`（Go 版的包状态；rtdns 用 `rust_config_update_state.json`）；
+- Go 时代文件：`webinfo/upstream_overrides.json`、`config_overrides.json`、`domain_generation_settings.json`、`config_update_state.json`（Go 版的包状态；atomdns 用 `rust_config_update_state.json`）；
 - v0.2.2 起不再读取的旧学习名单：`gen/*list.txt`、`gen/*rule.txt`（**不含** `gen/top_domains.txt`，requery 用它；`gen/route_learner.json` 是现行学习状态，也要保留）。
 - `rule/switchN.txt` **建议保留**到确定不再需要降级为止（降级到 v0.2.2 要靠它）。
 
@@ -283,50 +292,50 @@ v0.3.0 的更新器不认识界面资产：它会照常升级程序与配置包�
 - requery 不再清空学习名单。
 - 用户数据不动：`webinfo/`（含 `settings.json`、专属分流组 JSON）、`rule/`、`sub_config/special_groups.yaml`（程序生成）都不在包的托管范围内。
 
-已部署的 `v0.2.0` 及之后的 rtdns 会在系统设置里看到新版本，点“立即更新”走带自动回滚的事务（见契约文档）。
+已部署的 `v0.2.0` 及之后的 atomdns 会在系统设置里看到新版本，点“立即更新”走带自动回滚的事务（见契约文档）。
 
 ## 生产从 rust-v0.1.4 手动替换到 v0.2.0
 
 `rust-v0.1.4` 是手动部署的，内置的更新地址指向旧仓库，且旧仓库从未发布过 `rust-v*`，所以它**不会**自己升级到 `v0.2.0`，需要手动换一次。
-换成 `v0.2.0` 之后，在线更新只来自 `jasonxtt/rtdns`。配置、规则、缓存等数据都不用动（`v0.2.0` 是仅程序改动的发布，配置包标识不变）。
+换成 `v0.2.0` 之后，在线更新只来自 `jasonxtt/atomdns`。配置、规则、缓存等数据都不用动（`v0.2.0` 是仅程序改动的发布，配置包标识不变）。
 
-1. 把 `rtdns-linux-amd64.tar.gz` 与清单传到服务器的临时目录，核对 sha256（同上第 3 步），解出 `rtdns`，
+1. 把 `atomdns-linux-amd64.tar.gz` 与清单传到服务器的临时目录，核对 sha256（同上第 3 步），解出 `atomdns`，
    并用生产配置预检：
 
    ```bash
-   ./rtdns version
-   ./rtdns check -d /cus/rtdns -c config_custom.yaml
+   ./atomdns version
+   ./atomdns check -d /cus/atomdns -c config_custom.yaml
    ```
 
    `check` 必须报告 `gaps=0 cascades=0 globals=0`。
 2. 备份旧程序（留着回退用），把新程序放到同目录再原子改名：
 
    ```bash
-   cp -a /usr/local/bin/rtdns /usr/local/bin/rtdns.rust-v0.1.4
-   install -m 0755 ./rtdns /usr/local/bin/rtdns.new
-   mv /usr/local/bin/rtdns.new /usr/local/bin/rtdns
+   cp -a /usr/local/bin/atomdns /usr/local/bin/atomdns.rust-v0.1.4
+   install -m 0755 ./atomdns /usr/local/bin/atomdns.new
+   mv /usr/local/bin/atomdns.new /usr/local/bin/atomdns
    ```
 3. 重启并验证：
 
    ```bash
-   systemctl restart rtdns
-   systemctl is-active rtdns
+   systemctl restart atomdns
+   systemctl is-active atomdns
    curl -s http://127.0.0.1:9099/api/v1/system/health   # "version" 应为 v0.2.0，"ready" 应为 true
    dig @127.0.0.1 example.com +short                     # 能解析
    ```
 
-   在 WebUI 系统设置里点“检查更新”：应显示当前 `v0.2.0`，发布页指向 `jasonxtt/rtdns`，没有可用更新（还没有更高的发布时）。
+   在 WebUI 系统设置里点“检查更新”：应显示当前 `v0.2.0`，发布页指向 `jasonxtt/atomdns`，没有可用更新（还没有更高的发布时）。
    `update/installed.json` 此时不存在是正常的（它只记录经更新器安装的版本），第一次在线更新成功后才会出现。
 4. 回退（任何一步异常）：
 
    ```bash
-   systemctl stop rtdns
-   mv /usr/local/bin/rtdns.rust-v0.1.4 /usr/local/bin/rtdns
-   systemctl start rtdns
+   systemctl stop atomdns
+   mv /usr/local/bin/atomdns.rust-v0.1.4 /usr/local/bin/atomdns
+   systemctl start atomdns
    ```
 
    旧程序用同一份配置与数据即可运行；`v0.2.0` 没有改持久化格式。
-5. 确认稳定后可删除 `rtdns.rust-v0.1.4`。
+5. 确认稳定后可删除 `atomdns.rust-v0.1.4`。
 
 ## 不属于本流程
 

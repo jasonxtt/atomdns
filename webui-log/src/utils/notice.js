@@ -3,7 +3,7 @@ export function showTopNotice(message, tone = 'success') {
     return
   }
   window.dispatchEvent(
-    new CustomEvent('mosdns-top-notice', {
+    new CustomEvent('atomdns-top-notice', {
       detail: {
         message: String(message || ''),
         tone

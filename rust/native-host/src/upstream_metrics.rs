@@ -1,5 +1,5 @@
 //! The per-upstream series of `GET /metrics` for `aliapi` groups, in the
-//! reference's Prometheus text format: `mosdns_aliapi_{error_total,query_total,
+//! reference's Prometheus text format: `atomdns_aliapi_{error_total,query_total,
 //! response_latency_millisecond,upstream_winner_total}` labelled `addr`,
 //! `metrics_tag` (the plugin tag) and `tag` (the upstream tag). As in the
 //! reference, only upstreams that carry a `tag` have series, and the series
@@ -79,12 +79,12 @@ pub(crate) fn render(mut series: Vec<Series<'_>>, out: &mut String) {
     }
     series.sort_by(|a, b| (a.addr, a.metrics_tag, a.tag).cmp(&(b.addr, b.metrics_tag, b.tag)));
     let counter = |out: &mut String, name: &str, help: &str, value: &dyn Fn(&Series<'_>) -> u64| {
-        let _ = writeln!(out, "# HELP mosdns_aliapi_{name} {help}");
-        let _ = writeln!(out, "# TYPE mosdns_aliapi_{name} counter");
+        let _ = writeln!(out, "# HELP atomdns_aliapi_{name} {help}");
+        let _ = writeln!(out, "# TYPE atomdns_aliapi_{name} counter");
         for item in &series {
             let _ = writeln!(
                 out,
-                "mosdns_aliapi_{name}{{{}}} {}",
+                "atomdns_aliapi_{name}{{{}}} {}",
                 labels(item, None),
                 value(item)
             );
@@ -105,11 +105,11 @@ pub(crate) fn render(mut series: Vec<Series<'_>>, out: &mut String) {
     });
     let _ = writeln!(
         out,
-        "# HELP mosdns_aliapi_response_latency_millisecond Response latency in milliseconds."
+        "# HELP atomdns_aliapi_response_latency_millisecond Response latency in milliseconds."
     );
     let _ = writeln!(
         out,
-        "# TYPE mosdns_aliapi_response_latency_millisecond histogram"
+        "# TYPE atomdns_aliapi_response_latency_millisecond histogram"
     );
     for item in &series {
         let mut cumulative = 0_u64;
@@ -117,25 +117,25 @@ pub(crate) fn render(mut series: Vec<Series<'_>>, out: &mut String) {
             cumulative = cumulative.saturating_add(item.counters.latency_buckets[index]);
             let _ = writeln!(
                 out,
-                "mosdns_aliapi_response_latency_millisecond_bucket{{{}}} {cumulative}",
+                "atomdns_aliapi_response_latency_millisecond_bucket{{{}}} {cumulative}",
                 labels(item, Some(&bound.to_string()))
             );
         }
         let _ = writeln!(
             out,
-            "mosdns_aliapi_response_latency_millisecond_bucket{{{}}} {}",
+            "atomdns_aliapi_response_latency_millisecond_bucket{{{}}} {}",
             labels(item, Some("+Inf")),
             item.counters.latency_count
         );
         let _ = writeln!(
             out,
-            "mosdns_aliapi_response_latency_millisecond_sum{{{}}} {}",
+            "atomdns_aliapi_response_latency_millisecond_sum{{{}}} {}",
             labels(item, None),
             item.counters.latency_sum_ms
         );
         let _ = writeln!(
             out,
-            "mosdns_aliapi_response_latency_millisecond_count{{{}}} {}",
+            "atomdns_aliapi_response_latency_millisecond_count{{{}}} {}",
             labels(item, None),
             item.counters.latency_count
         );
@@ -199,7 +199,7 @@ mod tests {
             ("upstream_winner_total", 2),
         ] {
             assert!(
-                text.contains(&format!("mosdns_aliapi_{name}{{{series}}} {value}\n")),
+                text.contains(&format!("atomdns_aliapi_{name}{{{series}}} {value}\n")),
                 "{name}\n{text}"
             );
         }
@@ -213,22 +213,22 @@ mod tests {
         ] {
             assert!(
                 text.contains(&format!(
-                    "mosdns_aliapi_response_latency_millisecond_bucket{{{series},le=\"{le}\"}} {count}\n"
+                    "atomdns_aliapi_response_latency_millisecond_bucket{{{series},le=\"{le}\"}} {count}\n"
                 )),
                 "le={le}\n{text}"
             );
         }
         assert!(text.contains(&format!(
-            "mosdns_aliapi_response_latency_millisecond_sum{{{series}}} 6015\n"
+            "atomdns_aliapi_response_latency_millisecond_sum{{{series}}} 6015\n"
         )));
         assert!(text.contains(&format!(
-            "mosdns_aliapi_response_latency_millisecond_count{{{series}}} 3\n"
+            "atomdns_aliapi_response_latency_millisecond_count{{{series}}} 3\n"
         )));
         // Series are sorted by label values; zero-valued upstreams still appear.
         let ali = text.find("addr=\"https://dns.alidns.com").unwrap();
         let udp = text.find("addr=\"udp://9.9.9.9\"").unwrap();
         assert!(ali < udp);
-        assert!(text.contains("# TYPE mosdns_aliapi_response_latency_millisecond histogram\n"));
+        assert!(text.contains("# TYPE atomdns_aliapi_response_latency_millisecond histogram\n"));
         assert!(!text.contains("inflight_queries") && !text.contains("conn_opened_total"));
     }
 

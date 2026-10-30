@@ -38,7 +38,7 @@ impl std::fmt::Display for CliError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            "{}; usage: rtdns start [-d <dir>] -c <config> | rtdns check [-d <dir>] -c <config> | rtdns version",
+            "{}; usage: atomdns start [-d <dir>] -c <config> | atomdns check [-d <dir>] -c <config> | atomdns version",
             self.message
         )
     }
@@ -46,7 +46,7 @@ impl std::fmt::Display for CliError {
 
 impl std::error::Error for CliError {}
 
-/// Parses `rtdns start|check [-d <dir>] -c <path>` and the `--config` /
+/// Parses `atomdns start|check [-d <dir>] -c <path>` and the `--config` /
 /// `--dir` spellings, options in either order.
 pub fn parse_args<I, S>(args: I) -> Result<CliCommand, CliError>
 where
@@ -150,14 +150,14 @@ mod tests {
     #[test]
     fn accepts_both_config_spellings() {
         assert_eq!(
-            parse_args(["mosdns", "start", "-c", "forward.yaml"]),
+            parse_args(["atomdns", "start", "-c", "forward.yaml"]),
             Ok(CliCommand::Start {
                 config: "forward.yaml".into(),
                 dir: None,
             })
         );
         assert_eq!(
-            parse_args(["mosdns", "start", "--config", "forward.yaml"]),
+            parse_args(["atomdns", "start", "--config", "forward.yaml"]),
             Ok(CliCommand::Start {
                 config: "forward.yaml".into(),
                 dir: None,
@@ -169,21 +169,21 @@ mod tests {
     fn check_accepts_both_config_spellings() {
         for option in ["-c", "--config"] {
             assert_eq!(
-                parse_args(["mosdns", "check", option, "forward.yaml"]),
+                parse_args(["atomdns", "check", option, "forward.yaml"]),
                 Ok(CliCommand::Check {
                     config: "forward.yaml".into(),
                     dir: None,
                 })
             );
         }
-        assert!(parse_args(["mosdns", "check", "-c"]).is_err());
-        assert!(parse_args(["mosdns", "check", "-c", "forward.yaml", "extra"]).is_err());
+        assert!(parse_args(["atomdns", "check", "-c"]).is_err());
+        assert!(parse_args(["atomdns", "check", "-c", "forward.yaml", "extra"]).is_err());
     }
 
     #[test]
     fn rejects_other_commands_and_extra_arguments() {
-        assert!(parse_args(["mosdns", "run", "-c", "forward.yaml"]).is_err());
-        assert!(parse_args(["mosdns", "start", "-c", "forward.yaml", "extra"]).is_err());
-        assert!(parse_args(["mosdns", "start", "-c"]).is_err());
+        assert!(parse_args(["atomdns", "run", "-c", "forward.yaml"]).is_err());
+        assert!(parse_args(["atomdns", "start", "-c", "forward.yaml", "extra"]).is_err());
+        assert!(parse_args(["atomdns", "start", "-c"]).is_err());
     }
 }

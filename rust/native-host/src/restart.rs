@@ -175,12 +175,12 @@ mod tests {
     #[test]
     fn the_deleted_marker_of_a_replaced_binary_is_removed() {
         assert_eq!(
-            without_deleted_suffix(PathBuf::from("/usr/local/bin/mosdns (deleted)")),
-            PathBuf::from("/usr/local/bin/mosdns")
+            without_deleted_suffix(PathBuf::from("/usr/local/bin/atomdns (deleted)")),
+            PathBuf::from("/usr/local/bin/atomdns")
         );
         assert_eq!(
-            without_deleted_suffix(PathBuf::from("/usr/local/bin/mosdns")),
-            PathBuf::from("/usr/local/bin/mosdns")
+            without_deleted_suffix(PathBuf::from("/usr/local/bin/atomdns")),
+            PathBuf::from("/usr/local/bin/atomdns")
         );
     }
 

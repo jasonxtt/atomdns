@@ -7,7 +7,7 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 
-use mosdns_upstream_core::{
+use atomdns_upstream_core::{
     AddressFamily, BootstrapEndpoint, Clock, ConfigVersion, PublishedTarget, ResolutionPolicy,
     ResolutionTarget, ResolvedDestination, ResolverError, ServerIdentity, TransportCancellation,
     resolve_numeric,

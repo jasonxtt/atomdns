@@ -19,8 +19,8 @@ test('the manifest of an external package has the fields the host judges', () =>
     assert.equal(validVersion(bad), false, String(bad))
     assert.throws(() => buildManifest({ version: bad }))
   }
-  assert.equal(ARCHIVE_NAME, 'rtdns-webui.tar.gz')
-  assert.match(read('../../rust/native-host/src/update/mod.rs'), /pub\(crate\) const WEBUI_ASSET: &str = "rtdns-webui\.tar\.gz";/)
+  assert.equal(ARCHIVE_NAME, 'atomdns-webui.tar.gz')
+  assert.match(read('../../rust/native-host/src/update/mod.rs'), /pub\(crate\) const WEBUI_ASSET: &str = "atomdns-webui\.tar\.gz";/)
 })
 
 test('the build script and the host agree on the interface level', () => {
@@ -50,8 +50,8 @@ test('the system page links to every other mounted UI package', () => {
   assert.match(panel, /entry\.path === '\/'/, 'ui/main is the WebUI, not an external package')
   assert.match(panel, /uiEntries\.value\.filter\(\(entry\) => !isWebui\(entry\)\)/)
   assert.match(panel, /health\.value\?\.external_ui/)
-  assert.match(panel, /entry\.kind === 'mosdns_ui' && entry\.mounted/)
-  assert.match(panel, /entry\.kind === 'mosdns_ui' && !entry\.mounted/)
+  assert.match(panel, /entry\.kind === 'atomdns_ui' && entry\.mounted/)
+  assert.match(panel, /entry\.kind === 'atomdns_ui' && !entry\.mounted/)
   assert.match(panel, /v-for="entry in mountedPackages"/)
   assert.match(panel, /encodeURIComponent\(entry\.name\)/)
   assert.doesNotMatch(panel, /'\/main\/'|"\/main\/"/, 'no mount name is hard-coded')

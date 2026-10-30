@@ -15,8 +15,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use mosdns_native_host::{BoundHost, HostAssembly, HostOptions};
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_native_host::{BoundHost, HostAssembly, HostOptions};
+use atomdns_upstream_core::TransportCancellation;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -291,7 +291,8 @@ fn objects(proxy_addr: &str, upstreams: &str) -> String {
 }
 
 fn host(tree: &Tree) -> HostAssembly {
-    let config = mosdns_native_host::load_and_compile(&tree.path("config.yaml")).expect("compiles");
+    let config =
+        atomdns_native_host::load_and_compile(&tree.path("config.yaml")).expect("compiles");
     HostAssembly::with_options(config, HostOptions::default()).expect("assembles")
 }
 
@@ -367,8 +368,8 @@ fn udp_entries(stub: &Stub) -> String {
 
 // ----- compile-level behavior -----------------------------------------------------
 
-fn compile(tree: &Tree) -> Result<mosdns_native_host::CompiledConfig, String> {
-    mosdns_native_host::load_and_compile(&tree.path("config.yaml"))
+fn compile(tree: &Tree) -> Result<atomdns_native_host::CompiledConfig, String> {
+    atomdns_native_host::load_and_compile(&tree.path("config.yaml"))
         .map_err(|error| error.to_string())
 }
 
@@ -559,12 +560,12 @@ fn bad_references_and_bad_settings_are_errors_with_their_path() {
 }
 
 /// The fixed addresses of every compiled ECS policy.
-fn ecs_presets(config: &mosdns_native_host::CompiledConfig) -> Vec<std::net::IpAddr> {
+fn ecs_presets(config: &atomdns_native_host::CompiledConfig) -> Vec<std::net::IpAddr> {
     config
         .response_policies
         .iter()
         .filter_map(|policy| match &policy.policy {
-            mosdns_native_host::ResponsePolicy::Ecs(ecs) => ecs.preset,
+            atomdns_native_host::ResponsePolicy::Ecs(ecs) => ecs.preset,
             _ => None,
         })
         .collect()
@@ -606,7 +607,7 @@ fn check_prints_the_effective_values_with_their_sources() {
         r#"{"version":1,"proxies":{"main_proxy":{"addr":"10.9.9.9:1080"}}}"#,
     );
     let before = tree.text("webinfo/settings.json");
-    let report = mosdns_native_host::check_config(&tree.path("config.yaml")).unwrap();
+    let report = atomdns_native_host::check_config(&tree.path("config.yaml")).unwrap();
     let text = report.to_string();
     assert!(
         text.contains("EFFECTIVE socks5_proxy main_proxy addr=10.9.9.9:1080 source=settings"),
@@ -628,7 +629,7 @@ fn check_prints_the_effective_values_with_their_sources() {
     assert_eq!(tree.text("webinfo/settings.json"), before);
     // A broken settings file is reported, not ignored.
     tree.write("webinfo/settings.json", r#"{"version":9}"#);
-    let text = mosdns_native_host::check_config(&tree.path("config.yaml"))
+    let text = atomdns_native_host::check_config(&tree.path("config.yaml"))
         .unwrap()
         .to_string();
     assert!(
@@ -1078,7 +1079,7 @@ fn the_capability_matrix_lists_what_the_configuration_can_do() {
 fn the_fixture_in_the_new_syntax_checks_clean_with_effective_values_and_sources() {
     let config =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/settings/config.yaml");
-    let report = mosdns_native_host::check_config(&config).unwrap();
+    let report = atomdns_native_host::check_config(&config).unwrap();
     let text = report.to_string();
     assert!(
         text.contains("SUMMARY gaps=0 cascades=0 globals=0"),
@@ -1288,7 +1289,7 @@ fn managed_upstreams_derive_concurrency_but_yaml_keeps_its_limit() {
     );
     config(&tree, &ports, &extra);
     let concurrent = || {
-        mosdns_native_host::load_and_compile(&tree.path("config.yaml"))
+        atomdns_native_host::load_and_compile(&tree.path("config.yaml"))
             .unwrap()
             .forward_definitions
             .iter()

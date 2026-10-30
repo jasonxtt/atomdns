@@ -8,10 +8,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use atomdns_upstream_core::TransportCancellation;
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Bytes;
 use hyper_util::rt::TokioIo;
-use mosdns_upstream_core::TransportCancellation;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 
@@ -145,7 +145,7 @@ async fn call_once(url: &url::Url, call: &Call<'_>) -> Result<Reply, String> {
             .await
             .map_err(|error| format!("connect {host}:{port}: {error}"))?
     } else {
-        mosdns_upstream_core::socks5::connect(call.socks5, &host, port)
+        atomdns_upstream_core::socks5::connect(call.socks5, &host, port)
             .await
             .map_err(|error| format!("proxy {}: {error}", call.socks5))?
     };

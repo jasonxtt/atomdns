@@ -5,7 +5,7 @@ a 600 s capture is started through the API first, so every audited query writes 
 capture buffer while it is measured. `--capture off` is the control. The buffer is read at the end
 (its size is bounded by the host), and the stage's latency/CPU figures are written to result.json.
 
-    python3 tools/5d-2/capture_cost.py run --work prepared --binary mosdns-native --capture on \
+    python3 tools/5d-2/capture_cost.py run --work prepared --binary atomdns-native --capture on \
         --output cc-on-1 --seed 501
     python3 tools/5d-2/capture_cost.py summary cc-on-1 cc-off-1 ...
 """

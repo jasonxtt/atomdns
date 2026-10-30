@@ -1,4 +1,4 @@
-//! Pure Rust domain matcher core for MosDNS.
+//! Pure Rust domain matcher core for AtomDNS.
 //!
 //! Implements the four Go domain matcher types (full, domain/suffix, keyword,
 //! regex) and their `MixMatcher` combination with precedence

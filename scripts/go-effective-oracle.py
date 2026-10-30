@@ -7,7 +7,7 @@ settings migration; reads only the three webinfo override files it is given.
 usage: go-effective-oracle.py <dir-with-webinfo> <yaml-default-groups.json> [native-check-output]
   yaml-default-groups.json: {"group": [{"tag":..,"addr":..}, ...]} for groups
   without a usable override list (the YAML list is then what Go ran).
-  With a native `mosdns check` output the two are compared (exit 1 on a
+  With a native `atomdns check` output the two are compared (exit 1 on a
   difference); the one intended rename `<tag>-<group>` is accepted.
 """
 import json

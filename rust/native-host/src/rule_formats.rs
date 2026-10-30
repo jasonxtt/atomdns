@@ -202,7 +202,7 @@ impl Parsed {
 /// What a bare domain (`example.com`) means in the file being read.
 #[derive(Clone, Copy)]
 enum Bare {
-    /// Text lists (mosdns, v2ray): the domain and its subdomains.
+    /// Text lists (atomdns, v2ray): the domain and its subdomains.
     Domain,
     /// Clash rule-provider YAML: exactly this name.
     Full,
@@ -711,7 +711,7 @@ struct Conditions {
     keyword: Vec<String>,
     regex: Vec<String>,
     cidr: Vec<String>,
-    /// A condition rtdns cannot express (or `type: logical`, `invert: true`).
+    /// A condition atomdns cannot express (or `type: logical`, `invert: true`).
     other: bool,
 }
 
@@ -846,7 +846,7 @@ fn header(format: Format, url: &str) -> String {
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect();
-    format!("# rtdns: converted from {} {url}\n", format.as_str())
+    format!("# atomdns: converted from {} {url}\n", format.as_str())
 }
 
 /// The converted file of a domain set: one rule per line.
@@ -1089,7 +1089,7 @@ mod tests {
         assert_eq!(parsed.skipped.total(), 3);
         for rule in &parsed.domains {
             if let Some(pattern) = rule.strip_prefix("regexp:") {
-                mosdns_matcher_core::check_go_regexp(pattern).unwrap();
+                atomdns_matcher_core::check_go_regexp(pattern).unwrap();
             }
         }
     }
@@ -1316,7 +1316,7 @@ mod tests {
             "https://example.com/a\nb.txt",
         );
         let first = String::from_utf8(file.clone()).unwrap();
-        assert!(first.starts_with("# rtdns: converted from text https://example.com/a b.txt\n"));
+        assert!(first.starts_with("# atomdns: converted from text https://example.com/a b.txt\n"));
         let again = parse_text_lines(&file, true).unwrap();
         assert_eq!(again.domains, parsed.domains);
         let ips = ip_file(&parsed.ips, Format::Text, "https://example.com/i.txt");

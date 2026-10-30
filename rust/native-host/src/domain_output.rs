@@ -15,8 +15,8 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use mosdns_dns_core::QuestionInfo;
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_dns_core::QuestionInfo;
+use atomdns_upstream_core::TransportCancellation;
 
 use crate::config::providers::presentation_name;
 use crate::local_url::{self, LocalApi, Target};
@@ -144,7 +144,7 @@ pub struct DomainOutput {
 /// The compiled plugin: the external it is dispatched as, and its owner.
 pub struct DomainOutputConfig {
     pub tag: String,
-    pub executable: mosdns_sequence_core::ExecutableId,
+    pub executable: atomdns_sequence_core::ExecutableId,
     pub runtime: Rc<DomainOutput>,
 }
 
@@ -792,7 +792,7 @@ mod tests {
 
     fn question(name: &str) -> QuestionInfo {
         let packet = wire(name, 0);
-        mosdns_dns_core::parse_query(&packet).unwrap().1
+        atomdns_dns_core::parse_query(&packet).unwrap().1
     }
 
     fn quiet(max_keys: usize) -> Settings {
@@ -832,7 +832,7 @@ mod tests {
             wire("mixed.example", 0x30),
             wire("mixed.example", 0),
         ] {
-            let question = mosdns_dns_core::parse_query(&packet).unwrap().1;
+            let question = atomdns_dns_core::parse_query(&packet).unwrap().1;
             output.record(&packet, &question);
         }
         let root = wire("a", 0);

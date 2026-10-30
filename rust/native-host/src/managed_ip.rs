@@ -73,7 +73,7 @@ impl ManagedIpSet {
             {
                 return Err(ReplaceError::Limits);
             }
-            let mut list = mosdns_matcher_core::IpPrefixList::new();
+            let mut list = atomdns_matcher_core::IpPrefixList::new();
             for value in values {
                 if let Ok((ip, bits)) = ip_prefix(&value, "post") {
                     list.append(ip, bits);

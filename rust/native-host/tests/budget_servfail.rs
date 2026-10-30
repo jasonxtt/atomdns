@@ -1,12 +1,12 @@
 use std::time::Duration;
 
-use hickory_proto::op::{Edns, Message, Query};
-use hickory_proto::rr::{Name, RecordType, rdata::opt::EdnsCode};
-use mosdns_native_host::{
+use atomdns_native_host::{
     AuditRecord, FailureProvenance, HostAssembly, HostOptions, LocalFailureKind,
     QueryTerminalOutcome, ResponseSource, ResponseState, TcpServer, UdpServer, compile_yaml,
 };
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_upstream_core::TransportCancellation;
+use hickory_proto::op::{Edns, Message, Query};
+use hickory_proto::rr::{Name, RecordType, rdata::opt::EdnsCode};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 

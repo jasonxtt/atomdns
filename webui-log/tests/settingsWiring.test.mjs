@@ -95,7 +95,7 @@ test('the upstream dialog offers the proxy switch only on a settings-backed runt
   const head = panel.slice(panel.indexOf('<thead>'), panel.indexOf('</thead>'))
   assert.deepEqual([...head.matchAll(/<th[^>]*>([^<]+)<\/th>/g)].map((match) => match[1].replace(/\{\{.*?\}\}/g, '').trim()), ['标识', '协议', '地址', '启用', '延迟', '操作'])
   // The old table's group filter, sorting and "hide disabled" (same storage key) stay.
-  assert.match(panel, /rtdns-hide-disabled-upstreams/)
+  assert.match(panel, /atomdns-hide-disabled-upstreams/)
   assert.match(panel, /aria-label="按组筛选"/)
   assert.match(panel, /onSort\('tag'\)/)
 })

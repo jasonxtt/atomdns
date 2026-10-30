@@ -46,7 +46,7 @@ def main():
     frozen_source = source_identity()
     shutil.copyfile(Path(__file__).with_name('lossless-probe.rs'), output / 'main.rs')
     deps = {name: {'path': str(source / 'rust' / directory)} for name, directory in
-            [('mosdns-native-host', 'native-host'), ('mosdns-cache-core', 'cache-core')]}
+            [('atomdns-native-host', 'native-host'), ('atomdns-cache-core', 'cache-core')]}
     manifest = ['[package]', 'name="lossless-allocation-probe"', 'version="0.0.0"',
                 'edition="2024"', '[features]', 'shared=[]', '[[bin]]',
                 'name="probe"', 'path="main.rs"', '[dependencies]']

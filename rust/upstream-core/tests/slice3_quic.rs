@@ -34,16 +34,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use fixtures::FixtureSet;
-use hyper::body::Bytes;
-use mosdns_upstream_core::quic::{DOQ_ALPN, Doh3Upstream, DoqEndpoint, DoqUpstream, H3_ALPN};
-use mosdns_upstream_core::secure::{
+use atomdns_upstream_core::quic::{DOQ_ALPN, Doh3Upstream, DoqEndpoint, DoqUpstream, H3_ALPN};
+use atomdns_upstream_core::secure::{
     DohEndpoint, DohProtocolError, PeerStreamError, SecureError, TlsPolicy,
 };
-use mosdns_upstream_core::{
+use atomdns_upstream_core::{
     CloseResult, CloseTransition, ExchangeContext, ExchangeRequest, ServerIdentity,
     SideEffectState, TransportCancellation, UpstreamError,
 };
+use fixtures::FixtureSet;
+use hyper::body::Bytes;
 use quinn::VarInt;
 use quinn::crypto::rustls::{HandshakeData, QuicServerConfig};
 use rustls::ServerConfig;
@@ -529,7 +529,7 @@ async fn run_h3(
             let _ = send_dns_body(&mut stream, &body, false).await;
             let mut trailers = hyper::HeaderMap::new();
             trailers.append(
-                hyper::header::HeaderName::from_static("x-mosdns-trailer"),
+                hyper::header::HeaderName::from_static("x-atomdns-trailer"),
                 hyper::header::HeaderValue::from_static("1"),
             );
             let _ = stream.send_trailers(trailers).await;

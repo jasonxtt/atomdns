@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_upstream_core::TransportCancellation;
 use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 
 use super::{AuditPersistenceFaults, Request, dispatch};

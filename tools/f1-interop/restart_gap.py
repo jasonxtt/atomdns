@@ -1,6 +1,6 @@
 """How long DNS is unavailable during a real in-place restart (VM, isolated netns).
 
-    python3 tools/f1-interop/restart_gap.py run --work prepared --binary mosdns-native --output gap-1 [--seed 501]
+    python3 tools/f1-interop/restart_gap.py run --work prepared --binary atomdns-native --output gap-1 [--seed 501]
 
 Runs the host on the prepared production-shaped configuration (reserved ports, mock
 upstreams, the 5D-2 harness), sends one UDP query every 10 ms from inside the namespace,

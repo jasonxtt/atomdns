@@ -2,11 +2,11 @@
 use std::net::{IpAddr, Ipv4Addr};
 use std::rc::Rc;
 
-use mosdns_dns_core::observe_answer_addresses;
+use atomdns_dns_core::observe_answer_addresses;
 #[cfg(test)]
-use mosdns_matcher_core::IpPrefixList;
-use mosdns_matcher_core::MixMatcher;
-use mosdns_sequence_core::{
+use atomdns_matcher_core::IpPrefixList;
+use atomdns_matcher_core::MixMatcher;
+use atomdns_sequence_core::{
     ExecutionState, MatchOutcome, Matcher, MatcherError, ResponseState, StateMutation,
 };
 
@@ -68,14 +68,14 @@ impl Matcher for QnameMatcher {
 /// Exact qname matcher for the deliberately narrow native W3 grammar.
 #[allow(dead_code)] // The W3 domain_set grammar still compiles through this helper.
 pub(crate) struct FullQnameMatcher {
-    domains: mosdns_matcher_core::FullMatcher<()>,
+    domains: atomdns_matcher_core::FullMatcher<()>,
 }
 
 impl FullQnameMatcher {
     #[allow(dead_code)]
     pub(crate) fn new(domain: &str) -> Result<Self, MatcherBuildError> {
         let domain = normalize_ascii_domain(domain)?;
-        let mut domains = mosdns_matcher_core::FullMatcher::new();
+        let mut domains = atomdns_matcher_core::FullMatcher::new();
         domains.add(&domain, ());
         Ok(Self { domains })
     }
@@ -367,8 +367,8 @@ fn valid_ascii_label(label: &[u8]) -> bool {
 mod tests {
     use std::net::Ipv4Addr;
 
-    use mosdns_dns_core::parse_query;
-    use mosdns_sequence_core::{ExecutionState, Matcher};
+    use atomdns_dns_core::parse_query;
+    use atomdns_sequence_core::{ExecutionState, Matcher};
 
     use super::{
         FullQnameMatcher, MatcherBuildError, ResponseIpMatcher, TrueMatcher,

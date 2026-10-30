@@ -240,7 +240,7 @@ budget throughout the live window.
 
 Mac `reference.py --once --end-wall UNIX_TIME` appends a single best-effort
 read-only SSH sample. A user launchd job invokes it every 600 seconds. No Go-host
-credentials are installed on rtdns, and missing Go samples never stop replay.
+credentials are installed on atomdns, and missing Go samples never stop replay.
 See the active task's `research/48h-runbook.md` for the installed instance and
 safe-stop commands. Unit tests cover retention, exact event boundaries,
 restart grants and rollback/once-only behavior; there is no self-review agent.

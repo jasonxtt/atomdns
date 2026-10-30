@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use mosdns_native_host::{BoundHost, HostAssembly, HostOptions, compile_yaml};
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_native_host::{BoundHost, HostAssembly, HostOptions, compile_yaml};
+use atomdns_upstream_core::TransportCancellation;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -155,7 +155,7 @@ fn ancount(response: &[u8]) -> u16 {
 }
 
 fn addresses(response: &[u8]) -> Vec<IpAddr> {
-    mosdns_dns_core::observe_answer_addresses(response).unwrap()
+    atomdns_dns_core::observe_answer_addresses(response).unwrap()
 }
 
 /// TTL of the first answer record.
@@ -502,7 +502,8 @@ fn config(ports: &Ports, plugins: &str, sequence: &str) -> String {
 
 fn assemble(tree: &Tree, yaml: &str, options: HostOptions) -> HostAssembly {
     tree.write("config.yaml", yaml);
-    let config = mosdns_native_host::load_and_compile(&tree.path("config.yaml")).expect("compiles");
+    let config =
+        atomdns_native_host::load_and_compile(&tree.path("config.yaml")).expect("compiles");
     HostAssembly::with_options(config, options).expect("assembles")
 }
 
@@ -1196,7 +1197,7 @@ fn rewrite_tolerates_a_missing_file_and_rejects_bad_files_at_start() {
         let yaml = format!(
             "log: {{level: error}}\nplugins:\n  - tag: f\n    type: forward\n    args: {{upstreams: [{{addr: \"udp://127.0.0.1:9\"}}]}}\n  - tag: r\n    type: rewrite\n    args: {args}\n  - tag: entry\n    type: sequence\n    args: [{{exec: $r}}, {{exec: $f}}]\n  - tag: l\n    type: udp_server\n    args: {{entry: entry, listen: \"127.0.0.1:15400\"}}\n"
         );
-        let result = mosdns_native_host::compile_yaml_with_base(&yaml, &tree.0);
+        let result = atomdns_native_host::compile_yaml_with_base(&yaml, &tree.0);
         result.err().map(|error| error.reason)
     };
     assert!(
@@ -1360,7 +1361,7 @@ fn webinfo_start_up_and_capabilities() {
         )
     };
     let compile = |args: &str| {
-        mosdns_native_host::compile_yaml_with_base(&base(args), &tree.0)
+        atomdns_native_host::compile_yaml_with_base(&base(args), &tree.0)
             .err()
             .map(|error| error.reason)
     };
@@ -1376,7 +1377,7 @@ fn webinfo_start_up_and_capabilities() {
     // A webinfo plugin is not an executable.
     let executable =
         base("{file: webinfo/empty.json}").replace("[{exec: $f}]", "[{exec: $clientname}]");
-    let Err(error) = mosdns_native_host::compile_yaml_with_base(&executable, &tree.0) else {
+    let Err(error) = atomdns_native_host::compile_yaml_with_base(&executable, &tree.0) else {
         panic!("webinfo is not executable")
     };
     assert!(error.reason.contains("not executable"));

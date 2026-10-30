@@ -148,7 +148,7 @@ class LongExperiment(Experiment):
         while not self.stop.is_set():
             try:
                 props = dict(line.split('=', 1) for line in subprocess.check_output(['systemctl', 'show',
-                    'mosdns.service', '-p', 'MainPID', '-p', 'NRestarts', '-p', 'ActiveState'], text=True).splitlines())
+                    'atomdns.service', '-p', 'MainPID', '-p', 'NRestarts', '-p', 'ActiveState'], text=True).splitlines())
                 try:
                     health = api(self.config['api'], '/api/v1/system/health')
                     ready = health.get('ready') is True

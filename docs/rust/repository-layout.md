@@ -1,9 +1,9 @@
 # Public repository and local development files
 
-The public repository contains MosDNS code, tests, build/release workflows,
+The public repository contains AtomDNS code, tests, build/release workflows,
 product contracts and selected validation summaries. Trellis, Codex and shared
 agent tooling are optional local development resources, retained locally but
-excluded from Git tracking. A fresh clone does not require them to build MosDNS.
+excluded from Git tracking. A fresh clone does not require them to build AtomDNS.
 
 - Product contracts: [index](contracts/index.md).
 - Validation and explicit limitations: [summary](validation-summary.md).
@@ -16,7 +16,7 @@ excluded from Git tracking. A fresh clone does not require them to build MosDNS.
 
 Since v0.4.0 the program embeds no UI: `/` serves `<config root>/ui/main/`, the WebUI package
 built from `webui-log/src` by `npm run build` (`webui-log/dist/`, not checked in) or
-`npm run build:package` (`release/rtdns-webui.tar.gz`, the release asset); the former
+`npm run build:package` (`release/atomdns-webui.tar.gz`, the release asset); the former
 `rust/native-host/ui/` tree was removed. Since Phase 6a the `rust` branch has no Go host and no
 `/log` compatibility UI (`webui-log/src-log1` was removed; it lives in the Go
 repository). The leftover Go-era `webui-blog/` source was removed on 2026-10-18 (user

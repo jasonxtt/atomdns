@@ -1,4 +1,4 @@
-use mosdns_native_host::{CacheTestClock, NativeCacheAdapter};
+use atomdns_native_host::{CacheTestClock, NativeCacheAdapter};
 
 #[test]
 fn actual_go_ecs_dump_normalizes_collisions_and_roundtrips() {

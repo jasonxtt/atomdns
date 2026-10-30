@@ -13,7 +13,7 @@ is redesigned (gap list M1-f). `aliapi` takes its values from YAML only.
   routes. A settings layer builds an `AliApiArgs` and calls `build`; nothing else decides how defaults merge.
 - `config::build_forward_target(addr, ForwardTargetOptions, path)` builds one validated endpoint descriptor (shared with
   `forward`, which never sets `socks5`).
-- `mosdns_upstream_core::socks5::Route` + `Upstream/ReuseOwner/DotEndpoint/DohEndpoint::with_socks5` carry a proxy into the
+- `atomdns_upstream_core::socks5::Route` + `Upstream/ReuseOwner/DotEndpoint/DohEndpoint::with_socks5` carry a proxy into the
   TCP, DoT and DoH transports. UDP never uses a proxy.
 - `rewrite::Rewrite`, `webinfo::WebInfo`; `CompiledConfig::local` holds both.
 

@@ -1,8 +1,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use mosdns_dns_core::{QueryHeader, QuestionInfo};
-use mosdns_sequence_core::{
+use atomdns_dns_core::{QueryHeader, QuestionInfo};
+use atomdns_sequence_core::{
     ExecutableSpec, ExecutableTargetSpec, ExecutionCompletion, ExecutionControl, ExecutionError,
     ExecutionState, Executor, ExecutorError, ExecutorOutcome, FixtureRef, FixtureSpec,
     MatchOutcome, Matcher, MatcherError, MatcherSpecInput, ProgramSpec, RuleSpec, SequenceId,
@@ -30,7 +30,7 @@ fn state() -> ExecutionState {
     )
 }
 
-fn entry(program: &mosdns_sequence_core::ValidatedProgram) -> SequenceId {
+fn entry(program: &atomdns_sequence_core::ValidatedProgram) -> SequenceId {
     program.sequence_id("main").expect("main entry")
 }
 
@@ -372,7 +372,7 @@ fn jump_target_fall_through_resumes_the_caller() {
 fn inline_jump_program(
     target_rules: Vec<RuleSpec>,
     calls: &Rc<RefCell<Vec<&'static str>>>,
-) -> mosdns_sequence_core::ValidatedProgram {
+) -> atomdns_sequence_core::ValidatedProgram {
     ProgramSpec::new(
         vec![
             SequenceSpec::new(
@@ -462,7 +462,7 @@ fn inline_jump_preserves_local_continuation_and_outer_next_rule() {
 fn inline_terminal_program(
     terminal: ExecutableSpec,
     calls: &Rc<RefCell<Vec<&'static str>>>,
-) -> mosdns_sequence_core::ValidatedProgram {
+) -> atomdns_sequence_core::ValidatedProgram {
     ProgramSpec::new(
         vec![SequenceSpec::new(
             "main",
@@ -615,7 +615,7 @@ fn try_propagates_an_ordinary_matcher_error() {
                     vec![MatcherSpecInput::new(
                         Box::new(ErrorMatcher),
                         false,
-                        mosdns_sequence_core::DispatchMetadata::None,
+                        atomdns_sequence_core::DispatchMetadata::None,
                     )],
                     None,
                 )],

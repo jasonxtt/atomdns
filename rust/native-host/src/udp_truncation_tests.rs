@@ -1,9 +1,9 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use atomdns_upstream_core::TransportCancellation;
 use hickory_proto::op::{Edns, Message, MessageType, Query};
 use hickory_proto::rr::{Name, RData, Record, RecordType, rdata::A};
-use mosdns_upstream_core::TransportCancellation;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 

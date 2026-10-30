@@ -1,12 +1,12 @@
 # Directory Structure
 
-> **Historical evidence (Phase 6a, 2026-10-18).** This document describes the Go↔Rust hybrid stage. The Go source, the cgo bridge (`rust/runtime`), the `MOSDNS_*_BACKEND` selectors and the scripts it names were removed from the `rust` branch (they remain in git history and, for Go, in the Go repository). The text below is kept unchanged as evidence.
+> **Historical evidence (Phase 6a, 2026-10-18).** This document describes the Go↔Rust hybrid stage. The Go source, the cgo bridge (`rust/runtime`), the `ATOMDNS_*_BACKEND` selectors and the scripts it names were removed from the `rust` branch (they remain in git history and, for Go, in the Go repository). The text below is kept unchanged as evidence.
 
 ## Ownership boundaries
 
 ```text
 coremain/                 process lifecycle, generated config, HTTP API, embedded UI
-plugin/                   MosDNS plugin registration and implementations
+plugin/                   AtomDNS plugin registration and implementations
   executable/cache/      current Go cache plugin and compatibility contract
 pkg/                      reusable Go DNS, matcher, transport, cache, and utility code
 webui-log/                maintained Vue UI served at /

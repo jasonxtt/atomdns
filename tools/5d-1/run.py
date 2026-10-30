@@ -62,7 +62,7 @@ def run(args):
         corpus_path, oracle_path = prepare_f(root,args.role,round(100*(args.warmup+args.duration+args.recovery)))
     for path in (root/'cache').glob('*.dump'): path.unlink()
     (root/'tmp').mkdir(); (root/'empty-certs').mkdir(exist_ok=True)
-    before=subprocess.check_output(['systemctl','show','mosdns','-p','MainPID','-p','ActiveState'])
+    before=subprocess.check_output(['systemctl','show','atomdns','-p','MainPID','-p','ActiveState'])
     (args.output/'service-before.txt').write_bytes(before)
     ns=f'5d1-{os.getpid()}'
     owned,logs,created=[],[],False
@@ -119,7 +119,7 @@ def run(args):
             if remaining: raise RuntimeError('namespace contains remaining processes')
             command(['ip','netns','delete',ns])
         for stream in logs: stream.close()
-        after=subprocess.check_output(['systemctl','show','mosdns','-p','MainPID','-p','ActiveState'])
+        after=subprocess.check_output(['systemctl','show','atomdns','-p','MainPID','-p','ActiveState'])
         save(args.output/'cleanup.json',dict(all_owned_processes_exited=all(p.poll() is not None for p in owned),namespace_deleted=created,original_service_unchanged=after==before))
         if before!=after: raise RuntimeError('original service changed')
 

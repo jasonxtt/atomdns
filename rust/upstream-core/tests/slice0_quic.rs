@@ -9,9 +9,9 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
-use mosdns_upstream_core::quic::{DOQ_ALPN, DoqEndpoint, H3_ALPN, zero_outbound_query_id};
-use mosdns_upstream_core::secure::{SecureHttpVersion, SecureTransport, ServerIdentity};
-use mosdns_upstream_core::{DohEndpoint, IdentityError, SecureError, Transport};
+use atomdns_upstream_core::quic::{DOQ_ALPN, DoqEndpoint, H3_ALPN, zero_outbound_query_id};
+use atomdns_upstream_core::secure::{SecureHttpVersion, SecureTransport, ServerIdentity};
+use atomdns_upstream_core::{DohEndpoint, IdentityError, SecureError, Transport};
 
 fn v4(port: u16) -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)

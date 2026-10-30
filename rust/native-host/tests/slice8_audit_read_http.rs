@@ -11,9 +11,9 @@ use std::sync::{
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use mosdns_dns_core::validate_response;
-use mosdns_native_host::{AuditTestClock, CacheStatus, CacheTestClock, HostAssembly, HostOptions};
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_dns_core::validate_response;
+use atomdns_native_host::{AuditTestClock, CacheStatus, CacheTestClock, HostAssembly, HostOptions};
+use atomdns_upstream_core::TransportCancellation;
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -306,7 +306,7 @@ fn config(
     api_port: u16,
     upstream_port: u16,
     listener_type: &str,
-) -> mosdns_native_host::CompiledConfig {
+) -> atomdns_native_host::CompiledConfig {
     let idle_timeout = if listener_type == "tcp_server" {
         "      idle_timeout: 5\n"
     } else {
@@ -355,7 +355,7 @@ plugins:
     );
     let path = root.join("config.yaml");
     std::fs::write(&path, yaml).expect("write audit read config");
-    mosdns_native_host::load_and_compile(&path).expect("compile audit read config")
+    atomdns_native_host::load_and_compile(&path).expect("compile audit read config")
 }
 
 fn cache_config(
@@ -363,7 +363,7 @@ fn cache_config(
     dns_port: u16,
     api_port: u16,
     upstream_port: u16,
-) -> mosdns_native_host::CompiledConfig {
+) -> atomdns_native_host::CompiledConfig {
     let yaml = format!(
         r#"log:
   level: error
@@ -395,7 +395,7 @@ plugins:
     );
     let path = root.join("cache-config.yaml");
     std::fs::write(&path, yaml).expect("write cache config");
-    mosdns_native_host::load_and_compile(&path).expect("compile cache config")
+    atomdns_native_host::load_and_compile(&path).expect("compile cache config")
 }
 
 fn replacement_config(
@@ -404,7 +404,7 @@ fn replacement_config(
     api_port: u16,
     child_port: u16,
     parent_port: u16,
-) -> mosdns_native_host::CompiledConfig {
+) -> atomdns_native_host::CompiledConfig {
     let yaml = format!(
         r#"log:
   level: error
@@ -446,14 +446,14 @@ plugins:
     );
     let path = root.join("replacement-config.yaml");
     std::fs::write(&path, yaml).expect("write replacement config");
-    mosdns_native_host::load_and_compile(&path).expect("compile replacement config")
+    atomdns_native_host::load_and_compile(&path).expect("compile replacement config")
 }
 
 fn local_default_config(
     root: &std::path::Path,
     dns_port: u16,
     api_port: u16,
-) -> mosdns_native_host::CompiledConfig {
+) -> atomdns_native_host::CompiledConfig {
     let yaml = format!(
         r#"log:
   level: error
@@ -480,7 +480,7 @@ plugins:
     );
     let path = root.join("local-default-config.yaml");
     std::fs::write(&path, yaml).expect("write local default config");
-    mosdns_native_host::load_and_compile(&path).expect("compile local default config")
+    atomdns_native_host::load_and_compile(&path).expect("compile local default config")
 }
 
 fn at(seconds: u64, nanos: u32) -> SystemTime {
@@ -505,7 +505,7 @@ async fn send_dns(
 #[test]
 #[allow(clippy::too_many_lines)]
 fn v2_stats_windows_and_logs_use_retained_real_dns_records() {
-    let root = std::env::temp_dir().join(format!("mosdns-audit-read-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("atomdns-audit-read-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("audit read root");
     let dns_port = free_udp_port();
@@ -1093,7 +1093,7 @@ fn v2_stats_windows_and_logs_use_retained_real_dns_records() {
         let large_answer_projection_bytes_per_record = 49_152_u64;
         let estimated_large_projection =
             large_answer_projection_bytes_per_record * 400_000_u64;
-        let handle_bytes = u64::try_from(std::mem::size_of::<Arc<mosdns_native_host::AuditRecord>>())
+        let handle_bytes = u64::try_from(std::mem::size_of::<Arc<atomdns_native_host::AuditRecord>>())
             .expect("Arc handle size fits u64");
         let two_view_projection = handle_bytes
             .saturating_mul(400_000_u64.saturating_add(300))
@@ -1165,7 +1165,8 @@ fn v2_stats_windows_and_logs_use_retained_real_dns_records() {
 
 #[test]
 fn udp_real_listener_audits_cache_miss_hit_and_ttl_aging() {
-    let root = std::env::temp_dir().join(format!("mosdns-audit-cache-read-{}", std::process::id()));
+    let root =
+        std::env::temp_dir().join(format!("atomdns-audit-cache-read-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("cache audit root");
     let dns_port = free_udp_port();
@@ -1253,7 +1254,7 @@ fn udp_real_listener_audits_cache_miss_hit_and_ttl_aging() {
 fn tcp_real_listener_preserves_positive_cname_and_audit_projection() {
     validate_response(&rich_response(&dns_query_type(0x9101, "rich.example.", 28)))
         .expect("valid rich AAAA response");
-    let root = std::env::temp_dir().join(format!("mosdns-audit-tcp-read-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("atomdns-audit-tcp-read-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("TCP audit read root");
     let dns_port = free_tcp_port();
@@ -1379,7 +1380,7 @@ fn tcp_real_listener_preserves_positive_cname_and_audit_projection() {
 #[test]
 fn udp_real_listener_audits_parent_ownership_after_identical_child_response() {
     let root =
-        std::env::temp_dir().join(format!("mosdns-audit-replacement-{}", std::process::id()));
+        std::env::temp_dir().join(format!("atomdns-audit-replacement-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("replacement audit root");
     let dns_port = free_udp_port();
@@ -1469,7 +1470,8 @@ async fn assert_distinct_domains(api: SocketAddr, count: usize, limit: usize) ->
 
 #[test]
 fn distinct_domain_count_covers_the_ring_without_rank_truncation() {
-    let root = std::env::temp_dir().join(format!("mosdns-distinct-domains-{}", std::process::id()));
+    let root =
+        std::env::temp_dir().join(format!("atomdns-distinct-domains-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let host = HostAssembly::with_options_and_state_root(
@@ -1567,8 +1569,10 @@ fn distinct_domain_count_covers_the_ring_without_rank_truncation() {
 
 #[test]
 fn udp_real_listener_audits_matcherless_local_default_as_unmatched() {
-    let root =
-        std::env::temp_dir().join(format!("mosdns-audit-local-default-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!(
+        "atomdns-audit-local-default-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("local default audit root");
     let host = HostAssembly::with_options_and_state_root(

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""VM-only drill of the online update v0.2.2 -> v0.3.0 (configuration schema 2 -> 3, task 10-24-rtdns-release-v0.3.0).
+"""VM-only drill of the online update v0.2.2 -> v0.3.0 (configuration schema 2 -> 3, task 10-24-atomdns-release-v0.3.0).
 
-Starts the REAL v0.2.2 release program as a systemd unit named `rtdns` (Restart=always, RestartSec=120)
+Starts the REAL v0.2.2 release program as a systemd unit named `atomdns` (Restart=always, RestartSec=120)
 in a loopback-only network namespace created and removed by this script (no public network, no clash
-with other services of the machine). A fake GitHub API on 127.0.0.1 (MOSDNS_UPDATE_API_URL) offers the
+with other services of the machine). A fake GitHub API on 127.0.0.1 (ATOMDNS_UPDATE_API_URL) offers the
 v0.3.0 candidate and the schema 3 configuration package.
 
     update_drill_v030.py --mode synthetic --work DIR --repo DIR --v022-dir DIR --release-dir DIR
@@ -11,7 +11,7 @@ v0.3.0 candidate and the schema 3 configuration package.
     update_drill_v030.py --mode prodcopy  --work DIR --repo DIR --v022-dir DIR --release-dir DIR
                          --config-zip FILE --prod-copy DIR
 
-  --v022-dir     the v0.2.2 release assets (rtdns-linux-amd64.tar.gz + rtdns-update-manifest.json)
+  --v022-dir     the v0.2.2 release assets (atomdns-linux-amd64.tar.gz + atomdns-update-manifest.json)
   --release-dir  the v0.3.0 output of scripts/build-rust-release.sh (with RUST_CONFIG_PACKAGE)
   --config-zip   the config_rust_up.zip that the metadata names (schema 3)
   --config-tar   synthetic: the schema 2 config_rust tree as a tar (file repository ccc64c9)
@@ -289,7 +289,7 @@ def settings_without_flags(path):
 def broken_candidate(work, repo, config_zip):
     broken = work / "broken"
     broken.mkdir(exist_ok=True)
-    script = broken / "rtdns"
+    script = broken / "atomdns"
     script.write_text("#!/bin/sh\ncase \"$1\" in\n  version) echo v0.3.0;;\n  check) exit 0;;\n  start) exit 3;;\nesac\n")
     script.chmod(0o755)
     env = dict(os.environ, PREBUILT=str(script), RUST_CONFIG_PACKAGE=str(config_zip))
@@ -335,16 +335,16 @@ def drill(args):
     program_022 = work / "unpacked-v0.2.2"
     program_022.mkdir(parents=True)
     run(["tar", "-xzf", v022 / ASSET, "-C", program_022])
-    sha_022 = sha256(program_022 / "rtdns")
+    sha_022 = sha256(program_022 / "atomdns")
     program_030 = work / "unpacked-v0.3.0"
     program_030.mkdir()
     run(["tar", "-xzf", release / ASSET, "-C", program_030])
-    sha_030 = sha256(program_030 / "rtdns")
-    for path, tag in ((program_022 / "rtdns", "v0.2.2"), (program_030 / "rtdns", "v0.3.0")):
+    sha_030 = sha256(program_030 / "atomdns")
+    for path, tag in ((program_022 / "atomdns", "v0.2.2"), (program_030 / "atomdns", "v0.3.0")):
         say(f"0 {tag} binary", run([path, "version"]).strip() == tag, f"reports {tag}")
 
     host.install_unit()
-    shutil.copy2(program_022 / "rtdns", host.exe)
+    shutil.copy2(program_022 / "atomdns", host.exe)
     managed = pkg["managed_files"]
     host.prepare_synthetic(args.config_tar) if synthetic else host.prepare_prodcopy(args.prod_copy)
     expected = expected_flags(host.root, declarations)
@@ -556,9 +556,9 @@ def drill(args):
         + f"; gen/route_learner.json: {sum(learner_before.values())} entries before, {sum(learner_after.values())} now ({learned_gone} expired "
         f"ones swept, the live ones kept); /plugins/route_learner/status {status_code}"
         + "".join(f"; NOT OK: {name}" for name, ok in parts.items() if not ok))
-    check = run([program_030 / "rtdns", "check", "-d", host.root, "-c", host.root / "config_custom.yaml"])
+    check = run([program_030 / "atomdns", "check", "-d", host.root, "-c", host.root / "config_custom.yaml"])
     say("1 check is clean", bool(re.search(r"gaps=0\b.*cascades=0\b.*globals=0\b", check, re.S)),
-        "rtdns check on the updated root reports gaps=0 cascades=0 globals=0")
+        "atomdns check on the updated root reports gaps=0 cascades=0 globals=0")
     if synthetic:
         group_ok = dns_query(host.dns, "after1.grp.example.com") == GROUP_ANSWER and dns_query(GROUP_PORT, "after2.example.com") == GROUP_ANSWER
         other = dns_query(host.dns, "other.example.com") == ANSWER

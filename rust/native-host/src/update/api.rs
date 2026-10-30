@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_upstream_core::TransportCancellation;
 use serde::Deserialize;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -53,10 +53,10 @@ fn hold_until_connection_ends(permit: OwnedSemaphorePermit) {
     let _ = HOLD.try_with(|held| held.borrow_mut().push(permit));
 }
 
-/// How long the guard waits for the candidate's health; `MOSDNS_UPDATE_HEALTH_TIMEOUT_SECS`
+/// How long the guard waits for the candidate's health; `ATOMDNS_UPDATE_HEALTH_TIMEOUT_SECS`
 /// (1–600) shortens it for tests.
 fn health_timeout() -> u64 {
-    std::env::var("MOSDNS_UPDATE_HEALTH_TIMEOUT_SECS")
+    std::env::var("ATOMDNS_UPDATE_HEALTH_TIMEOUT_SECS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|value| (1..=600).contains(value))
@@ -590,7 +590,7 @@ async fn export(ctx: &Context<'_>, body: &[u8]) -> Reply {
                 headers: vec![(
                     "Content-Disposition",
                     format!(
-                        "attachment; filename=\"mosdns_backup_{}.zip\"",
+                        "attachment; filename=\"atomdns_backup_{}.zip\"",
                         transaction::now_secs()
                     ),
                 )],
@@ -713,7 +713,7 @@ mod tests {
         std::fs::write(root.join("sub_config/a.yaml"), "x").unwrap();
         std::fs::write(root.join("sub_config/backup/b.yaml"), "hidden").unwrap();
         std::fs::write(root.join("backup/old/c.yaml"), "hidden").unwrap();
-        std::fs::write(root.join("update/txn-1/mosdns.previous"), "binary").unwrap();
+        std::fs::write(root.join("update/txn-1/atomdns.previous"), "binary").unwrap();
         std::os::unix::fs::symlink("/etc/passwd", root.join("link")).unwrap();
         let bytes = export_zip(&root).unwrap();
         let files = read_zip(
@@ -732,13 +732,13 @@ mod tests {
 
     #[test]
     fn config_names_are_relative_to_the_root() {
-        let root = Path::new("/etc/mosdns");
+        let root = Path::new("/etc/atomdns");
         assert_eq!(
-            config_name(root, Path::new("/etc/mosdns/config_custom.yaml")),
+            config_name(root, Path::new("/etc/atomdns/config_custom.yaml")),
             "config_custom.yaml"
         );
         assert_eq!(
-            config_name(root, Path::new("/etc/mosdns/conf/main.yaml")),
+            config_name(root, Path::new("/etc/atomdns/conf/main.yaml")),
             "conf/main.yaml"
         );
         assert_eq!(

@@ -2,7 +2,7 @@
 //! new files, runs the candidate as its child, and either confirms it or rolls back.
 //!
 //! The guard is entered by `exec` from the running host (same process id, so a service
-//! manager never sees the service stop) as `rtdns update-guard --transaction <file>`.
+//! manager never sees the service stop) as `atomdns update-guard --transaction <file>`.
 //! It has no sockets and loads no configuration. See `transaction.rs` for the states.
 
 use std::io::{Read, Write};
@@ -25,10 +25,10 @@ const PREFLIGHT_VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 const PREFLIGHT_CHECK_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_HEALTH_BYTES: usize = 256 << 10;
 /// The guard's pid, handed to the candidate so it can tell whether the guard still lives.
-const GUARD_PID_ENV: &str = "MOSDNS_UPDATE_GUARD_PID";
+const GUARD_PID_ENV: &str = "ATOMDNS_UPDATE_GUARD_PID";
 
 fn log(message: &str) {
-    eprintln!("rtdns update-guard: {message}");
+    eprintln!("atomdns update-guard: {message}");
 }
 
 /// Replaces this process with `executable` and `args` (`args[0]` is `argv[0]`). The guard
@@ -45,7 +45,7 @@ fn exec_program(executable: &str, args: &[String]) -> std::io::Error {
 }
 
 /// A candidate started by the guard dies with it, instead of staying behind holding the
-/// service's ports. Called by `rtdns start` when the guard marker is present.
+/// service's ports. Called by `atomdns start` when the guard marker is present.
 ///
 /// The signal is only sent when the parent dies *after* it is set, so the guard's pid is
 /// checked as well: a guard that was killed between `spawn` and this call has already left
@@ -62,7 +62,7 @@ pub fn arm_parent_death_signal() {
     let parent =
         rustix::process::getppid().and_then(|pid| u32::try_from(pid.as_raw_nonzero().get()).ok());
     if guard_is_gone(expected, parent) {
-        eprintln!("rtdns: the update guard is gone, not starting");
+        eprintln!("atomdns: the update guard is gone, not starting");
         std::process::exit(1);
     }
 }

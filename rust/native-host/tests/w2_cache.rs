@@ -7,9 +7,9 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use mosdns_dns_core::{inspect_response_header, parse_query, validate_response};
-use mosdns_native_host::{CacheTestClock, HostAssembly, HostOptions, UdpServer, compile_yaml};
-use mosdns_upstream_core::TransportCancellation;
+use atomdns_dns_core::{inspect_response_header, parse_query, validate_response};
+use atomdns_native_host::{CacheTestClock, HostAssembly, HostOptions, UdpServer, compile_yaml};
+use atomdns_upstream_core::TransportCancellation;
 
 const CACHE_CONFIG: &str = include_str!("../../../tests/phase5a-baseline/configs/cache.yaml");
 const HOT_CASES: &str = include_str!("../../../tests/phase5a-baseline/workloads/cache.jsonl");

@@ -99,7 +99,7 @@ download address path (`.dat` is `dat`, `.mrs` is `mrs`; `.srs` is `srs` too, so
 (first non-blank character `{` is `json`, a line starting with `payload:` is `yaml`); otherwise `text`.
 
 **Storage.** An SRS download is stored as it is for `sd_set_light` and `si_set`. Every other download is converted
-to rule text and stored at the `files` path: a first line `# rtdns: converted from <format> <url>`, then one rule per
+to rule text and stored at the `files` path: a first line `# atomdns: converted from <format> <url>`, then one rule per
 line (`domain:`, `full:`, `keyword:`, `regexp:` for a domain set; `address/bits` for an IP set). A domain set takes
 only domain rules and an IP set only IP rules; the other kind is counted as skipped. Loading reads SRS if the file
 has the SRS magic and rule text otherwise, with the same line reader, so a text file placed by hand works too.

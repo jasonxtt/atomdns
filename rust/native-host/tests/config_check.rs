@@ -2,16 +2,16 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use mosdns_native_host::{CheckFindingKind, check_config};
+use atomdns_native_host::{CheckFindingKind, check_config};
 
 const GAPS: &str = "tests/fixtures/check/gaps/config.yaml";
 const SUPPORTED: &str = "tests/fixtures/check/supported/config.yaml";
 
 fn run_binary(args: &[&str]) -> (i32, String, String) {
-    let output = Command::new(env!("CARGO_BIN_EXE_rtdns"))
+    let output = Command::new(env!("CARGO_BIN_EXE_atomdns"))
         .args(args)
         .output()
-        .expect("run mosdns");
+        .expect("run atomdns");
     (
         output.status.code().expect("exit code"),
         String::from_utf8(output.stdout).expect("utf-8 stdout"),
@@ -177,11 +177,11 @@ fn parsed_structural_rejections_are_findings_not_errors() {
         if let Some(include) = include {
             std::fs::write(root.path().join("sub.yaml"), include).unwrap();
         }
-        let output = Command::new(env!("CARGO_BIN_EXE_rtdns"))
+        let output = Command::new(env!("CARGO_BIN_EXE_atomdns"))
             .args(["check", "-c", "config.yaml"])
             .current_dir(root.path())
             .output()
-            .expect("run mosdns");
+            .expect("run atomdns");
         let stdout = String::from_utf8(output.stdout).unwrap();
         assert_eq!(output.status.code(), Some(1), "case {index}: {stdout}");
         assert!(stdout.contains(expected), "case {index}: {stdout}");
@@ -224,7 +224,7 @@ fn start_still_fails_fast_on_the_first_rejection() {
     let (code, stdout, stderr) = run_binary(&["start", "-c", GAPS]);
     assert_eq!(code, 2);
     assert!(stdout.is_empty());
-    assert_eq!(stderr, "rtdns: $.log.production: unsupported field\n");
+    assert_eq!(stderr, "atomdns: $.log.production: unsupported field\n");
 }
 
 /// Recursive content and metadata snapshot (atime excluded).

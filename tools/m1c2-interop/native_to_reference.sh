@@ -1,8 +1,8 @@
 #!/bin/sh
 # Native host writes the requery state file; the reference plugin reads it back
-# (M1-c2 interop evidence). Usage: native_to_reference.sh <mosdns-binary> <m1c2-interop-binary> <workdir>
+# (M1-c2 interop evidence). Usage: native_to_reference.sh <atomdns-binary> <m1c2-interop-binary> <workdir>
 set -eu
-MOSDNS=$1; INTEROP=$2; WORK=$3
+ATOMDNS=$1; INTEROP=$2; WORK=$3
 rm -rf "$WORK"; mkdir -p "$WORK/webinfo" "$WORK/gen"
 cat > "$WORK/webinfo/requeryconfig.json" <<JSON
 {"domain_processing":{"source_files":[{"alias":"x","path":"gen/none.txt"}]},"url_actions":{"save_rules":[],"flush_rules":[]},"scheduler":{"enabled":false,"start_datetime":"","interval_minutes":0},"execution_settings":{"queries_per_second":10,"resolver_address":"127.0.0.1:19053","url_call_delay_ms":5,"date_range_days":30},"status":{"task_state":"running","progress":{"processed":3,"total":9}}}
@@ -26,7 +26,7 @@ plugins:
     args: {entry: entry, listen: "127.0.0.1:19053"}
 YAML
 cd "$WORK"
-"$MOSDNS" start -d "$WORK" -c "$WORK/config.yaml" > mosdns.log 2>&1 &
+"$ATOMDNS" start -d "$WORK" -c "$WORK/config.yaml" > atomdns.log 2>&1 &
 PID=$!
 sleep 1
 python3 - <<'PY'

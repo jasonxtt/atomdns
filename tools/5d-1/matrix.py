@@ -55,7 +55,7 @@ def run(root, freeze, resume_f_schema_fix=False):
             raise ValueError('freeze changed during measurement')
         if tool_hashes()!=initial_tools: raise ValueError('measurement tools changed during matrix')
         argv=[sys.executable,str(here/'run.py'),'run','--work',str(root/'prepared-final'),
-              '--output',str(root/item['name']),'--binary',str(root/('mosdns-'+item['role'])),
+              '--output',str(root/item['name']),'--binary',str(root/('atomdns-'+item['role'])),
               '--role',item['role'],'--seed',str(item['seed']),'--freeze-record',str(freeze)]
         if item['role']=='native': argv+=['--oracle',str(root/'prepared-final/native-oracle.json')]
         if item['matrix']=='ext': argv+=['--rates','32000','64000']

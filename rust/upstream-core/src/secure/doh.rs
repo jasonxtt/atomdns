@@ -32,11 +32,11 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use atomdns_dns_core::{inspect_response_header, validate_response};
 use hyper::body::Incoming;
 use hyper::header::{ACCEPT, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, HOST};
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
-use mosdns_dns_core::{inspect_response_header, validate_response};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
@@ -2105,7 +2105,7 @@ mod tests {
         let mut ca_params = CertificateParams::default();
         ca_params
             .distinguished_name
-            .push(DnType::CommonName, "mosdns-doh-test-root");
+            .push(DnType::CommonName, "atomdns-doh-test-root");
         ca_params.not_before = date_time_ymd(2024, 1, 1);
         ca_params.not_after = date_time_ymd(2036, 1, 1);
         ca_params.is_ca = IsCa::Ca(BasicConstraints::Constrained(0));

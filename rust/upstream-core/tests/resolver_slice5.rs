@@ -9,7 +9,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use mosdns_upstream_core::{
+use atomdns_upstream_core::{
     AddressFamily, BootstrapEndpoint, BootstrapResolver, Clock, CloseResult, ExchangeContext,
     ExchangeRequest, ResolutionPolicy, ResolutionTarget, ResolverComposition, ResolverError,
     ServerIdentity, Transport, TransportCancellation, Upstream, resolve_numeric,
@@ -205,7 +205,7 @@ fn the_full_error_matrix_is_typed_and_never_a_dial_attempt() {
         Err(ResolverError::BootstrapNotNumeric)
     );
     assert_eq!(
-        mosdns_upstream_core::ConfigVersion::from_u8(9),
+        atomdns_upstream_core::ConfigVersion::from_u8(9),
         Err(ResolverError::UnsupportedConfigVersion(9))
     );
     assert_eq!(

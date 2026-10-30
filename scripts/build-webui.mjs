@@ -1,7 +1,7 @@
 // Builds the WebUI package: webui-log/dist/{index.html, app.js, app.css, chunks/, assets/, ui-manifest.json}.
 // Installed as `<config root>/ui/main/` it is served at `/`; as any other `ui/<name>/` at `/<name>/`.
 //   npm run build            the package directory only
-//   npm run build:package    and release/rtdns-webui.tar.gz (the package files at the top level)
+//   npm run build:package    and release/atomdns-webui.tar.gz (the package files at the top level)
 // UI_VERSION overrides the version (default: git describe, then "dev"). The archive needs `tar`.
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'

@@ -1,4 +1,4 @@
-//! Side-effect-free `rtdns check`: runs the same compiler as `start`
+//! Side-effect-free `atomdns check`: runs the same compiler as `start`
 //! repeatedly, removing each rejected definition (or neutralizing one
 //! rejected sequence item) until the remainder compiles, so one run lists
 //! every gap. No support list is kept here; the compiler is the only judge.

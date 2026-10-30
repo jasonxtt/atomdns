@@ -1,12 +1,12 @@
 # Rust Migration
 
-> **Historical evidence (Phase 6a, 2026-10-18).** This document describes the Go↔Rust hybrid stage. The Go source, the cgo bridge (`rust/runtime`), the `MOSDNS_*_BACKEND` selectors and the scripts it names were removed from the `rust` branch (they remain in git history and, for Go, in the Go repository). The text below is kept unchanged as evidence.
+> **Historical evidence (Phase 6a, 2026-10-18).** This document describes the Go↔Rust hybrid stage. The Go source, the cgo bridge (`rust/runtime`), the `ATOMDNS_*_BACKEND` selectors and the scripts it names were removed from the `rust` branch (they remain in git history and, for Go, in the Go repository). The text below is kept unchanged as evidence.
 
 The complete architecture and phase gates are in `docs/ai/rust-rewrite-plan.md`. That document overrides abbreviated notes here.
 
 ## Architecture
 
-The final target is a **pure Rust-native MosDNS binary and runtime**, not a permanently hybrid Go/Rust process. The migration still uses a strangler sequence, but the Go shell and C ABI are transitional scaffolding created by the completed cache/matcher/query-foundation phases. Phase 3B and later foundations should compose as Rust crates for the future Rust host and must not add a Go adapter, backend selector, mirror, or fallback unless a separately reviewed requirement proves one is needed.
+The final target is a **pure Rust-native AtomDNS binary and runtime**, not a permanently hybrid Go/Rust process. The migration still uses a strangler sequence, but the Go shell and C ABI are transitional scaffolding created by the completed cache/matcher/query-foundation phases. Phase 3B and later foundations should compose as Rust crates for the future Rust host and must not add a Go adapter, backend selector, mirror, or fallback unless a separately reviewed requirement proves one is needed.
 
 The historical foundation order is cache -> matchers -> DNS/query execution ->
 sequence -> transports. The revised roadmap brings Phase 5A minimal native host
@@ -26,7 +26,7 @@ hybrid thresholds and archived evidence are not rewritten.
 
 ## Compatibility policy
 
-Compatibility targets the MosDNS **product contract**, not the Go implementation:
+Compatibility targets the AtomDNS **product contract**, not the Go implementation:
 
 - Preserve user-facing YAML/config syntax, plugin/sequence semantics, final DNS behavior, routing/audit outputs, WebUI/API workflows, persistent formats, and other explicitly frozen external behavior.
 - Use current Go code/tests as behavior-discovery evidence when the product contract is unclear. Classify each discovered behavior as `preserve` or `intentional Rust deviation` before making it normative for Rust.
@@ -40,7 +40,7 @@ Phase 0 Go baselines and parity fixtures remain valuable discovery evidence; the
 - Preferred Rust upstream: KixDNS at audited commit `2da3a2d` (2026-08-12).
 - Prefer direct crates such as Moka when they provide the needed capability; otherwise classify KixDNS material as direct dependency, extracted code, adapted design, or rejected.
 - Preserve attribution and GPL-3.0 obligations for copied/adapted source. Pin reviewed upstream revisions and audit every update.
-- `/Users/tom/github/mosdns-rust-cache` is a compatibility reference for MosDNS bridge, dump, API, tests, and fallback—not a subtree to copy wholesale.
+- `/Users/tom/github/mosdns-rust-cache` is a compatibility reference for AtomDNS bridge, dump, API, tests, and fallback—not a subtree to copy wholesale.
 
 ## Existing hybrid foundation constraints
 
@@ -49,7 +49,7 @@ The following constraints describe the already-built Phase 1/2/3A bridge and rem
 ## Cache foundation constraints
 
 - Use a concurrent O(1)-style cache design (Moka/sharding) and `Bytes`/raw-wire techniques; do not carry over the old global `Mutex` or linear L1 scan.
-- Reuse audited KixDNS DNS wire, TTL, truncation, and ECS ideas only after golden parity against MosDNS semantics.
+- Reuse audited KixDNS DNS wire, TTL, truncation, and ECS ideas only after golden parity against AtomDNS semantics.
 - Preserve `mosdns_cache_v2`, show/load/flush behavior, `domain_set`, exclusion, lazy TTL, metrics, and raw response paths.
 - Keep ABI calls coarse-grained. Check ABI version/capabilities at startup and contain every panic.
 - Default releases remain on the Go backend until correctness, safety, performance, and test-host gates are satisfied.
@@ -58,7 +58,7 @@ The following constraints describe the already-built Phase 1/2/3A bridge and rem
 
 Do not begin a later migration module merely because its Rust implementation is available upstream. Each module needs an approved Trellis task, a frozen product-contract/deviation matrix, appropriate correctness/safety/performance evidence, and a rollback path. For Phase 3B+ pure Rust foundations, Go parity is optional discovery evidence rather than a mandatory runtime/fallback requirement.
 
-After a complete Rust-native host exists, run a dedicated hybrid-scaffolding retirement gate before final replacement/release. Remove the early `MOSDNS_*_BACKEND` selectors, Go mirrors/fallback, cgo adapters/FFI handles and bridge-only test/build paths that are no longer needed, but only after equivalent Rust-native product-contract coverage exists.
+After a complete Rust-native host exists, run a dedicated hybrid-scaffolding retirement gate before final replacement/release. Remove the early `ATOMDNS_*_BACKEND` selectors, Go mirrors/fallback, cgo adapters/FFI handles and bridge-only test/build paths that are no longer needed, but only after equivalent Rust-native product-contract coverage exists.
 
 ## Scenario: native named sequence calls and cache successor boundaries
 
@@ -306,15 +306,15 @@ same opt-in and rollback contract at every boundary.
 - `scripts/benchmark-rust-matchers.sh` accepts `BENCHTIME` and `COUNT`, and
   runs tagged Linux+cgo domain, IP, and valued-mapper benchmarks.
 - `scripts/smoke-rust-matcher-mos-test.sh` requires executable
-  `MOSDNS_RUST_BINARY` and optionally accepts `MOSDNS_GO_ONLY_BINARY`.
-- Rust selection remains `MOSDNS_MATCHER_BACKEND=rust`; an unset/other value
+  `ATOMDNS_RUST_BINARY` and optionally accepts `MOSDNS_GO_ONLY_BINARY`.
+- Rust selection remains `ATOMDNS_MATCHER_BACKEND=rust`; an unset/other value
   selects the Go path.
 
 ### 3. Contracts
 
 - Default Go CI runs without Rust tags, a Rust toolchain, cgo, or the runtime
   environment variable.
-- Linux matcher gates use `CGO_ENABLED=1`, `-tags mosdns_rust`, and the same
+- Linux matcher gates use `CGO_ENABLED=1`, `-tags atomdns_rust`, and the same
   provider/mapper package list for normal and race tests.
 - Benchmarks report fixture bytes/rules or prefixes, build and lookup timing,
   Go-observed allocations, logical valued-result bytes, and cgo calls/op.
@@ -326,7 +326,7 @@ same opt-in and rollback contract at every boundary.
 - Missing/non-executable binary -> smoke exits before starting a process.
 - Rust static library or cgo build failure -> Linux gate fails; default Go job
   remains independently runnable.
-- Rust-disabled/no-cgo binary with `MOSDNS_MATCHER_BACKEND=rust` -> provider
+- Rust-disabled/no-cgo binary with `ATOMDNS_MATCHER_BACKEND=rust` -> provider
   keeps the Go generation and smoke must observe identical answers.
 - Malformed reload -> HTTP 400 and previous valid generation remains active.
 - Leaked process/temp directory or port-53 reference -> smoke fails cleanup or
@@ -357,7 +357,7 @@ Wrong: run only macOS stub tests and call the cgo/ABI or process smoke gates
 passed, or reuse a production config/port for the benchmark.
 
 Correct: run the explicit Linux+cgo commands and temporary-port smoke, record
-the transitional cgo/result-size limitations, and keep `MOSDNS_MATCHER_BACKEND`
+the transitional cgo/result-size limitations, and keep `ATOMDNS_MATCHER_BACKEND`
 opt-in with the Go fallback available.
 
 ## Scenario: query wire foundation parity and fail-safe fallback
@@ -373,7 +373,7 @@ being published as a valid snapshot.
 
 - `parse_query(packet: &[u8]) -> Result<(QueryHeader, QuestionInfo), QueryError>`
 - `extract_edns_at(packet: &[u8], extra_offset: usize) -> Result<Option<EdnsInfo>, EdnsParseError>`
-- Go selection remains `MOSDNS_QUERY_BACKEND=rust`; the adapter exposes a Go
+- Go selection remains `ATOMDNS_QUERY_BACKEND=rust`; the adapter exposes a Go
   oracle result plus typed `FallbackError` on Rust failure.
 
 ### 3. Contracts
@@ -451,7 +451,7 @@ non-OPT record, and let the Go adapter publish the oracle fallback.
 Phase 3B sequence work uses `rust/sequence-core` as an isolated pure Rust
 library for the future Rust-native host. It is not a Go adapter, runtime
 export, backend selector, or production request-path switch. The crate may
-reuse typed `mosdns-dns-core` query/response atoms, but it must not depend on
+reuse typed `atomdns-dns-core` query/response atoms, but it must not depend on
 Go, cgo, plugin registries, listeners, upstreams, or network I/O.
 
 ### 2. Signatures
@@ -591,8 +591,8 @@ let result = execute(&program, entry, &mut state, &mut control);
 
 Phase 4 transport foundations use `rust/upstream-core` as a pure Rust sibling
 of `rust/sequence-core`. The future host composes both crates; the transport
-crate uses `mosdns-dns-core` as its only MosDNS crate dependency and must not depend on
-`sequence-core`, `mosdns-runtime`, Go, cgo, selectors, or fallback paths.
+crate uses `atomdns-dns-core` as its only AtomDNS crate dependency and must not depend on
+`sequence-core`, `atomdns-runtime`, Go, cgo, selectors, or fallback paths.
 
 ### 2. Signatures
 
@@ -609,7 +609,7 @@ crate uses `mosdns-dns-core` as its only MosDNS crate dependency and must not de
 ### 3. Contracts
 
 - Request input is borrowed and read-only; `ExchangeRequest` validates through
-  `mosdns-dns-core::parse_query` and records the original transaction ID.
+  `atomdns-dns-core::parse_query` and records the original transaction ID.
 - The accepted foundation includes per-exchange UDP, fresh plain TCP and
   `UdpTcpPolicy`. All run on the caller's host-owned runtime; no runtime is
   created by an upstream. This scenario describes the UDP/TCP foundation;

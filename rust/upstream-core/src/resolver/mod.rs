@@ -7,7 +7,7 @@
 //! [`crate::DohEndpoint`] constructors and adds no Go adapter, cgo edge, ABI
 //! symbol, backend selector, fallback, or production wiring.
 //!
-//! [`AddressFamily`] is re-exported from `mosdns-dns-core` so the bootstrap DNS
+//! [`AddressFamily`] is re-exported from `atomdns-dns-core` so the bootstrap DNS
 //! wire codec and the resolver agree on one family type; the reviewed Slice 0
 //! wire contract is untouched.
 //!
@@ -21,7 +21,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-pub use mosdns_dns_core::AddressFamily;
+pub use atomdns_dns_core::AddressFamily;
 
 /// The family helper `dns-core` does not expose: which family an address is in.
 trait AddressFamilyExt {
@@ -515,13 +515,13 @@ impl ResolutionPolicy {
     /// Returns [`ResolverError::InvalidPolicy`] only if `dns-core` itself
     /// rejects the derived bounds, which the constructor's ordering check makes
     /// unreachable for a constructed policy.
-    pub fn dns_core_policy(&self) -> Result<mosdns_dns_core::CnameChainPolicy, ResolverError> {
+    pub fn dns_core_policy(&self) -> Result<atomdns_dns_core::CnameChainPolicy, ResolverError> {
         let min_ttl =
             u32::try_from(self.min_ttl.as_secs()).map_err(|_| ResolverError::InvalidPolicy)?;
         let max_ttl =
             u32::try_from(self.max_ttl.as_secs()).map_err(|_| ResolverError::InvalidPolicy)?;
-        mosdns_dns_core::CnameChainPolicy::new(
-            mosdns_dns_core::RESOLVER_DEFAULT_MAX_CNAME_LINKS,
+        atomdns_dns_core::CnameChainPolicy::new(
+            atomdns_dns_core::RESOLVER_DEFAULT_MAX_CNAME_LINKS,
             min_ttl,
             max_ttl,
         )

@@ -13,7 +13,7 @@ import subprocess
 import time
 
 REMOTE = '''import json,os,pathlib,subprocess,time
-props=dict(line.split("=",1) for line in subprocess.check_output(["systemctl","show","mosdns.service","-p","MainPID","-p","ActiveState","-p","NRestarts"],text=True).splitlines())
+props=dict(line.split("=",1) for line in subprocess.check_output(["systemctl","show","atomdns.service","-p","MainPID","-p","ActiveState","-p","NRestarts"],text=True).splitlines())
 pid=int(props["MainPID"])
 p=pathlib.Path("/proc")/str(pid)
 stat=(p/"stat").read_text().rsplit(")",1)[1].split()

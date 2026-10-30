@@ -1,6 +1,6 @@
 """Appearance and WebUI-port interop between the reference handlers and the native host.
 
-    python3 tools/f1-interop/interop.py --native /path/mosdns --reference /path/f1-interop --work /tmp/dir
+    python3 tools/f1-interop/interop.py --native /path/atomdns --reference /path/f1-interop --work /tmp/dir
 
 The same request sequence is applied to two fresh directories: one through the
 reference handlers (`f1-interop`), one through the native host over HTTP.

@@ -16,15 +16,15 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use fixtures::FixtureSet;
-use hyper::body::{Buf as _, Bytes};
-use mosdns_upstream_core::secure::{
+use atomdns_upstream_core::secure::{
     DohEndpoint, DohProtocolError, SecureError, SecureResponse, TlsPolicy,
 };
-use mosdns_upstream_core::{
+use atomdns_upstream_core::{
     Doh3ReuseUpstream, ExchangeContext, ExchangeRequest, SideEffectState, TransportCancellation,
     UpstreamError,
 };
+use fixtures::FixtureSet;
+use hyper::body::{Buf as _, Bytes};
 use quinn::crypto::rustls::QuicServerConfig;
 use rustls::ServerConfig;
 use tokio::sync::{Barrier, oneshot};
@@ -281,7 +281,7 @@ fn owner(set: &FixtureSet, address: SocketAddr) -> Doh3ReuseUpstream {
 async fn exchange(
     upstream: Arc<Doh3ReuseUpstream>,
     query: Vec<u8>,
-) -> Result<SecureResponse, mosdns_upstream_core::secure::SecureError> {
+) -> Result<SecureResponse, atomdns_upstream_core::secure::SecureError> {
     exchange_with_cancellation(upstream, query, TransportCancellation::new()).await
 }
 
@@ -289,7 +289,7 @@ async fn exchange_with_cancellation(
     upstream: Arc<Doh3ReuseUpstream>,
     query: Vec<u8>,
     cancellation: TransportCancellation,
-) -> Result<SecureResponse, mosdns_upstream_core::secure::SecureError> {
+) -> Result<SecureResponse, atomdns_upstream_core::secure::SecureError> {
     let request = ExchangeRequest::new(&query).expect("valid query");
     upstream
         .exchange(
@@ -990,7 +990,7 @@ fn doh3_owner_close_waits_for_held_connection_handle_before_removal() {
                 .await
                 .expect("owner close completes after handle release")
                 .expect("owner close task joined"),
-            mosdns_upstream_core::CloseResult::Closed
+            atomdns_upstream_core::CloseResult::Closed
         );
         assert_eq!(upstream.entry_count(), 0);
         assert_eq!(upstream.in_flight_exchanges(), 0);

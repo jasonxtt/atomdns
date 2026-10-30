@@ -1,4 +1,4 @@
-use mosdns_native_host::{CacheTestClock, NativeCacheAdapter};
+use atomdns_native_host::{CacheTestClock, NativeCacheAdapter};
 
 fn query(id: u16, flags: u16, qname: &[u8], qtype: u16, qclass: u16, arcount: u16) -> Vec<u8> {
     let mut wire = Vec::from([
@@ -25,7 +25,7 @@ fn query(id: u16, flags: u16, qname: &[u8], qtype: u16, qclass: u16, arcount: u1
 }
 
 fn answer(query: &[u8], ttl: u32, rcode: u8) -> Vec<u8> {
-    let (_, question) = mosdns_dns_core::parse_query(query).expect("query");
+    let (_, question) = atomdns_dns_core::parse_query(query).expect("query");
     let id = u16::from_be_bytes([query[0], query[1]]);
     let mut wire = Vec::from([
         (id >> 8) as u8,
@@ -53,7 +53,7 @@ fn answer(query: &[u8], ttl: u32, rcode: u8) -> Vec<u8> {
 }
 
 fn empty_noerror(query: &[u8]) -> Vec<u8> {
-    let (header, question) = mosdns_dns_core::parse_query(query).expect("query");
+    let (header, question) = atomdns_dns_core::parse_query(query).expect("query");
     let mut wire = Vec::from([
         (header.id >> 8) as u8,
         u8::try_from(header.id & 0x00ff).expect("id low byte"),
@@ -107,7 +107,7 @@ fn empty_answer_with_authority_ttl(query: &[u8], ttl: u32) -> Vec<u8> {
 }
 
 fn response_with_compressed_question(query: &[u8]) -> Vec<u8> {
-    let (_, question) = mosdns_dns_core::parse_query(query).expect("query");
+    let (_, question) = atomdns_dns_core::parse_query(query).expect("query");
     let target = 34_u8;
     let mut wire = Vec::from([
         query[0], query[1], 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0, 0xc0, target, 0, 1, 0, 1, 0xc0,

@@ -14,13 +14,13 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use hickory_proto::op::{Edns, Message, MessageType, OpCode, ResponseCode};
-use hickory_proto::rr::{Name, RecordType};
-use mosdns_matcher_core::{MixMatcher, normalize};
-use mosdns_sequence_core::{ExecutionState, RoutingField, StateMutation};
-use mosdns_upstream_core::{
+use atomdns_matcher_core::{MixMatcher, normalize};
+use atomdns_sequence_core::{ExecutionState, RoutingField, StateMutation};
+use atomdns_upstream_core::{
     Endpoint, ExchangeContext, ExchangeRequest, Transport, TransportCancellation, Upstream,
 };
+use hickory_proto::op::{Edns, Message, MessageType, OpCode, ResponseCode};
+use hickory_proto::rr::{Name, RecordType};
 use serde::Deserialize;
 
 use crate::rule_sources::Reply;
@@ -217,7 +217,7 @@ pub struct Rewrite {
 #[derive(Clone)]
 pub struct RewriteConfig {
     pub tag: String,
-    pub executable: mosdns_sequence_core::ExecutableId,
+    pub executable: atomdns_sequence_core::ExecutableId,
     pub runtime: Rc<Rewrite>,
 }
 
@@ -446,7 +446,8 @@ fn error(status: u16, message: &str) -> Reply {
 /// A response skeleton for the query: QR, RA, the query's RD, one question.
 fn skeleton(state: &ExecutionState, raw: &[u8]) -> Option<Vec<u8>> {
     let mut wire =
-        mosdns_dns_core::synthesize_response(&state.query.header, &state.query.question, 0).ok()?;
+        atomdns_dns_core::synthesize_response(&state.query.header, &state.query.question, 0)
+            .ok()?;
     wire[2] |= raw.get(2).copied().unwrap_or(0) & 1;
     Some(wire)
 }

@@ -45,17 +45,17 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use fixtures::FixtureSet;
 #[cfg(debug_assertions)]
-use mosdns_upstream_core::quic::DoqStopPause;
-use mosdns_upstream_core::quic::{DOQ_ALPN, DoqEndpoint, DoqUpstream};
-use mosdns_upstream_core::secure::{SecureError, SecureResponse, SecureTransport, TlsPolicy};
-use mosdns_upstream_core::{
+use atomdns_upstream_core::quic::DoqStopPause;
+use atomdns_upstream_core::quic::{DOQ_ALPN, DoqEndpoint, DoqUpstream};
+use atomdns_upstream_core::secure::{SecureError, SecureResponse, SecureTransport, TlsPolicy};
+use atomdns_upstream_core::{
     ExchangeContext, ExchangeRequest, ServerIdentity, SideEffectState, TransportCancellation,
 };
+use fixtures::FixtureSet;
 // Only the debug-only cancellation tests inspect the exact typed cause.
 #[cfg(debug_assertions)]
-use mosdns_upstream_core::UpstreamError;
+use atomdns_upstream_core::UpstreamError;
 
 use quinn::crypto::rustls::{HandshakeData, QuicServerConfig};
 use rustls::ServerConfig;

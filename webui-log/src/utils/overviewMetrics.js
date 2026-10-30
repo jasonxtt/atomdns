@@ -64,7 +64,7 @@ export function parseProcessMetrics(text) {
     cpuSeconds: 'process_cpu_seconds_total',
     residentBytes: 'process_resident_memory_bytes',
     startTime: 'process_start_time_seconds',
-    threads: 'mosdns_process_threads',
+    threads: 'atomdns_process_threads',
     openFds: 'process_open_fds'
   }
   for (const line of String(text || '').split('\n')) {
@@ -81,7 +81,7 @@ export function cacheHitPercent(text) {
   let hits = 0
   let queries = 0
   for (const line of String(text || '').split('\n')) {
-    const match = line.match(/^mosdns_cache_(hit_total|query_total)\{[^}]*\}\s+(\S+)/)
+    const match = line.match(/^atomdns_cache_(hit_total|query_total)\{[^}]*\}\s+(\S+)/)
     if (!match) continue
     const value = Number(match[2])
     if (!Number.isFinite(value) || value < 0) continue

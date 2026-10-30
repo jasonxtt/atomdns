@@ -1,10 +1,10 @@
-# MosDNS Rust 渐进重写方案
+# AtomDNS Rust 渐进重写方案
 
 最后更新：`2026-10-06`（用户决定首次替换以自用 `config_all` 为功能门槛、先做并发模型 spike；见第 6 节“2026-10-06 切换范围决策”）
 
 ## 1. 目标与边界
 
-最终目标是得到**纯 Rust-native 的 mosdns 二进制和运行时**，而不是永久保留 Go 外壳或 Go/Rust 双后端。迁移完成前本 `rust` 分支不作为实际运行版本，因此 Phase 3B 起优先建设最终 Rust 架构，不再为了中途上线而新增 Go fallback、backend selector、cgo adapter 或双写状态。
+最终目标是得到**纯 Rust-native 的 atomdns 二进制和运行时**，而不是永久保留 Go 外壳或 Go/Rust 双后端。迁移完成前本 `rust` 分支不作为实际运行版本，因此 Phase 3B 起优先建设最终 Rust 架构，不再为了中途上线而新增 Go fallback、backend selector、cgo adapter 或双写状态。
 
 ### 产品目标与优先级
 
@@ -14,7 +14,7 @@
 2. **性能优先**：改善正常和高负载下的查询响应速度，尤其是 p95/p99；提高满足延迟和错误率要求时的持续有效吞吐，并在慢上游、突发流量和热更新中保持可恢复。
 3. **资源效率其次**：比较每个有效查询的 CPU 成本、稳定/峰值内存和长期资源增长。允许有明确上限、可回收且有性能收益的额外内存；不把 RSS 最低作为独立目标。
 
-**2026-10-06 修订（用户决定）**：生产机 `mosdns` 实测为 1 vCPU、957 MB 内存，Go 版 RSS 约 236 MB、日常 CPU 约 0.1%。因此：
+**2026-10-06 修订（用户决定）**：生产机 `atomdns` 实测为 1 vCPU、957 MB 内存，Go 版 RSS 约 236 MB、日常 CPU 约 0.1%。因此：
 
 - **内存提升为与延迟同等的优先目标**：5D 必须有明确的 RSS 预算（稳定与峰值），默认不高于同配置 Go 版，具体数值在 5D 冻结阈值时确定；上面第 3 条“资源效率其次”中关于内存的部分以此为准。
 - **性能基准以单核、实际家庭网络负载为主**：多核扩展和高并发容量不是首次替换的目标；p95/p99、慢上游下的恢复和长期稳定仍是重点。
@@ -36,7 +36,7 @@ Rust 是实现这些目标的工具，不是性能结论。没有 GC 不代表�
 后续阶段统一使用三类判定，禁止把“Go 当前怎么写”自动升级为 Rust 规范：
 
 1. **Product contract — 必须保留**：用户配置语法、sequence/plugin 语义、最终 DNS 响应、路由/审计结果、WebUI/API 工作流、持久化格式和其他明确的外部可观察行为。
-2. **Migration scaffolding — 临时存在**：Phase 1/2/3A 已建立的 cgo bridge、`MOSDNS_*_BACKEND` selector、Go mirror/fallback、双 generation、FFI handle 和 circuit breaker 只用于早期迁移验证；Phase 3B 起不得把它们当成最终架构要求，也不应继续扩张。
+2. **Migration scaffolding — 临时存在**：Phase 1/2/3A 已建立的 cgo bridge、`ATOMDNS_*_BACKEND` selector、Go mirror/fallback、双 generation、FFI handle 和 circuit breaker 只用于早期迁移验证；Phase 3B 起不得把它们当成最终架构要求，也不应继续扩张。
 3. **Go implementation detail / accidental quirk — 不自动保留**：Go interface、`ChainWalker` 递归、`map[uint32]any`、内部 buffer/pool 布局、错误字符串、字符串命名触发的偶然副作用、固定内部并发数等，仅用于理解现状。若其是否属于用户契约不明确，先 characterization，再明确标记为 `preserve` 或 `intentional Rust deviation`。
 
 任何改变既有配置含义、DNS 结果、路由、API/WebUI 操作结果或持久化恢复的差异，都必须先作为兼容变更评估；不得仅因 Rust 实现困难就归为偶然行为。需要改变产品契约时，单独记录影响并取得用户决策。本规划没有授权删减现有功能。
@@ -202,13 +202,13 @@ plugin/.../rust_bridge_*.go
    - 这些能力可以替代旧 cache 原型中每次通过 Hickory 完整反序列化/重新编码的热路径。
 2. `ecs.rs`
    - ECS 注入、删除、prefix masking 和 cache 隔离 key；
-   - 需要用 mosdns 当前 ECS key 语义做 golden parity 后再接入。
+   - 需要用 atomdns 当前 ECS key 语义做 golden parity 后再接入。
 3. Moka/`Bytes` cache 结构和并发模式
    - 可以替代旧原型的全局 `Mutex`、线性 L1 slot 扫描和手写淘汰；
    - KixDNS 的 cache entry 使用 hash key，并保存 qname/pipeline/qtype 做碰撞校验，适合参考其零分配查找方式。
 4. GeoSite/GeoIP loader、索引和热替换思路
    - 支持 V2Ray dat/JSON、属性过滤、IPv4/IPv6 和热加载；
-   - 可作为 `special_groups`、domain set 和 IP set Rust 化的基础，但匹配边界和规则优先级必须以 mosdns 为准。
+   - 可作为 `special_groups`、domain set 和 IP set Rust 化的基础，但匹配边界和规则优先级必须以 atomdns 为准。
 5. compiled pipeline/rule index
    - 可以复用候选索引、首个规则优先和不可安全快进时退出 fast path 的设计；
    - 不直接采用 KixDNS 的 JSON pipeline 语义。
@@ -218,23 +218,23 @@ plugin/.../rust_bridge_*.go
 
 ### 不能直接替换的部分
 
-- KixDNS 使用 JSON pipeline，本项目使用 mosdns YAML、插件注册和生成配置工作流；
+- KixDNS 使用 JSON pipeline，本项目使用 atomdns YAML、插件注册和生成配置工作流；
 - KixDNS 没有本项目的 `coremain`、Vue WebUI API、运行时 JSON 状态、配置包更新和事务状态管理；
 - KixDNS 没有本项目要求的 Prometheus 指标、query audit 和最终路由字段；
 - KixDNS cache 是内存 cache，没有兼容 `mosdns_cache_v2` 的 dump/load/show/flush API；
 - KixDNS cache entry 的 pipeline/upstream 语义不能直接代替本项目的 `domain_set`、`effective_tag`、`final_sequence` 和 dedicated upstream group；
-- KixDNS 的 rule/action 集合与 mosdns sequence 插件不是一一对应；
+- KixDNS 的 rule/action 集合与 atomdns sequence 插件不是一一对应；
 - KixDNS 当前没有 inbound DoT/DoQ，而本项目已有的 server 能力不能因此倒退；
 - KixDNS 是单 crate、约 2.2 万行代码，cache 语义分散在 engine execution/phases/rules 中，不能把 89 行的 `cache.rs` 当作完整 cache 插件直接复制。
 
 ### 调整后的复用原则
 
-- KixDNS 作为 Rust 数据面首选上游，旧 `mosdns-rust-cache` 作为 mosdns ABI、dump、API 和 fallback 兼容参考；
+- KixDNS 作为 Rust 数据面首选上游，旧 `mosdns-rust-cache` 作为 atomdns ABI、dump、API 和 fallback 兼容参考；
 - 不 fork 后整体改名，也不复制其 JSON 配置和主程序；
 - 按固定 commit 引入经过审计的模块，并在源文件/NOTICE 中保留来源；
 - 每次同步 KixDNS 都单独审查 upstream diff，不自动跟随 main；
 - 若只需要第三方 crate 已提供的能力，优先直接依赖 crate，例如用 Moka 代替复制 KixDNS 的薄 cache wrapper；
-- mosdns **产品契约**始终优先。KixDNS 测试和当前 Go 行为都只是取证来源，不能替代显式的 Rust contract；Go characterization 的结果必须分类为 `preserve` 或 `intentional Rust deviation`，而不是默认要求逐项 parity。
+- atomdns **产品契约**始终优先。KixDNS 测试和当前 Go 行为都只是取证来源，不能替代显式的 Rust contract；Go characterization 的结果必须分类为 `preserve` 或 `intentional Rust deviation`，而不是默认要求逐项 parity。
 
 ## 6. 分阶段实施
 
@@ -257,7 +257,7 @@ plugin/.../rust_bridge_*.go
 
 ### 阶段 1：移植并硬化 Rust cache
 
-以 KixDNS 的 Moka/Bytes/raw-wire 方案为并发与热路径基础，以旧 cache 项目的 mosdns bridge、dump 和 API 为兼容参考。只移植以下功能块，不覆盖任何一个旧仓库：
+以 KixDNS 的 Moka/Bytes/raw-wire 方案为并发与热路径基础，以旧 cache 项目的 atomdns bridge、dump 和 API 为兼容参考。只移植以下功能块，不覆盖任何一个旧仓库：
 
 1. 新的 `rust/cache-core`、header 和构建脚本；
 2. cache bridge 新文件以及 `cache.go` 的最小接入点；
@@ -295,7 +295,7 @@ foundation 状态（`2026-08-13`）：matcher foundation task 的 Slice 0–5
 已完成实现和验证，independent review passed on 2026-08-13，task 已归档/完成。
 Phase 2 expansion task 的 Slices 0–5 也已完成实现、root review 和验证；
 `sd_set`、`si_set` 与 valued `domain_mapper` 仍通过
-`MOSDNS_MATCHER_BACKEND=rust` opt-in，Go fallback 和默认 Go-only 不变。
+`ATOMDNS_MATCHER_BACKEND=rust` opt-in，Go fallback 和默认 Go-only 不变。
 扩展证据记录在 `docs/rust/matcher-compatibility.md`、
 `docs/rust/benchmarks/matcher-phase2-expansion.md` 和
 `docs/rust/test-host-matcher-phase2-expansion.md`。这些门禁不授权默认切换、
@@ -354,7 +354,7 @@ Vue 源码无需因后端语言变化而重写。5A 是隔离实验产物；5B/5
 - **首次生产替换的功能门槛是自用配置包 `config_all`**（`../file/mosdns/config/config_all`，记录实际包版本）：原生 host 无修改加载并运行该配置，其用到的插件/参数/API/持久化全部有原生证据，再经 5D、Phase 6 和用户确认。该里程碑记为 **M1**。
 - `config_all` 未使用的注册插件与参数（如 `qclass`、`ptr_ip`、`random`、`has_wanted_ans`、`black_hole`、`env`、`string_exp`、`arbitrary`、`rate_limiter`、`reverse_lookup` 等，以 `check` 实际清单为准）**延后到首次替换之后补齐，不删除**；它们不阻塞首次替换，仍保留在功能覆盖总表中。
 - **2026-10-08 修订（用户决定）**：Rust 版是新项目，配置文件允许改动、不要求兼容 Go。M1 门槛相应改为：原生 host 加载并运行**原生配置包 `config_rust`**——由 `config_all` 改写，维护在 `file` 仓库，附一份与 `config_all` 的差异说明，证明路由与上游行为等价。首个改动范围是 WebUI 可调整的运行时设置（类型化设置层，M1-f，见 `docs/rust/m1-gap-list.md`）；其它配置改动逐项提出、由用户决定。切换后回退 Go 时，Go 使用其原有配置与 webinfo 状态。
-- 本决策只改变首次替换的范围，不放宽正确性、5D 性能/稳定性、Phase 6 纯度和“本机 → `mos-test` → 用户确认 → `mosdns`”的顺序。
+- 本决策只改变首次替换的范围，不放宽正确性、5D 性能/稳定性、Phase 6 纯度和“本机 → `mos-test` → 用户确认 → `atomdns`”的顺序。
 - 5B 推进方式随之改为：以 `config_all` 的实际缺口为任务来源，而不是按插件家族补全全表。
 
 ### 阶段 6：Hybrid scaffolding retirement 与纯度 gate
@@ -363,14 +363,14 @@ Vue 源码无需因后端语言变化而重写。5A 是隔离实验产物；5B/5
 
 清理范围至少包括：
 
-- `MOSDNS_CACHE_BACKEND`、`MOSDNS_MATCHER_BACKEND`、`MOSDNS_QUERY_BACKEND` 等仅用于 hybrid 验证的 selector；
+- `ATOMDNS_CACHE_BACKEND`、`ATOMDNS_MATCHER_BACKEND`、`ATOMDNS_QUERY_BACKEND` 等仅用于 hybrid 验证的 selector；
 - Go↔Rust cgo adapter、C header/FFI runtime symbols 和仅为 Go handle 生命周期服务的 registry（若最终 Rust host 无其他外部 ABI 使用者）；
 - Go mirror、Go fallback、same-generation Go/Rust publication、circuit breaker 与 transitional fault-injection 路径；
 - 仅为 experimental hybrid binary、bridge benchmark/smoke 服务且最终 native 路径不再使用的构建和测试入口。
 
 retirement 必须先证明对应 Rust-native 路径已有等价产品契约测试，删除后再跑完整 Rust-native E2E、配置/API/WebUI/audit/dump/重启恢复以及性能/长期运行 gate。Phase 6 完成前不得把 `rust` 分支作为最终替代版本发布。
 
-**Phase 6a 状态（2026-10-18，用户决定）**：`rust` 分支已删除全部 Go 源码、Go 构建/发布文件与工作流、cgo 桥（`rust/runtime`、`rust_backend*.go`、`MOSDNS_*_BACKEND`、混合阶段脚本）与 `/log` 源码；内置 `/` UI 产物迁到 `rust/native-host/ui/`；Go 参照（`mosdns` 参照程序与 oracle/interop 工具）改由 `tools/go-reference/build.sh` 从 `/Users/tom/github/mosdns` 的固定提交构建。无 Go 干净克隆构建与缩小版 E2E-1 差分已复跑，记录见 [10-18-p6a](../rust/validation-records/10-18-p6a/README.md)。**Phase 6b（2026-10-18）**：`native_management` 托管模式已退役并删除（含 `ManagedProfile`、候选 profile、`webinfo/native_management.*` 事务存储、托管 HTTP 分支及其专属测试）；含该字段的配置加载、`check`、`start` 明确失败，残留状态文件不读不删。**仍未完成的 Phase 6 门禁**：性能与长期运行 gate、生产切换。
+**Phase 6a 状态（2026-10-18，用户决定）**：`rust` 分支已删除全部 Go 源码、Go 构建/发布文件与工作流、cgo 桥（`rust/runtime`、`rust_backend*.go`、`ATOMDNS_*_BACKEND`、混合阶段脚本）与 `/log` 源码；内置 `/` UI 产物迁到 `rust/native-host/ui/`；Go 参照（`atomdns` 参照程序与 oracle/interop 工具）改由 `tools/go-reference/build.sh` 从 `/Users/tom/github/mosdns` 的固定提交构建。无 Go 干净克隆构建与缩小版 E2E-1 差分已复跑，记录见 [10-18-p6a](../rust/validation-records/10-18-p6a/README.md)。**Phase 6b（2026-10-18）**：`native_management` 托管模式已退役并删除（含 `ManagedProfile`、候选 profile、`webinfo/native_management.*` 事务存储、托管 HTTP 分支及其专属测试）；含该字段的配置加载、`check`、`start` 明确失败，残留状态文件不读不删。**仍未完成的 Phase 6 门禁**：性能与长期运行 gate、生产切换。
 
 ## 7. 验证与发布矩阵
 
@@ -389,7 +389,7 @@ retirement 必须先证明对应 Rust-native 路径已有等价产品契约测�
 
 Linux amd64 是首要构建、基准和发布验收平台。arm64、OpenWrt、lite、Docker 的新增适配/发布 fan-out 独立排期，不阻塞 amd64 首版；保留已有支持，但不因旧 cache 里程碑完成就宣称其他平台已验收。macOS 开发机和 hybrid 测试结果不能替代 Linux native 证据。
 
-验证顺序：本机 -> isolated `mos-test` -> 用户确认 -> `mosdns` 生产替换。不得用在生产现场首次试验性能的方式替代隔离 gate。
+验证顺序：本机 -> isolated `mos-test` -> 用户确认 -> `atomdns` 生产替换。不得用在生产现场首次试验性能的方式替代隔离 gate。
 
 ## 8. 分支和同步策略
 

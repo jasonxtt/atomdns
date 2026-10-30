@@ -14,11 +14,11 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use mosdns_matcher_core::{
+use atomdns_matcher_core::{
     IpPrefixList, RegexBuildError, ValuedBuildError, ValuedDomainMatcher, ValuedRule,
     decode_domain_srs, decode_ip_srs,
 };
-use mosdns_sequence_core::{
+use atomdns_sequence_core::{
     ExecutionState, Executor, ExecutorError, ExecutorOutcome, RoutingField, StateMutation,
 };
 
@@ -887,8 +887,8 @@ pub(crate) struct AdguardRules {
 /// The direct `qname $tag` matcher of an `adguard_rule`: a name matches when
 /// no exception rule matches and a block rule does.
 pub(crate) struct Filtered {
-    pub(crate) allow: mosdns_matcher_core::MixMatcher<()>,
-    pub(crate) deny: mosdns_matcher_core::MixMatcher<()>,
+    pub(crate) allow: atomdns_matcher_core::MixMatcher<()>,
+    pub(crate) deny: atomdns_matcher_core::MixMatcher<()>,
 }
 
 impl AdguardRules {
@@ -900,11 +900,11 @@ impl AdguardRules {
     /// with Go semantics is refused instead of being left out.
     pub(crate) fn filtered(&self, tag: &str) -> Result<Filtered, String> {
         let build = |rules: &mut dyn Iterator<Item = &str>| -> Result<_, String> {
-            let mut set = mosdns_matcher_core::MixMatcher::new();
+            let mut set = atomdns_matcher_core::MixMatcher::new();
             set.set_default("domain");
             for rule in rules {
                 if let Some(pattern) = rule.strip_prefix("regexp:") {
-                    match mosdns_matcher_core::check_go_regexp(pattern) {
+                    match atomdns_matcher_core::check_go_regexp(pattern) {
                         Ok(()) => {}
                         Err(error) if error.is_invalid_in_go() => {
                             crate::diag::warn_line!("{tag}: skip invalid regexp rule {rule:?}");
@@ -958,7 +958,7 @@ pub(crate) fn parse_adguard_list(
                 return count;
             }
             let invalid = rule.strip_prefix("regexp:").is_some_and(|pattern| {
-                mosdns_matcher_core::check_go_regexp(pattern).is_err_and(|e| e.is_invalid_in_go())
+                atomdns_matcher_core::check_go_regexp(pattern).is_err_and(|e| e.is_invalid_in_go())
             });
             if !invalid {
                 count += 1;
@@ -1265,12 +1265,12 @@ impl DomainMapperConfig {
         name: Option<&str>,
     ) -> (
         MapperOutcome,
-        Option<mosdns_sequence_core::RoutingLabelOverlay>,
+        Option<atomdns_sequence_core::RoutingLabelOverlay>,
     ) {
         let matcher = self.matcher.get();
         let hot = name.and_then(|name| self.learner.lookup(name));
         let overlay = self.learner.learner.borrow().as_ref().map(|learner| {
-            mosdns_sequence_core::RoutingLabelOverlay {
+            atomdns_sequence_core::RoutingLabelOverlay {
                 prefix_len: hot.as_ref().map_or(0, |hit| hit.tags.len()),
                 dynamic_label_count: learner.settings().categories.len(),
                 replaced: Arc::clone(&self.learner.labels.borrow()),
@@ -1569,7 +1569,7 @@ fn unicode_lowercase_refusal(tag: &str, rule: &str) -> Option<String> {
 /// to keep downloads and posted lists from making the next start fail.
 pub(crate) fn rule_refusal(tag: &str, rule: &str) -> Option<String> {
     if let Some(pattern) = rule.strip_prefix("regexp:") {
-        return match mosdns_matcher_core::check_go_regexp(pattern) {
+        return match atomdns_matcher_core::check_go_regexp(pattern) {
             Err(error) if !error.is_invalid_in_go() => {
                 Some(unsupported_regexp_message(tag, rule, &error))
             }
@@ -1619,7 +1619,7 @@ fn build_matcher(
     let mut refused: Option<String> = None;
     rules.retain(|rule| {
         if let Some(pattern) = rule.rule.strip_prefix("regexp:") {
-            return match mosdns_matcher_core::check_go_regexp(pattern) {
+            return match atomdns_matcher_core::check_go_regexp(pattern) {
                 Ok(()) => true,
                 Err(error) if error.is_invalid_in_go() => {
                     crate::diag::warn_line!("{tag}: skip invalid regexp rule {:?}", rule.rule);

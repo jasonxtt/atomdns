@@ -7,13 +7,13 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
-use base64::Engine as _;
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use mosdns_upstream_core::secure::{DohRequestError, TlsConfigError, TlsPolicy};
-use mosdns_upstream_core::{
+use atomdns_upstream_core::secure::{DohRequestError, TlsConfigError, TlsPolicy};
+use atomdns_upstream_core::{
     DohEndpoint, DotEndpoint, ExchangeRequest, IdentityError, SecureError, ServerIdentity,
     ServiceUrlError, SideEffectState,
 };
+use base64::Engine as _;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use rustls::RootCertStore;
 use rustls::pki_types::CertificateDer;
 

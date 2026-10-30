@@ -1,7 +1,7 @@
-//! `ui-manifest.json` of an external mosdns UI package (a directory `<config root>/ui/<name>/`
+//! `ui-manifest.json` of an external atomdns UI package (a directory `<config root>/ui/<name>/`
 //! that carries one): what the package is and whether this host can serve it. Pure parsing and
 //! the compatibility rule; reading the file from the pinned directory is `external_ui.rs`'s job.
-//! A directory without a manifest is not a mosdns UI package and is served as the generic static
+//! A directory without a manifest is not a atomdns UI package and is served as the generic static
 //! mount it always was.
 
 #[cfg(any(target_os = "linux", test))]
