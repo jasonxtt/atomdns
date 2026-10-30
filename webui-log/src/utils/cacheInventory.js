@@ -10,7 +10,9 @@ export async function loadCacheInventory(getJSON) {
       throw new Error('缓存列表包含无效或重复标签')
     }
     tags.add(cache.tag)
-    return { key: `native-cache:${cache.tag}`, name: cache.tag, tag: cache.tag }
+    // The configured display name; a cache without one shows its tag.
+    const label = typeof cache.label === 'string' ? cache.label.trim() : ''
+    return { key: `native-cache:${cache.tag}`, name: label || cache.tag, tag: cache.tag, labelled: label !== '' }
   })
 }
 

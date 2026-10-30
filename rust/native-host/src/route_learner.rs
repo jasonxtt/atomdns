@@ -174,6 +174,9 @@ pub struct RouteLearner {
     handed_over: Cell<bool>,
     cancel: TransportCancellation,
     jobs: RefCell<tokio::task::JoinSet<()>>,
+    /// Display names of the `route_learn` rules (rule tag -> `label`), set while
+    /// compiling; an entry's `reason` is the rule tag.
+    reason_labels: RefCell<HashMap<String, String>>,
 }
 
 /// The compiled plugin.
@@ -200,6 +203,7 @@ impl RouteLearner {
             started: Cell::new(false),
             adopted: Cell::new(false),
             handed_over: Cell::new(false),
+            reason_labels: RefCell::new(HashMap::new()),
             cancel: TransportCancellation::new(),
             jobs: RefCell::new(tokio::task::JoinSet::new()),
         }
@@ -375,6 +379,13 @@ impl RouteLearner {
         });
     }
 
+    /// Names a `route_learn` rule for display (`reason_label` of its entries).
+    pub(crate) fn set_reason_label(&self, rule: &str, label: &str) {
+        self.reason_labels
+            .borrow_mut()
+            .insert(rule.to_owned(), label.to_owned());
+    }
+
     /// Takes over the live state of the previous generation's learner of the
     /// same tag, when both have the same categories. Returns whether it did.
     pub(crate) fn adopt(&self, previous: &RouteLearner) -> bool {
@@ -391,7 +402,37 @@ impl RouteLearner {
         *self.shared.borrow_mut() = Rc::clone(&previous.shared.borrow());
         self.adopted.set(true);
         previous.handed_over.set(true);
+        self.trim_to_capacity();
         true
+    }
+
+    /// Keeps the most recently confirmed names of a category that holds more
+    /// than its capacity (a settings change lowered `max_entries`).
+    fn trim_to_capacity(&self) {
+        let shared = self.shared.borrow();
+        let mut state = shared.borrow_mut();
+        for (index, spec) in self.settings.categories.iter().enumerate() {
+            let len = state.cats[index].len();
+            if len <= spec.max_entries {
+                continue;
+            }
+            let mut lasts: Vec<u32> = state.cats[index].values().map(|entry| entry.last).collect();
+            lasts.sort_unstable_by(|a, b| b.cmp(a));
+            let cutoff = lasts[spec.max_entries - 1];
+            state.cats[index].retain(|_, entry| entry.last >= cutoff);
+            let mut excess = state.cats[index].len().saturating_sub(spec.max_entries);
+            state.cats[index].retain(|_, entry| {
+                if excess > 0 && entry.last == cutoff {
+                    excess -= 1;
+                    false
+                } else {
+                    true
+                }
+            });
+            let removed = len - state.cats[index].len();
+            state.counters.evicted += removed as u64;
+            state.changed = true;
+        }
     }
 
     /// A newer generation takes over: stop scheduling. Unless it adopted the
@@ -744,6 +785,7 @@ impl RouteLearner {
         });
         let shared = self.shared.borrow();
         let state = shared.borrow();
+        let labels = self.reason_labels.borrow();
         let entries: Vec<serde_json::Value> = rows
             .iter()
             .skip(offset)
@@ -756,6 +798,7 @@ impl RouteLearner {
                     "mark": spec.mark,
                     "name": &**name,
                     "reason": state.reason(entry.reason),
+                    "reason_label": labels.get(state.reason(entry.reason)).map_or("", String::as_str),
                     "first_confirmed": rfc3339(u64::from(entry.first)),
                     "last_confirmed": rfc3339(u64::from(entry.last)),
                     "expires_at": rfc3339(u64::from(entry.last) + spec.ttl),
@@ -1261,6 +1304,46 @@ mod tests {
         broken.load();
         assert!(broken.names("direct").is_empty());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn adoption_keeps_the_most_recently_confirmed_names_within_a_lowered_capacity() {
+        let old = two(PathBuf::from("unused.json"));
+        for name in ["a.example", "b.example"] {
+            old.learn(&[1], "rule", &wire(name));
+        }
+        old.shared.borrow().borrow_mut().clock_shift = 5;
+        for name in ["c.example", "d.example"] {
+            old.learn(&[1], "rule", &wire(name));
+        }
+        let new = learner(
+            PathBuf::from("unused.json"),
+            vec![
+                spec("special", 4, "SPECIAL", 1000, 100),
+                spec("direct", 11, "DIRECT", 100, 2),
+            ],
+        );
+        assert!(new.adopt(&old));
+        let kept: Vec<String> = new
+            .names("direct")
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(kept, ["c.example", "d.example"]);
+        // Ties on the cut are broken by count, never by keeping too many.
+        let tied = two(PathBuf::from("unused.json"));
+        for name in ["a.example", "b.example", "c.example", "d.example"] {
+            tied.learn(&[1], "rule", &wire(name));
+        }
+        let small = learner(
+            PathBuf::from("unused.json"),
+            vec![
+                spec("special", 4, "SPECIAL", 1000, 100),
+                spec("direct", 11, "DIRECT", 100, 3),
+            ],
+        );
+        assert!(small.adopt(&tied));
+        assert_eq!(small.names("direct").len(), 3);
     }
 
     #[test]

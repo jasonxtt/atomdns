@@ -22,7 +22,7 @@ A category: `tag` (unique across all plugin tags and categories; it keeps the ol
 `effective_tag` logic matches these strings, so `记忆直连`, `记忆代理`, `记忆无V4`, `记忆无V6` must not change; no `|`), `source` (shown as `matched_rule_source`; default the tag; no `|`), `ttl`
 (seconds from the last confirmation, 60–315,360,000, required), `max_entries`, `enabled` (default true; the settings layer overrides it, see below).
 
-`route_learn` (a rule, dispatched as `exec: $tag`): `learner` (a `route_learner` tag), `learn` (a category tag or a list), `when` (optional; one expression or a list in the sequence `matches` syntax, all must hold,
+`route_learn` (a rule, dispatched as `exec: $tag`): `learner` (a `route_learner` tag), `learn` (a category tag or a list), `label` (optional display name of the rule, 1–64 characters without control characters; shown as `reason_label` of the entries it confirmed, never stored), `when` (optional; one expression or a list in the sequence `matches` syntax, all must hold,
 compiled by the same code as `matches`). The rule's tag is the *reason* stored with the entry. A rule never changes the query, its routing or its answer; it fails the query only when a `when` matcher fails
 (as a sequence rule would). A learned name takes effect from the **next** query.
 
@@ -65,7 +65,7 @@ saved and the new one loads it). Queries still running on the old generation kee
 
 Category tag: `show?q=&limit=&offset=` (text; a line per live entry `%010d <date of last confirmation> <name>` by **hit count** descending, then name; `limit` 100 when invalid or ≤0; header `X-Total-Count` = live matches, exposed to browsers),
 `save` (writes the file when something changed; 200 `domain_output saved`), `flush` (clears that category, writes at once, 200 `domain_output flushed`), `restartall` (501). `save`/`flush` answer 503 while the generation is retired.
-Learner tag: `entries?category=&q=&sort=hits|last|first&order=desc|asc&limit=&offset=` (JSON; `limit` ≤ 1000, default 100; each entry has `category`, `conclusion`, `mark`, `name`, `reason`, `first_confirmed`, `last_confirmed`, `expires_at`, `hits`),
+Learner tag: `entries?category=&q=&sort=hits|last|first&order=desc|asc&limit=&offset=` (JSON; `limit` ≤ 1000, default 100; each entry has `category`, `conclusion`, `mark`, `name`, `reason`, `reason_label` (the rule's `label`, `""` when it has none or the rule is gone), `first_confirmed`, `last_confirmed`, `expires_at`, `hits`),
 `status` (per-category counts, capacity, ttl and enabled; counters learned/confirmed/expired/evicted/flushed since start; the last write).
 
 The capabilities `lists.remembered` and `system.domain_generation` are supported when a `route_learner` (or a `domain_output`) exists. The WebUI domain-generation switches (`/api/v1/domain-generation`, `webinfo/settings.json`

@@ -55,6 +55,65 @@ impl DomainGeneration {
     }
 }
 
+/// The accepted ranges of the tunable numbers (see `native-settings.md`).
+pub(crate) const CACHE_SIZE_RANGE: (u64, u64) = (1_000, 100_000_000);
+pub(crate) const CACHE_LAZY_TTL_RANGE: (u64, u64) = (0, u32::MAX as u64);
+pub(crate) const CACHE_DUMP_INTERVAL_RANGE: (u64, u64) = (60, 31_536_000);
+pub(crate) const LEARNER_TTL_RANGE: (u64, u64) = (60, 315_360_000);
+pub(crate) const LEARNER_WRITE_INTERVAL_RANGE: (u64, u64) = (60, 31_536_000);
+
+/// The stored differences of one `cache`: capacity in entries, the seconds an
+/// expired answer may still be served, and the seconds between dumps.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CacheTuning {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) lazy_cache_ttl: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) dump_interval: Option<u64>,
+}
+
+impl CacheTuning {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.size.is_none() && self.lazy_cache_ttl.is_none() && self.dump_interval.is_none()
+    }
+}
+
+/// The stored differences of one `route_learner` category.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CategoryTuning {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ttl: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) max_entries: Option<u64>,
+}
+
+impl CategoryTuning {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.ttl.is_none() && self.max_entries.is_none()
+    }
+}
+
+/// The stored differences of the learners: the write interval (every
+/// `route_learner`) and the numbers of single categories.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Learning {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) write_interval: Option<u64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) categories: BTreeMap<String, CategoryTuning>,
+}
+
+impl Learning {
+    fn is_empty(&self) -> bool {
+        self.write_interval.is_none() && self.categories.is_empty()
+    }
+}
+
 /// One upstream as the WebUI sends and shows it (the reference
 /// `UpstreamOverrideConfig` with `use_proxy` for `use_socks_proxy`).
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
@@ -220,6 +279,12 @@ pub(crate) struct Settings {
     pub(crate) upstreams: BTreeMap<String, Vec<UpstreamEntry>>,
     #[serde(default, skip_serializing_if = "DomainGeneration::is_empty")]
     pub(crate) domain_generation: DomainGeneration,
+    /// Tuned `cache` numbers by cache tag; only differences from the YAML.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) caches: BTreeMap<String, CacheTuning>,
+    /// Tuned `route_learner` numbers; only differences from the YAML.
+    #[serde(default, skip_serializing_if = "Learning::is_empty")]
+    pub(crate) learning: Learning,
     /// The `feature_flag` values that differ from the YAML defaults. Unlike the
     /// other sections it is kept when empty: its presence records that the
     /// schema-2 switch files were migrated (see `config::flags`).
@@ -324,6 +389,28 @@ pub(crate) struct YamlDefaults {
     /// The `show_when` conditions of every `aliapi` that declares one (all
     /// must hold for the group to be shown as in use; display only).
     pub(crate) show_when: BTreeMap<String, Vec<String>>,
+    /// The YAML numbers of every `cache`.
+    pub(crate) caches: BTreeMap<String, CacheDefaults>,
+    /// The YAML `ttl` and `max_entries` of every learner category, in
+    /// declaration order of the learners and their categories.
+    pub(crate) categories: Vec<(String, CategoryDefaults)>,
+    /// The YAML `write_interval` of the first `route_learner`.
+    pub(crate) write_interval: Option<u64>,
+}
+
+/// The YAML numbers of one `cache`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CacheDefaults {
+    pub(crate) size: u64,
+    pub(crate) lazy_cache_ttl: u64,
+    pub(crate) dump_interval: u64,
+}
+
+/// The YAML numbers of one learner category.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CategoryDefaults {
+    pub(crate) ttl: u64,
+    pub(crate) max_entries: u64,
 }
 
 /// What [`apply`] found: the report, the effective upstream lists in the UI
@@ -443,11 +530,16 @@ pub(super) fn apply(
             settings.domain_generation.plugins.keys().collect(),
             "domain_output",
         ),
+        ("caches", settings.caches.keys().collect(), "cache"),
     ] {
         for tag in tags {
             match kind_of(tag) {
                 Some(kind) if kind == wanted => {}
                 None if wanted == "domain_output" && category_tags.contains(tag) => {}
+                // The caches of the special groups exist only once the generated
+                // YAML is added, after this check; a group that is gone leaves its
+                // values unused rather than failing the load.
+                None if wanted == "cache" && tag.starts_with("cache_special_") => {}
                 Some(kind) => {
                     return Err(settings_error(
                         &format!("{section}.{tag}"),
@@ -470,6 +562,8 @@ pub(super) fn apply(
                 .map_err(|reason| settings_error(&format!("upstreams.{tag}"), reason))?;
         }
     }
+
+    validate_tuning(settings, &category_tags)?;
 
     let mut report = Vec::new();
     let mut upstreams = BTreeMap::new();
@@ -600,6 +694,7 @@ pub(super) fn apply(
                 let path = format!("{}.args", plugin.source_path);
                 resolve_ecs_strings(&mut plugin.args, &path, &objects)?;
             }
+            "cache" => tune_cache(plugin, settings, &mut report, &mut defaults)?,
             "domain_output" => domain_output(plugin, settings, &mut report, &mut defaults)?,
             "route_learner" => route_learner(plugin, settings, &mut report, &mut defaults)?,
             _ => {}
@@ -1018,6 +1113,138 @@ fn resolve_ecs_strings(
 
 /// The category tags of a `route_learner` definition (what is readable of an
 /// unvalidated definition; the compiler reports malformed ones).
+/// `value` inside `(low, high)`, or the settings error that names the key.
+fn check_range(path: &str, value: u64, (low, high): (u64, u64)) -> Result<(), ConfigError> {
+    if (low..=high).contains(&value) {
+        Ok(())
+    } else {
+        Err(settings_error(
+            path,
+            format!("must be between {low} and {high}, got {value}"),
+        ))
+    }
+}
+
+/// The ranges of the tunable numbers, and the categories they name.
+fn validate_tuning(settings: &Settings, category_tags: &[String]) -> Result<(), ConfigError> {
+    for (tag, tuning) in &settings.caches {
+        let at = |field: &str| format!("caches.{tag}.{field}");
+        if let Some(value) = tuning.size {
+            check_range(&at("size"), value, CACHE_SIZE_RANGE)?;
+        }
+        if let Some(value) = tuning.lazy_cache_ttl {
+            check_range(&at("lazy_cache_ttl"), value, CACHE_LAZY_TTL_RANGE)?;
+        }
+        if let Some(value) = tuning.dump_interval {
+            check_range(&at("dump_interval"), value, CACHE_DUMP_INTERVAL_RANGE)?;
+        }
+    }
+    if let Some(value) = settings.learning.write_interval {
+        check_range(
+            "learning.write_interval",
+            value,
+            LEARNER_WRITE_INTERVAL_RANGE,
+        )?;
+    }
+    let cap = u64::try_from(crate::route_learner::MAX_ENTRIES_CAP).unwrap_or(u64::MAX);
+    for (tag, tuning) in &settings.learning.categories {
+        if !category_tags.contains(tag) {
+            return Err(settings_error(
+                &format!("learning.categories.{tag}"),
+                format!("no route_learner category `{tag}` in the configuration"),
+            ));
+        }
+        if let Some(value) = tuning.ttl {
+            check_range(
+                &format!("learning.categories.{tag}.ttl"),
+                value,
+                LEARNER_TTL_RANGE,
+            )?;
+        }
+        if let Some(value) = tuning.max_entries {
+            check_range(
+                &format!("learning.categories.{tag}.max_entries"),
+                value,
+                (1, cap),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// An integer argument; `None` when absent, null or not an integer (the
+/// plugin compiler reports the latter).
+fn integer_arg(args: &RawMap, key: &str) -> Option<i64> {
+    match args.get(key) {
+        Some(RawValue::Number(super::RawNumber::Signed(value))) => Some(*value),
+        Some(RawValue::Number(super::RawNumber::Unsigned(value))) => i64::try_from(*value).ok(),
+        _ => None,
+    }
+}
+
+/// Reports one tunable number and, when the settings tune it, writes it into
+/// the arguments in place of the YAML value.
+fn tuned(
+    args: &mut RawMap,
+    report: &mut Vec<EffectiveItem>,
+    (object, kind, field): (&str, &'static str, &'static str),
+    yaml: u64,
+    own: Option<u64>,
+) {
+    let value = own.unwrap_or(yaml);
+    if own.is_some() {
+        set_arg(
+            args,
+            field,
+            RawValue::Number(super::RawNumber::Unsigned(value)),
+        );
+    }
+    report.push(EffectiveItem {
+        object: object.to_owned(),
+        kind,
+        field,
+        value: value.to_string(),
+        source: if own.is_some() { SETTINGS } else { YAML },
+    });
+}
+
+/// The effective `size`, `lazy_cache_ttl` and `dump_interval` of a `cache`:
+/// the settings value, else the YAML one (else the plugin default).
+pub(super) fn tune_cache(
+    plugin: &mut RawPlugin,
+    settings: &Settings,
+    report: &mut Vec<EffectiveItem>,
+    defaults: &mut YamlDefaults,
+) -> Result<(), ConfigError> {
+    let tag = plugin.tag.clone();
+    let own = settings.caches.get(&tag).cloned().unwrap_or_default();
+    let Some(args) = args_mut(plugin) else {
+        return Ok(());
+    };
+    let positive = |key: &str, fallback: u64| {
+        integer_arg(args, key)
+            .and_then(|value| u64::try_from(value).ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(fallback)
+    };
+    let yaml = CacheDefaults {
+        size: positive("size", super::DEFAULT_CACHE_SIZE),
+        lazy_cache_ttl: integer_arg(args, "lazy_cache_ttl")
+            .and_then(|value| u64::try_from(value).ok())
+            .unwrap_or(0),
+        dump_interval: positive("dump_interval", super::DEFAULT_CACHE_DUMP_INTERVAL_SECS),
+    };
+    defaults.caches.insert(tag.clone(), yaml);
+    for (field, yaml, own) in [
+        ("size", yaml.size, own.size),
+        ("lazy_cache_ttl", yaml.lazy_cache_ttl, own.lazy_cache_ttl),
+        ("dump_interval", yaml.dump_interval, own.dump_interval),
+    ] {
+        tuned(args, report, (&tag, "cache", field), yaml, own);
+    }
+    Ok(())
+}
+
 fn learner_category_tags(plugin: &RawPlugin) -> Vec<String> {
     let RawValue::Map(args) = &plugin.args else {
         return Vec::new();
@@ -1045,10 +1272,25 @@ fn route_learner(
     defaults: &mut YamlDefaults,
 ) -> Result<(), ConfigError> {
     let path = format!("{}.args.categories", plugin.source_path);
+    let learner = plugin.tag.clone();
     let master = settings.domain_generation.enabled.unwrap_or(true);
     let RawValue::Map(args) = &mut plugin.args else {
         return Ok(());
     };
+    let yaml_interval = integer_arg(args, "write_interval")
+        .and_then(|value| u64::try_from(value).ok())
+        .unwrap_or(21_600);
+    let default_max = integer_arg(args, "max_entries")
+        .and_then(|value| u64::try_from(value).ok())
+        .unwrap_or(20_000);
+    defaults.write_interval.get_or_insert(yaml_interval);
+    tuned(
+        args,
+        report,
+        (&learner, "route_learner", "write_interval"),
+        yaml_interval,
+        settings.learning.write_interval,
+    );
     let Some((_, RawValue::Sequence(list))) = args
         .entries
         .iter_mut()
@@ -1072,6 +1314,38 @@ fn route_learner(
             }
         };
         defaults.generation.insert(tag.clone(), yaml);
+        let tuning = settings
+            .learning
+            .categories
+            .get(&tag)
+            .cloned()
+            .unwrap_or_default();
+        let category = CategoryDefaults {
+            ttl: integer_arg(map, "ttl")
+                .and_then(|value| u64::try_from(value).ok())
+                .unwrap_or(0),
+            max_entries: integer_arg(map, "max_entries")
+                .and_then(|value| u64::try_from(value).ok())
+                .unwrap_or(default_max),
+        };
+        defaults.categories.push((tag.clone(), category));
+        // A category without a `ttl` is the compiler's error to report.
+        if map.get("ttl").is_some() {
+            tuned(
+                map,
+                report,
+                (&tag, "route_learner", "ttl"),
+                category.ttl,
+                tuning.ttl,
+            );
+        }
+        tuned(
+            map,
+            report,
+            (&tag, "route_learner", "max_entries"),
+            category.max_entries,
+            tuning.max_entries,
+        );
         let own = settings
             .domain_generation
             .plugins
@@ -1180,6 +1454,78 @@ mod tests {
                 "{}",
                 String::from_utf8_lossy(bad)
             );
+        }
+    }
+
+    #[test]
+    fn tuning_sections_round_trip_omit_empty_parts_and_refuse_unknown_fields() {
+        let text = br#"{"version":1,"caches":{"c":{"size":5000,"lazy_cache_ttl":0}},"learning":{"write_interval":600,"categories":{"k":{"ttl":60}}}}"#;
+        let settings = Settings::parse(text).unwrap();
+        assert_eq!(settings.caches["c"].size, Some(5000));
+        assert_eq!(settings.caches["c"].lazy_cache_ttl, Some(0));
+        assert_eq!(settings.learning.categories["k"].ttl, Some(60));
+        assert_eq!(Settings::parse(&settings.to_bytes()).unwrap(), settings);
+        let empty = Settings::parse(br#"{"version":1,"caches":{},"learning":{}}"#).unwrap();
+        assert_eq!(empty.to_bytes(), b"{\n  \"version\": 1\n}\n");
+        for bad in [
+            &br#"{"version":1,"caches":{"c":{"more":1}}}"#[..],
+            br#"{"version":1,"caches":{"c":{"size":-1}}}"#,
+            br#"{"version":1,"caches":{"c":{"size":"big"}}}"#,
+            br#"{"version":1,"learning":{"more":1}}"#,
+            br#"{"version":1,"learning":{"categories":{"k":{"mark":3}}}}"#,
+        ] {
+            assert!(
+                Settings::parse(bad).is_err(),
+                "{}",
+                String::from_utf8_lossy(bad)
+            );
+        }
+    }
+
+    #[test]
+    fn tuning_ranges_are_checked_and_name_the_key() {
+        let check = |json: &str| {
+            let settings = Settings::parse(json.as_bytes()).unwrap();
+            validate_tuning(&settings, &["k".to_owned()])
+        };
+        assert!(check(r#"{"version":1,"caches":{"c":{"size":1000,"lazy_cache_ttl":4294967295,"dump_interval":60}}}"#).is_ok());
+        assert!(check(r#"{"version":1,"learning":{"write_interval":31536000,"categories":{"k":{"ttl":60,"max_entries":262144}}}}"#).is_ok());
+        for (json, key) in [
+            (
+                r#"{"version":1,"caches":{"c":{"size":999}}}"#,
+                "caches.c.size",
+            ),
+            (
+                r#"{"version":1,"caches":{"c":{"size":100000001}}}"#,
+                "caches.c.size",
+            ),
+            (
+                r#"{"version":1,"caches":{"c":{"lazy_cache_ttl":4294967296}}}"#,
+                "caches.c.lazy_cache_ttl",
+            ),
+            (
+                r#"{"version":1,"caches":{"c":{"dump_interval":59}}}"#,
+                "caches.c.dump_interval",
+            ),
+            (
+                r#"{"version":1,"learning":{"write_interval":59}}"#,
+                "learning.write_interval",
+            ),
+            (
+                r#"{"version":1,"learning":{"categories":{"k":{"ttl":59}}}}"#,
+                "learning.categories.k.ttl",
+            ),
+            (
+                r#"{"version":1,"learning":{"categories":{"k":{"max_entries":0}}}}"#,
+                "learning.categories.k.max_entries",
+            ),
+            (
+                r#"{"version":1,"learning":{"categories":{"other":{"ttl":60}}}}"#,
+                "learning.categories.other",
+            ),
+        ] {
+            let error = check(json).unwrap_err().to_string();
+            assert!(error.contains(key), "{json}: {error}");
         }
     }
 

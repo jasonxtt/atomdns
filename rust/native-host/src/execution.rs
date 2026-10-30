@@ -6638,6 +6638,7 @@ plugins:
             forward_definitions: Vec::new(),
             forward_invocations: Vec::new(),
             caches: vec![CachePluginConfig {
+                label: String::new(),
                 id: CacheId(0),
                 tag: cache,
                 executable: cache_id,
@@ -7299,6 +7300,7 @@ plugins:
             forward_definitions: Vec::new(),
             forward_invocations: Vec::new(),
             caches: vec![CachePluginConfig {
+                label: String::new(),
                 id: CacheId(0),
                 tag: cache_tag,
                 executable: cache_id,
@@ -7428,6 +7430,7 @@ plugins:
                 forward_definitions: Vec::new(),
                 forward_invocations: Vec::new(),
                 caches: vec![CachePluginConfig {
+                    label: String::new(),
                     id: CacheId(0),
                     tag: cache,
                     executable: cache_id,
@@ -7580,6 +7583,7 @@ plugins:
             executable,
         };
         let cache_config = |id: usize, tag: &str, executable| CachePluginConfig {
+            label: String::new(),
             id: CacheId(id),
             tag: tag.to_owned(),
             executable,

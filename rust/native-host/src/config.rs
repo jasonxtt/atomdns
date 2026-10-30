@@ -330,6 +330,9 @@ pub struct CachePluginConfig {
     pub tag: String,
     pub executable: ExecutableId,
     pub kind: CacheKind,
+    /// The display name (`label`), empty when none was configured. Not part of
+    /// the cache identity: renaming a cache never replaces it.
+    pub label: String,
     /// The configured entry capacity, passed to the bounded cache store.
     pub capacity: u64,
     pub enable_ecs: bool,
@@ -1055,6 +1058,7 @@ fn finish_compile(
             groups,
             &mut definitions,
             &mut applied,
+            sources.settings,
         )?),
         None => None,
     };
@@ -2751,6 +2755,7 @@ fn compile_definitions(
             tag,
             executable,
             kind: CacheKind::Named,
+            label: args.label,
             capacity: args.capacity,
             enable_ecs: args.enable_ecs,
             lazy_cache_ttl_secs: args.lazy_cache_ttl_secs,
@@ -2786,6 +2791,7 @@ fn compile_definitions(
             tag: spec.tag,
             executable,
             kind: CacheKind::Quick,
+            label: String::new(),
             capacity: spec.args.capacity,
             enable_ecs: false,
             lazy_cache_ttl_secs: spec.args.lazy_cache_ttl_secs,
@@ -3654,7 +3660,7 @@ fn compile_route_learn(
 ) -> Result<crate::route_learner::RouteLearn, ConfigError> {
     let path = format!("{}.args", plugin.source_path);
     let args = expect_map(&plugin.args, &path, "route_learn args must be a mapping")?;
-    args.reject_unknown(&["learner", "learn", "when"], &path)?;
+    args.reject_unknown(&["learner", "learn", "when", "label"], &path)?;
     let learner_tag = expect_string(args.required("learner", &path)?, &format!("{path}.learner"))?;
     let learner = learners
         .iter()
@@ -3719,6 +3725,10 @@ fn compile_route_learn(
                 }
             }
         }
+    }
+    let label = optional_label(args, &path)?;
+    if !label.is_empty() {
+        learner.set_reason_label(&plugin.tag, &label);
     }
     Ok(crate::route_learner::RouteLearn::new(
         &plugin.tag,
@@ -4043,6 +4053,7 @@ fn compile_cache(plugin: &RawPlugin) -> Result<CompiledCacheArgs, ConfigError> {
             "dump_interval",
             "exclude_ip",
             "enable_ecs",
+            "label",
         ],
         &path,
     )?;
@@ -4155,6 +4166,7 @@ fn compile_cache(plugin: &RawPlugin) -> Result<CompiledCacheArgs, ConfigError> {
         },
     };
     Ok(CompiledCacheArgs {
+        label: optional_label(args, &path)?,
         capacity,
         enable_ecs,
         lazy_cache_ttl_secs,
@@ -4166,6 +4178,7 @@ fn compile_cache(plugin: &RawPlugin) -> Result<CompiledCacheArgs, ConfigError> {
 
 /// The validated cache arguments before an executable identity is known.
 struct CompiledCacheArgs {
+    label: String,
     capacity: u64,
     enable_ecs: bool,
     lazy_cache_ttl_secs: u32,
@@ -4758,6 +4771,7 @@ fn compile_exec_item(
                 external: external.clone(),
                 tag,
                 args: CompiledCacheArgs {
+                    label: String::new(),
                     capacity,
                     enable_ecs: false,
                     lazy_cache_ttl_secs: 0,
@@ -5430,6 +5444,26 @@ fn expect_sequence<'a>(value: &'a RawValue, path: &str) -> Result<&'a [RawValue]
     match value {
         RawValue::Sequence(sequence) => Ok(sequence),
         _ => Err(ConfigError::new(path, "expected a sequence")),
+    }
+}
+
+/// An optional display `label` argument: absent or null is no label; otherwise a
+/// non-blank string of at most 64 characters without control characters.
+fn optional_label(args: &RawMap, path: &str) -> Result<String, ConfigError> {
+    match args.get("label") {
+        None | Some(RawValue::Null) => Ok(String::new()),
+        Some(value) => {
+            let label = expect_string(value, &format!("{path}.label"))?;
+            let label = label.trim();
+            if label.is_empty() || label.chars().count() > 64 || label.chars().any(char::is_control)
+            {
+                return Err(ConfigError::new(
+                    format!("{path}.label"),
+                    "label must be 1-64 characters without control characters",
+                ));
+            }
+            Ok(label.to_owned())
+        }
     }
 }
 

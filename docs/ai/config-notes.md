@@ -41,7 +41,7 @@ managed-file boundaries, and published packages consistent.
 ### Rust (native) config package
 
 The native host has its own schema and package ID, independent of the Go ones:
-`REQUIRED_CONFIG_SCHEMA` / `REQUIRED_CONFIG_PACKAGE_ID` (`5`, `rust-config-schema-5`) in
+`REQUIRED_CONFIG_SCHEMA` / `REQUIRED_CONFIG_PACKAGE_ID` (`6`, `rust-config-schema-6`) in
 `rust/native-host/src/update/mod.rs`, checked against `scripts/rust-release-metadata.json` by
 `scripts/generate-rust-update-manifest.sh`. Same rules as above: binary-only releases keep both
 values, a structural change of the managed files bumps both and republishes the package.
