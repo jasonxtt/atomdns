@@ -50,8 +50,9 @@ test('the rule sub-items are collapsed until opened and open on any rule page', 
   assert.match(app, /:aria-expanded="expanded\[module\.id\] \? 'true' : 'false'"/)
   assert.match(app, /<div v-show="expanded\[module\.id\]"[^>]*class="rt-nav-items"/)
   assert.doesNotMatch(app, /<div class="rt-nav-group"/, 'no static header any more')
-  // Mobile: the same toggle, the second row only while open.
-  assert.match(app, /v-for="module in expandedModules"[^>]*class="rt-mobile-row rt-mobile-sub"/)
+  // Mobile: tapping the module opens its first page; the second row shows only while on one of its pages.
+  assert.match(app, /v-for="module in mobileSubModules"[^>]*class="rt-mobile-row rt-mobile-sub"/)
+  assert.match(app, /@click="openMobileModule\(module\)"/)
   assert.match(app, /watch\(\(\) => route\.path,[\s\S]*?expandedAfterRoute\(id, path, expanded\[id\]\)[\s\S]*?immediate: true/)
 })
 

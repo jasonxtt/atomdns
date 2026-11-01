@@ -32,6 +32,12 @@ watch(() => route.path, (path) => {
 function toggleModule(id) {
   expanded[id] = !expanded[id]
 }
+// Mobile: the second row belongs to the page being shown, so it goes away with it; tapping the
+// module opens its first page (from another module only: on one of its pages the tap does nothing).
+const mobileSubModules = computed(() => NAV_MODULES.filter(module => module.items.length > 0 && activeModule.value.id === module.id))
+function openMobileModule(module) {
+  if (activeModule.value.id !== module.id) router.push(module.path)
+}
 // The page name alone: the sidebar already shows which module it belongs to.
 const pageTitle = computed(() => route.meta?.title || activeModule.value.label)
 const versionText = computed(() => capabilityState.health?.version || '')
@@ -239,16 +245,16 @@ onBeforeUnmount(() => {
             type="button"
             class="rt-mobile-tab"
             :class="{ active: activeModule.id === module.id }"
-            :aria-expanded="expanded[module.id] ? 'true' : 'false'"
-            :data-nav-toggle="module.id"
-            @click="toggleModule(module.id)"
+            :aria-expanded="activeModule.id === module.id ? 'true' : 'false'"
+            :data-nav-open="module.id"
+            @click="openMobileModule(module)"
           >
             <AppIcon :name="module.icon" />
             <span>{{ module.label }}</span>
           </button>
         </template>
       </div>
-      <div v-for="module in expandedModules" :key="`sub-${module.id}`" class="rt-mobile-row rt-mobile-sub">
+      <div v-for="module in mobileSubModules" :key="`sub-${module.id}`" class="rt-mobile-row rt-mobile-sub">
         <router-link
           v-for="item in module.items"
           :key="item.path"
