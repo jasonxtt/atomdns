@@ -49,6 +49,12 @@ for VARIANT in ${VARIANTS:-amd64}; do
     armv7-gnu) TARGET="armv7-unknown-linux-gnueabihf.2.35"; SUBCOMMAND="zigbuild" ;;
     *) echo "unknown variant ${VARIANT} (amd64, amd64-v3, amd64-musl, arm64, armv7, arm64-gnu, armv7-gnu)" >&2; exit 1 ;;
   esac
+  # qemu-user needs the ARM glibc sysroot to run the gnu programs (also inside build-rust-native.sh's version check)
+  case "${VARIANT}" in
+    arm64-gnu) export QEMU_LD_PREFIX=/usr/aarch64-linux-gnu ;;
+    armv7-gnu) export QEMU_LD_PREFIX=/usr/arm-linux-gnueabihf ;;
+    *) unset QEMU_LD_PREFIX ;;
+  esac
   BIN="${STAGE}/${VARIANT}/atomdns"
   mkdir -p "${STAGE}/${VARIANT}"
   if [ "${VARIANT}" = "amd64" ] && [ -n "${PREBUILT:-}" ]; then
@@ -62,11 +68,6 @@ for VARIANT in ${VARIANTS:-amd64}; do
   fi
   chmod 0755 "${BIN}"
   # Runs natively, or through qemu-user (binfmt) for the ARM variants.
-  case "${VARIANT}" in
-    arm64-gnu) export QEMU_LD_PREFIX=/usr/aarch64-linux-gnu ;;
-    armv7-gnu) export QEMU_LD_PREFIX=/usr/arm-linux-gnueabihf ;;
-    *) unset QEMU_LD_PREFIX ;;
-  esac
   REPORTED="$("${BIN}" version)"
   if [ "${REPORTED}" != "${TAG}" ]; then
     echo "the ${VARIANT} binary reports ${REPORTED}, not ${TAG}" >&2
