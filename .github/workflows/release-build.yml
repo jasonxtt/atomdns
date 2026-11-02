@@ -20,7 +20,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@1.96.0
         with:
-          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,armv7-unknown-linux-musleabihf
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,armv7-unknown-linux-musleabihf,aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -32,28 +32,29 @@ jobs:
         # qemu-user-static runs the ARM programs for `atomdns version` and the smoke test below.
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq qemu-user-static
+          sudo apt-get install -y jq qemu-user-static binutils-multiarch libc6-arm64-cross libc6-armhf-cross
           pip install ziglang cargo-zigbuild
       - name: Build
         env:
           TAG: ${{ inputs.tag }}
         run: |
-          VARIANTS="amd64 amd64-v3 amd64-musl arm64 armv7" scripts/build-rust-release.sh "${TAG}" release/rust
+          VARIANTS="amd64 amd64-v3 amd64-musl arm64 armv7 arm64-gnu armv7-gnu" scripts/build-rust-release.sh "${TAG}" release/rust
       - name: Check the artifacts
         working-directory: release/rust
         run: |
           ls -l
           jq '.version, (.artifacts | keys)' atomdns-update-manifest.json
-          for variant in amd64 amd64-v3 amd64-musl arm64 armv7; do
+          for variant in amd64 amd64-v3 amd64-musl arm64 armv7 arm64-gnu armv7-gnu; do
             mkdir "verify-${variant}"
             tar -xzf "atomdns-linux-${variant}.tar.gz" -C "verify-${variant}"
             file "verify-${variant}/atomdns"
-            if [ "${variant}" = amd64 ] || [ "${variant}" = amd64-v3 ]; then
+            case "${variant}" in amd64|amd64-v3|arm64-gnu|armv7-gnu)
               # the glibc programs must not need a newer glibc than the Debian 12 baseline (2.36)
               need="$(objdump -T "verify-${variant}/atomdns" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n 1)"
               echo "${variant} needs ${need}"
-              [ "$(printf '%s\nGLIBC_2.36\n' "${need}" | sort -V | tail -n 1)" = "GLIBC_2.36" ]
-            fi
+              [ "$(printf '%s\nGLIBC_2.36\n' "${need}" | sort -V | tail -n 1)" = "GLIBC_2.36" ] ;;
+            esac
+            case "${variant}" in arm64-gnu) export QEMU_LD_PREFIX=/usr/aarch64-linux-gnu ;; armv7-gnu) export QEMU_LD_PREFIX=/usr/arm-linux-gnueabihf ;; *) unset QEMU_LD_PREFIX ;; esac
             "./verify-${variant}/atomdns" version
             rm -r "verify-${variant}"
           done

@@ -13,7 +13,7 @@
 | `latest` | 最新正式版 / latest release |
 | `vX.Y.Z` | 与 GitHub Release 同名的固定版本 / pinned release (e.g. `v0.6.2`) |
 
-平台：`linux/amd64`、`linux/arm64`、`linux/arm/v7`（Alpine，静态 musl 程序）。
+平台：`linux/amd64`、`linux/arm64`、`linux/arm/v7`（Debian slim，glibc 程序）。
 
 ## 快速开始 / Quick start
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds (and optionally pushes) the AtomDNS container image from the files of a published GitHub release.
-# Nothing is compiled: the static musl programs, the WebUI package, the fresh-install configuration and the
-# incremental configuration package are downloaded, checked against the release manifest, staged next to
+# Nothing is compiled: the glibc programs (amd64, plus arm64/armv7 when the release has the -gnu packages; older
+# releases only have static musl ARM programs, which run on the Debian base too), the WebUI package, the
+# fresh-install configuration and the incremental configuration package are downloaded, checked against the release manifest, staged next to
 # docker/Dockerfile and wrapped by `docker buildx`.
 #   scripts/build-docker-image.sh vX.Y.Z
 # Environment:
@@ -32,25 +33,33 @@ trap 'rm -rf "${STAGE}"' EXIT
 SRC="${RELEASE_DIR:-${STAGE}/release}"
 mkdir -p "${SRC}" "${STAGE}/ctx/bin" "${STAGE}/ctx/assets"
 
-# platform -> staging directory name, program package
+# The manifest comes first: it says which program packages this release has.
+if [ -z "${RELEASE_DIR:-}" ]; then
+  gh release download "${TAG}" --repo "${REPO}" --dir "${SRC}" --pattern atomdns-update-manifest.json
+fi
+MANIFEST="${SRC}/atomdns-update-manifest.json"
+[ "$(jq -r '.version' "${MANIFEST}")" = "${TAG}" ] || { echo "the manifest is not for ${TAG}" >&2; exit 1; }
+
+# platform -> staging directory name, program package (glibc build when the release has one, else static musl)
+pick() { # <glibc package> <musl package>
+  if [ -n "$(jq -r --arg n "$1" '.artifacts[$n].sha256 // empty' "${MANIFEST}")" ]; then echo "$1"; else echo "$2"; fi
+}
 PACKAGES=()
 for platform in ${PLATFORMS//,/ }; do
   case "${platform}" in
-    linux/amd64) PACKAGES+=("amd64:atomdns-linux-amd64-musl.tar.gz") ;;
-    linux/arm64) PACKAGES+=("arm64:atomdns-linux-arm64.tar.gz") ;;
-    linux/arm/v7) PACKAGES+=("armv7:atomdns-linux-armv7.tar.gz") ;;
+    linux/amd64) PACKAGES+=("amd64:atomdns-linux-amd64.tar.gz") ;;
+    linux/arm64) PACKAGES+=("arm64:$(pick atomdns-linux-arm64-gnu.tar.gz atomdns-linux-arm64.tar.gz)") ;;
+    linux/arm/v7) PACKAGES+=("armv7:$(pick atomdns-linux-armv7-gnu.tar.gz atomdns-linux-armv7.tar.gz)") ;;
     *) echo "unsupported platform ${platform} (linux/amd64, linux/arm64, linux/arm/v7)" >&2; exit 1 ;;
   esac
 done
+echo "program packages: ${PACKAGES[*]}"
 
 if [ -z "${RELEASE_DIR:-}" ]; then
-  patterns=(--pattern atomdns-webui.tar.gz --pattern atomdns-update-manifest.json --pattern config_rust.zip)
+  patterns=(--pattern atomdns-webui.tar.gz --pattern config_rust.zip)
   for pair in "${PACKAGES[@]}"; do patterns+=(--pattern "${pair#*:}"); done
   gh release download "${TAG}" --repo "${REPO}" --dir "${SRC}" "${patterns[@]}"
 fi
-
-MANIFEST="${SRC}/atomdns-update-manifest.json"
-[ "$(jq -r '.version' "${MANIFEST}")" = "${TAG}" ] || { echo "the manifest is not for ${TAG}" >&2; exit 1; }
 
 sha256_of() { if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
 check_asset() { # <file> <name in the manifest>

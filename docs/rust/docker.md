@@ -1,6 +1,6 @@
 # Docker 部署
 
-镜像 `jasonxtt/atomdns`（Docker Hub），平台 `linux/amd64`、`linux/arm64`、`linux/arm/v7`，基于 Alpine，内含静态 musl 构建的 `atomdns`。
+镜像 `jasonxtt/atomdns`（Docker Hub），平台 `linux/amd64`、`linux/arm64`、`linux/arm/v7`，基于 Debian 12 slim（glibc），内含 glibc 构建的 `atomdns`（amd64；arm64/armv7 在有 `-gnu` 包的版本起也是 glibc，更早的版本里是静态 musl 程序）。glibc 版的内存收缩设置在 musl 上不生效，musl 版常驻内存多十几 MB，所以镜像用 glibc。
 标签：`vX.Y.Z`（与程序、GitHub Release 同名）和 `latest`。
 
 ## 快速开始
@@ -49,7 +49,7 @@ scripts/build-docker-image.sh vX.Y.Z           # 构建首个平台到本机 doc
 PUSH=1 LATEST=1 scripts/build-docker-image.sh vX.Y.Z   # 推送多平台镜像到 Docker Hub
 ```
 
-脚本从 Release 下载 `atomdns-linux-{amd64-musl,arm64,armv7}.tar.gz`、`atomdns-webui.tar.gz`、`config_rust.zip` 和清单，
+脚本从 Release 下载 `atomdns-linux-{amd64,arm64-gnu,armv7-gnu}.tar.gz`（清单里没有 `-gnu` 包的旧版本用 `arm64`/`armv7` 的 musl 包）、`atomdns-webui.tar.gz`、`config_rust.zip` 和清单，
 用清单核对 sha256，按清单的 `config.url` 取 `config_rust_up.zip` 并核对，再用 `docker/Dockerfile` 打包。
 
 **与发版联动：** 镜像跟着 Release 走，不跟着 main 的提交走（在线更新也只认 Release）。在 GitHub 发布正式的 `vX.Y.Z` Release 后，
