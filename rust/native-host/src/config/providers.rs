@@ -1521,7 +1521,11 @@ pub(crate) fn build_mapper_matcher<'a>(
             valued.push(ValuedRuleRef {
                 rule: &entry.rule,
                 fast_marks: fast_mask,
-                ctx_marks: if rule.ctx_mark > 0 { &ctx_slots[at] } else { &[] },
+                ctx_marks: if rule.ctx_mark > 0 {
+                    &ctx_slots[at]
+                } else {
+                    &[]
+                },
                 joined_tags: target_tag,
                 joined_sources: source,
             });

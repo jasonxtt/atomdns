@@ -32,7 +32,9 @@ pub use srs::{
     succinct_set_keys,
 };
 pub use trie::DomainSuffixMatcher;
-pub use valued::{ValuedBuildError, ValuedDomainMatcher, ValuedMatchResult, ValuedRule, ValuedRuleRef};
+pub use valued::{
+    ValuedBuildError, ValuedDomainMatcher, ValuedMatchResult, ValuedRule, ValuedRuleRef,
+};
 
 /// Domain matcher trait, generic over the result value.
 ///

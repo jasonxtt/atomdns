@@ -344,9 +344,9 @@ impl ValuedDomainMatcher {
             if kind == RuleKind::Full {
                 continue;
             }
-            let result = *interned
-                .entry(effective)
-                .or_insert_with(|| intern_result(&mut pool, &mut results, accumulated.result(effective)));
+            let result = *interned.entry(effective).or_insert_with(|| {
+                intern_result(&mut pool, &mut results, accumulated.result(effective))
+            });
             match kind {
                 RuleKind::Full => unreachable!("handled above"),
                 RuleKind::Domain => domain.push((suffix_key(&normalize(pattern)), result)),

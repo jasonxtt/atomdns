@@ -147,13 +147,40 @@ mod tests {
         let set = set.finish();
         assert_eq!(set.len(), oracle.len());
         let names = [
-            "", ".", "..", "a.example", "x.a.example", "example", "b.example.", "X.B.EXAMPLE",
-            "exact.test", "EXACT.TEST.", "sub.exact.test", "re12.test", "re.test", "sub.re12.test",
-            "my-tracker.net", "tracker", "dup.example", "z.dup.example", "trail.example.",
-            "trail.example", "é.test", "x.é.test", "other.org", "a", "a.", ".a.", "..a",
+            "",
+            ".",
+            "..",
+            "a.example",
+            "x.a.example",
+            "example",
+            "b.example.",
+            "X.B.EXAMPLE",
+            "exact.test",
+            "EXACT.TEST.",
+            "sub.exact.test",
+            "re12.test",
+            "re.test",
+            "sub.re12.test",
+            "my-tracker.net",
+            "tracker",
+            "dup.example",
+            "z.dup.example",
+            "trail.example.",
+            "trail.example",
+            "é.test",
+            "x.é.test",
+            "other.org",
+            "a",
+            "a.",
+            ".a.",
+            "..a",
         ];
         for name in names {
-            assert_eq!(set.is_match(name), oracle.r#match(name).is_some(), "{name:?}");
+            assert_eq!(
+                set.is_match(name),
+                oracle.r#match(name).is_some(),
+                "{name:?}"
+            );
         }
         assert!(MixSetBuilder::new().finish().is_empty());
     }
