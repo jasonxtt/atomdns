@@ -57,7 +57,7 @@ jobs:
             "./verify-${variant}/atomdns" version
             rm -r "verify-${variant}"
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: release-${{ inputs.tag }}
           path: release/rust/*
