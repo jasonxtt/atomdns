@@ -43,6 +43,29 @@ impl ValuedRule {
     }
 }
 
+/// A [`ValuedRule`] that borrows its text, for callers whose rules already live elsewhere
+/// (a list of a million names need not be copied to be built).
+#[derive(Clone, Copy, Debug)]
+pub struct ValuedRuleRef<'a> {
+    pub rule: &'a str,
+    pub fast_marks: u64,
+    pub ctx_marks: &'a [u32],
+    pub joined_tags: &'a str,
+    pub joined_sources: &'a str,
+}
+
+impl<'a> From<&'a ValuedRule> for ValuedRuleRef<'a> {
+    fn from(rule: &'a ValuedRule) -> Self {
+        Self {
+            rule: &rule.rule,
+            fast_marks: rule.fast_marks,
+            ctx_marks: &rule.ctx_marks,
+            joined_tags: &rule.joined_tags,
+            joined_sources: &rule.joined_sources,
+        }
+    }
+}
+
 /// A merged result returned by a valued domain lookup.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ValuedMatchResult {
@@ -92,11 +115,11 @@ struct AccumulatedResult {
 }
 
 impl AccumulatedResult {
-    fn merge_rule(&mut self, rule: &ValuedRule) {
+    fn merge_rule(&mut self, rule: &ValuedRuleRef<'_>) {
         self.fast_marks |= rule.fast_marks;
         self.ctx_marks.extend(rule.ctx_marks.iter().copied());
-        append_joined_value(&mut self.joined_tags, &rule.joined_tags);
-        append_joined_value(&mut self.joined_sources, &rule.joined_sources);
+        append_joined_value(&mut self.joined_tags, rule.joined_tags);
+        append_joined_value(&mut self.joined_sources, rule.joined_sources);
     }
 
     fn merge_result(&mut self, other: &Self) {
@@ -146,7 +169,7 @@ impl AccPool {
     }
 
     /// The id of the result a single rule record contributes.
-    fn of_rule(&mut self, rule: &ValuedRule) -> u32 {
+    fn of_rule(&mut self, rule: &ValuedRuleRef<'_>) -> u32 {
         let mut result = AccumulatedResult::default();
         result.merge_rule(rule);
         self.intern(result)
@@ -204,6 +227,12 @@ impl ValuedDomainMatcher {
     /// copying them (only `full:` rules keep a lowercase copy), so a large
     /// batch costs little more than the matcher.
     pub fn build(rules: &[ValuedRule]) -> Result<Self, ValuedBuildError> {
+        let refs: Vec<ValuedRuleRef<'_>> = rules.iter().map(ValuedRuleRef::from).collect();
+        Self::build_refs(&refs)
+    }
+
+    /// [`build`](Self::build) over rules that borrow their text.
+    pub fn build_refs(rules: &[ValuedRuleRef<'_>]) -> Result<Self, ValuedBuildError> {
         // Unique rule strings in first-occurrence order with their merged own
         // results; `slot` finds a rule string's position.
         let mut accumulated = AccPool::new();
@@ -213,13 +242,13 @@ impl ValuedDomainMatcher {
         let mut slot: HashMap<&str, usize> = HashMap::with_capacity(rules.len());
         let mut full_own: HashMap<String, u32> = HashMap::new();
         for rule in rules {
-            let (kind, pattern) = parse_rule(&rule.rule)?;
+            let (kind, pattern) = parse_rule(rule.rule)?;
             let record = *record_ids
                 .entry((
                     rule.fast_marks,
-                    &rule.ctx_marks,
-                    &rule.joined_tags,
-                    &rule.joined_sources,
+                    rule.ctx_marks,
+                    rule.joined_tags,
+                    rule.joined_sources,
                 ))
                 .or_insert_with(|| accumulated.of_rule(rule));
             if kind == RuleKind::Full && pattern.is_ascii() {
@@ -228,12 +257,12 @@ impl ValuedDomainMatcher {
             }
             if !pattern.is_ascii() {
                 return Err(ValuedBuildError::UnsupportedRule {
-                    rule: rule.rule.clone(),
+                    rule: rule.rule.to_owned(),
                     error: NonAsciiRule.to_string(),
                 });
             }
-            let at = *slot.entry(rule.rule.as_str()).or_insert_with(|| {
-                entries.push((rule.rule.as_str(), 0));
+            let at = *slot.entry(rule.rule).or_insert_with(|| {
+                entries.push((rule.rule, 0));
                 entries.len() - 1
             });
             entries[at].1 = accumulated.merge(entries[at].1, record);
