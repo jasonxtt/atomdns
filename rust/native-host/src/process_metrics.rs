@@ -57,6 +57,34 @@ fn parse_max_fds(text: &str) -> Option<u64> {
     line.split_whitespace().nth(3)?.parse().ok()
 }
 
+/// Wall-clock start and CPU time already used when this program image began.
+///
+/// An in-place restart (`execve`, see `restart.rs`) keeps the process id, and with it the
+/// kernel's `starttime` and CPU counters, so those would make a restarted host look as old
+/// as the original process. The image's own start is recorded instead.
+#[cfg(target_os = "linux")]
+static IMAGE_START: std::sync::OnceLock<(f64, f64)> = std::sync::OnceLock::new();
+
+/// Records the start of this program image; call it first thing in `main`.
+pub fn mark_image_start() {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = IMAGE_START.get_or_init(|| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0.0, |elapsed| elapsed.as_secs_f64());
+            (now, raw_cpu_seconds().unwrap_or(0.0))
+        });
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn raw_cpu_seconds() -> Option<f64> {
+    let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
+    let (cpu_ticks, ..) = parse_stat(&stat)?;
+    Some(cpu_ticks as f64 / rustix::param::clock_ticks_per_second().max(1) as f64)
+}
+
 #[cfg(target_os = "linux")]
 pub(crate) fn sample() -> Option<ProcessSample> {
     let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
@@ -68,9 +96,13 @@ pub(crate) fn sample() -> Option<ProcessSample> {
     let max_fds = std::fs::read_to_string("/proc/self/limits")
         .ok()
         .and_then(|text| parse_max_fds(&text));
+    mark_image_start();
+    let (image_start, image_cpu) = *IMAGE_START.get()?;
+    let process_start = boot as f64 + start_ticks as f64 / ticks;
     Some(ProcessSample {
-        cpu_seconds: cpu_ticks as f64 / ticks,
-        start_time_seconds: boot as f64 + start_ticks as f64 / ticks,
+        cpu_seconds: (cpu_ticks as f64 / ticks - image_cpu).max(0.0),
+        // Never earlier than the kernel's start of the process, whose clock has 1 s resolution.
+        start_time_seconds: image_start.max(process_start),
         resident_bytes: rss_pages * page,
         virtual_bytes,
         threads,
@@ -221,5 +253,15 @@ mod tests {
         assert!(
             sample.start_time_seconds <= now + 2.0 && sample.start_time_seconds > now - 86_400.0
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn start_time_is_the_image_start_not_the_kernel_process_start() {
+        mark_image_start();
+        let (image_start, _) = *IMAGE_START.get().unwrap();
+        let sample = sample().unwrap();
+        assert!(sample.start_time_seconds >= image_start);
+        assert!(sample.start_time_seconds <= image_start + 5.0);
     }
 }

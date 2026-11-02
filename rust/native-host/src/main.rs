@@ -25,6 +25,7 @@ fn main() {
         }
         Ok(atomdns_native_host::CliCommand::Start { config, dir }) => {
             // Before anything can replace the executable on disk.
+            atomdns_native_host::mark_image_start();
             atomdns_native_host::capture_restart_target();
             // A candidate the update guard started dies with the guard.
             atomdns_native_host::arm_update_candidate();

@@ -74,6 +74,7 @@ pub use config::{
 pub use diag::record_fatal;
 pub use managed::{ManagedDomainSet, ManagedSetError, PersistFault, PersistGate};
 pub use memory::configure_process_memory;
+pub use process_metrics::mark_image_start;
 pub use observer::{
     AdmissionError, AnswerDetailsStatus, AuditAnswer, AuditClock, AuditRecord, AuditSnapshot,
     AuditTestClock, CacheStatus, DurationHistogramBucket, DurationHistogramSnapshot,
