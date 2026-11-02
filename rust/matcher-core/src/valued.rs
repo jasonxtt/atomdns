@@ -83,7 +83,7 @@ enum RuleKind {
     Regexp,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 struct AccumulatedResult {
     fast_marks: u64,
     ctx_marks: BTreeSet<u32>,
@@ -113,6 +113,62 @@ impl AccumulatedResult {
             joined_tags: self.joined_tags,
             joined_sources: self.joined_sources,
         }
+    }
+}
+
+/// Interned [`AccumulatedResult`]s. A block list gives nearly every rule the same
+/// result, so entries hold a small id instead of their own set and strings, and a
+/// merge of two ids is computed once. Id 0 is the empty result.
+struct AccPool {
+    payloads: Vec<AccumulatedResult>,
+    ids: HashMap<AccumulatedResult, u32>,
+    merged: HashMap<(u32, u32), u32>,
+}
+
+impl AccPool {
+    fn new() -> Self {
+        let empty = AccumulatedResult::default();
+        Self {
+            ids: HashMap::from([(empty.clone(), 0)]),
+            payloads: vec![empty],
+            merged: HashMap::new(),
+        }
+    }
+
+    fn intern(&mut self, result: AccumulatedResult) -> u32 {
+        if let Some(&id) = self.ids.get(&result) {
+            return id;
+        }
+        let id = u32::try_from(self.payloads.len()).expect("fewer than 2^32 distinct results");
+        self.payloads.push(result.clone());
+        self.ids.insert(result, id);
+        id
+    }
+
+    /// The id of the result a single rule record contributes.
+    fn of_rule(&mut self, rule: &ValuedRule) -> u32 {
+        let mut result = AccumulatedResult::default();
+        result.merge_rule(rule);
+        self.intern(result)
+    }
+
+    /// `a` with `b` merged in, as `AccumulatedResult::merge_result` does.
+    fn merge(&mut self, a: u32, b: u32) -> u32 {
+        if b == 0 {
+            return a;
+        }
+        if let Some(&id) = self.merged.get(&(a, b)) {
+            return id;
+        }
+        let mut result = self.payloads[a as usize].clone();
+        result.merge_result(&self.payloads[b as usize]);
+        let id = self.intern(result);
+        self.merged.insert((a, b), id);
+        id
+    }
+
+    fn result(&self, id: u32) -> ValuedMatchResult {
+        self.payloads[id as usize].clone().into_result()
     }
 }
 
@@ -150,16 +206,25 @@ impl ValuedDomainMatcher {
     pub fn build(rules: &[ValuedRule]) -> Result<Self, ValuedBuildError> {
         // Unique rule strings in first-occurrence order with their merged own
         // results; `slot` finds a rule string's position.
-        let mut entries: Vec<(&str, AccumulatedResult)> = Vec::with_capacity(rules.len());
+        let mut accumulated = AccPool::new();
+        // A rule record's result id, by its fields: records of one list repeat them.
+        let mut record_ids: HashMap<(u64, &[u32], &str, &str), u32> = HashMap::new();
+        let mut entries: Vec<(&str, u32)> = Vec::with_capacity(rules.len());
         let mut slot: HashMap<&str, usize> = HashMap::with_capacity(rules.len());
-        let mut full_own: HashMap<String, AccumulatedResult> = HashMap::new();
+        let mut full_own: HashMap<String, u32> = HashMap::new();
         for rule in rules {
             let (kind, pattern) = parse_rule(&rule.rule)?;
+            let record = *record_ids
+                .entry((
+                    rule.fast_marks,
+                    &rule.ctx_marks,
+                    &rule.joined_tags,
+                    &rule.joined_sources,
+                ))
+                .or_insert_with(|| accumulated.of_rule(rule));
             if kind == RuleKind::Full && pattern.is_ascii() {
-                full_own
-                    .entry(pattern.to_ascii_lowercase())
-                    .or_default()
-                    .merge_rule(rule);
+                let own = full_own.entry(pattern.to_ascii_lowercase()).or_insert(0);
+                *own = accumulated.merge(*own, record);
             }
             if !pattern.is_ascii() {
                 return Err(ValuedBuildError::UnsupportedRule {
@@ -168,12 +233,13 @@ impl ValuedDomainMatcher {
                 });
             }
             let at = *slot.entry(rule.rule.as_str()).or_insert_with(|| {
-                entries.push((rule.rule.as_str(), AccumulatedResult::default()));
+                entries.push((rule.rule.as_str(), 0));
                 entries.len() - 1
             });
-            entries[at].1.merge_rule(rule);
+            entries[at].1 = accumulated.merge(entries[at].1, record);
         }
         drop(slot);
+        drop(record_ids);
 
         let index = DomainIndex::new(&entries);
         // Inheritance without recursion: an ancestor's pattern is strictly
@@ -193,7 +259,7 @@ impl ValuedDomainMatcher {
         for (_, _, at) in by_depth {
             if let Some(ancestor) = inherited_from(entries[at].0, &index)? {
                 let (inherited, result) = pair_mut(&mut entries, ancestor, at);
-                result.merge_result(inherited);
+                *result = accumulated.merge(*result, *inherited);
             }
         }
 
@@ -225,17 +291,17 @@ impl ValuedDomainMatcher {
         for (lowered, keys) in full_groups {
             // The variants' own rules in input order, then what each
             // spelling inherits.
-            let mut merged = full_own.remove(&lowered).unwrap_or_default();
+            let mut merged = full_own.remove(&lowered).unwrap_or(0);
             for key in keys {
                 if let Some(ancestor) = inherited_from(key, &index)? {
-                    merged.merge_result(&entries[ancestor].1);
+                    merged = accumulated.merge(merged, entries[ancestor].1);
                 }
             }
             // A rule that differs only by the trailing dot replaces the
             // earlier one, as in the reference's map.
             full.push((
                 full_key(&lowered),
-                intern_result(&mut pool, &mut results, merged.into_result()),
+                intern_result(&mut pool, &mut results, accumulated.result(merged)),
             ));
         }
         drop(index);
@@ -243,12 +309,15 @@ impl ValuedDomainMatcher {
         let unique_rules = entries.len();
         let mut domain = Vec::new();
         let mut overlaps = Vec::new();
+        let mut interned: HashMap<u32, usize> = HashMap::new();
         for (key, effective) in entries {
             let (kind, pattern) = parse_rule(key)?;
             if kind == RuleKind::Full {
                 continue;
             }
-            let result = intern_result(&mut pool, &mut results, effective.into_result());
+            let result = *interned
+                .entry(effective)
+                .or_insert_with(|| intern_result(&mut pool, &mut results, accumulated.result(effective)));
             match kind {
                 RuleKind::Full => unreachable!("handled above"),
                 RuleKind::Domain => domain.push((suffix_key(&normalize(pattern)), result)),

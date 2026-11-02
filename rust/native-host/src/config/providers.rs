@@ -887,8 +887,8 @@ pub(crate) struct AdguardRules {
 /// The direct `qname $tag` matcher of an `adguard_rule`: a name matches when
 /// no exception rule matches and a block rule does.
 pub(crate) struct Filtered {
-    pub(crate) allow: atomdns_matcher_core::MixMatcher<()>,
-    pub(crate) deny: atomdns_matcher_core::MixMatcher<()>,
+    pub(crate) allow: atomdns_matcher_core::MixSet,
+    pub(crate) deny: atomdns_matcher_core::MixSet,
 }
 
 impl AdguardRules {
@@ -900,7 +900,7 @@ impl AdguardRules {
     /// with Go semantics is refused instead of being left out.
     pub(crate) fn filtered(&self, tag: &str) -> Result<Filtered, String> {
         let build = |rules: &mut dyn Iterator<Item = &str>| -> Result<_, String> {
-            let mut set = atomdns_matcher_core::MixMatcher::new();
+            let mut set = atomdns_matcher_core::MixSetBuilder::new();
             set.set_default("domain");
             for rule in rules {
                 if let Some(pattern) = rule.strip_prefix("regexp:") {
@@ -917,9 +917,9 @@ impl AdguardRules {
                     return Err(reason);
                 }
                 // Any other rule the matcher rejects is not part of the set.
-                let _ = set.add(rule, ());
+                let _ = set.add(rule);
             }
-            Ok(set)
+            Ok(set.finish())
         };
         Ok(Filtered {
             allow: build(&mut self.allow.iter().map(String::as_str))?,

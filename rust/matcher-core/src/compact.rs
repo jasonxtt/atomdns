@@ -41,6 +41,10 @@ impl CompactIndex {
         }
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.results.len()
+    }
+
     pub(crate) fn get(&self, key: &[u8]) -> Option<usize> {
         let mut lo = 0;
         let mut hi = self.results.len();
