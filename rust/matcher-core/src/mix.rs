@@ -4,10 +4,10 @@ use crate::normalize::{NonAsciiRule, normalize};
 use crate::regex::compile_go_compatible;
 use crate::trie::DomainSuffixMatcher;
 
-const MATCHER_FULL: &str = "full";
-const MATCHER_DOMAIN: &str = "domain";
-const MATCHER_REGEXP: &str = "regexp";
-const MATCHER_KEYWORD: &str = "keyword";
+pub(crate) const MATCHER_FULL: &str = "full";
+pub(crate) const MATCHER_DOMAIN: &str = "domain";
+pub(crate) const MATCHER_REGEXP: &str = "regexp";
+pub(crate) const MATCHER_KEYWORD: &str = "keyword";
 
 /// Error returned when no default type is set for a bare rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,7 +156,7 @@ impl<V> Default for MixMatcher<V> {
 
 /// Split `rule` at the first `:`. Without a colon, `default_type` is used if
 /// set; otherwise `NoDefaultMatcher` is returned.
-fn split_rule<'a>(
+pub(crate) fn split_rule<'a>(
     rule: &'a str,
     default_type: Option<&'static str>,
 ) -> Result<(&'a str, &'a str), String> {

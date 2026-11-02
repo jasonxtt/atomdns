@@ -325,7 +325,7 @@ impl DomainSetHandle {
             Self::Managed(provider) => provider.matches(domain),
             Self::Filtered(live) => {
                 let set = live.get();
-                set.allow.r#match(domain).is_none() && set.deny.r#match(domain).is_some()
+                !set.allow.is_match(domain) && set.deny.is_match(domain)
             }
         }
     }

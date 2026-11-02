@@ -15,7 +15,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use atomdns_matcher_core::{
-    IpPrefixList, RegexBuildError, ValuedBuildError, ValuedDomainMatcher, ValuedRule,
+    IpPrefixList, RegexBuildError, ValuedBuildError, ValuedDomainMatcher, ValuedRuleRef,
     decode_domain_srs, decode_ip_srs,
 };
 use atomdns_sequence_core::{
@@ -887,8 +887,8 @@ pub(crate) struct AdguardRules {
 /// The direct `qname $tag` matcher of an `adguard_rule`: a name matches when
 /// no exception rule matches and a block rule does.
 pub(crate) struct Filtered {
-    pub(crate) allow: atomdns_matcher_core::MixMatcher<()>,
-    pub(crate) deny: atomdns_matcher_core::MixMatcher<()>,
+    pub(crate) allow: atomdns_matcher_core::MixSet,
+    pub(crate) deny: atomdns_matcher_core::MixSet,
 }
 
 impl AdguardRules {
@@ -900,7 +900,7 @@ impl AdguardRules {
     /// with Go semantics is refused instead of being left out.
     pub(crate) fn filtered(&self, tag: &str) -> Result<Filtered, String> {
         let build = |rules: &mut dyn Iterator<Item = &str>| -> Result<_, String> {
-            let mut set = atomdns_matcher_core::MixMatcher::new();
+            let mut set = atomdns_matcher_core::MixSetBuilder::new();
             set.set_default("domain");
             for rule in rules {
                 if let Some(pattern) = rule.strip_prefix("regexp:") {
@@ -917,9 +917,9 @@ impl AdguardRules {
                     return Err(reason);
                 }
                 // Any other rule the matcher rejects is not part of the set.
-                let _ = set.add(rule, ());
+                let _ = set.add(rule);
             }
-            Ok(set)
+            Ok(set.finish())
         };
         Ok(Filtered {
             allow: build(&mut self.allow.iter().map(String::as_str))?,
@@ -1497,8 +1497,10 @@ pub(crate) fn build_mapper_matcher<'a>(
     spec: &MapperSpec,
     rules_of: &dyn Fn(&str) -> Option<&'a [RuleEntry]>,
 ) -> Result<ValuedDomainMatcher, ConfigError> {
-    let mut valued: Vec<ValuedRule> = Vec::new();
-    for rule in &spec.rules {
+    // Rules borrow their text from the provider lists; only the context mark needs a slot.
+    let ctx_slots: Vec<[u32; 1]> = spec.rules.iter().map(|rule| [rule.ctx_mark]).collect();
+    let mut valued: Vec<ValuedRuleRef<'_>> = Vec::new();
+    for (at, rule) in spec.rules.iter().enumerate() {
         let tag = rule.tag.as_str();
         let target_tag = if rule.output_tag.is_empty() {
             tag
@@ -1516,13 +1518,13 @@ pub(crate) fn build_mapper_matcher<'a>(
                 .as_deref()
                 .filter(|s| !s.is_empty())
                 .unwrap_or(tag);
-            valued.push(ValuedRule::new(
-                entry.rule.clone(),
-                fast_mask,
-                (rule.ctx_mark > 0).then_some(rule.ctx_mark),
-                target_tag,
-                source,
-            ));
+            valued.push(ValuedRuleRef {
+                rule: &entry.rule,
+                fast_marks: fast_mask,
+                ctx_marks: if rule.ctx_mark > 0 { &ctx_slots[at] } else { &[] },
+                joined_tags: target_tag,
+                joined_sources: source,
+            });
         }
     }
     build_matcher(valued, &spec.tag, &spec.path)
@@ -1597,12 +1599,12 @@ fn known_rule_kind(rule: &str) -> bool {
 /// unprefixed or unknown-type rule, an invalid regexp, a non-ASCII pattern)
 /// with a diagnostic instead of failing the whole mapper.
 fn build_matcher(
-    mut rules: Vec<ValuedRule>,
+    mut rules: Vec<ValuedRuleRef<'_>>,
     tag: &str,
     path: &str,
 ) -> Result<ValuedDomainMatcher, ConfigError> {
     rules.retain(|rule| {
-        let keep = known_rule_kind(&rule.rule);
+        let keep = known_rule_kind(rule.rule);
         if !keep {
             crate::diag::warn_line!("{tag}: skip invalid domain rule {:?}", rule.rule);
         }
@@ -1627,13 +1629,13 @@ fn build_matcher(
                 }
                 Err(error) => {
                     refused
-                        .get_or_insert_with(|| unsupported_regexp_message(tag, &rule.rule, &error));
+                        .get_or_insert_with(|| unsupported_regexp_message(tag, rule.rule, &error));
                     false
                 }
             };
         }
         let keep = rule.rule.is_ascii();
-        if !keep && let Some(reason) = unicode_lowercase_refusal(tag, &rule.rule) {
+        if !keep && let Some(reason) = unicode_lowercase_refusal(tag, rule.rule) {
             refused.get_or_insert(reason);
             return false;
         }
@@ -1646,7 +1648,7 @@ fn build_matcher(
         return Err(ConfigError::new(path, reason));
     }
     for _ in 0..100_000 {
-        match ValuedDomainMatcher::build(&rules) {
+        match ValuedDomainMatcher::build_refs(&rules) {
             Ok(matcher) => return Ok(matcher),
             Err(
                 ValuedBuildError::InvalidRule(rule)
@@ -1654,7 +1656,7 @@ fn build_matcher(
                 | ValuedBuildError::UnsupportedRule { rule, .. },
             ) => {
                 crate::diag::warn_line!("{tag}: skip invalid rule {rule:?}");
-                rules.retain(|candidate| candidate.rule != rule);
+                rules.retain(|candidate| candidate.rule != rule.as_str());
             }
         }
     }

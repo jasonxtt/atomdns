@@ -12,6 +12,7 @@ mod full;
 mod ipnet;
 mod keyword;
 mod mix;
+mod mix_set;
 mod normalize;
 mod regex;
 mod srs;
@@ -22,6 +23,7 @@ pub use full::FullMatcher;
 pub use ipnet::IpPrefixList;
 pub use keyword::KeywordMatcher;
 pub use mix::MixMatcher;
+pub use mix_set::{MixSet, MixSetBuilder};
 pub use normalize::normalize;
 pub use regex::{RegexBuildError, RegexMatcher, check_go_regexp};
 pub use srs::{
@@ -30,7 +32,7 @@ pub use srs::{
     succinct_set_keys,
 };
 pub use trie::DomainSuffixMatcher;
-pub use valued::{ValuedBuildError, ValuedDomainMatcher, ValuedMatchResult, ValuedRule};
+pub use valued::{ValuedBuildError, ValuedDomainMatcher, ValuedMatchResult, ValuedRule, ValuedRuleRef};
 
 /// Domain matcher trait, generic over the result value.
 ///
