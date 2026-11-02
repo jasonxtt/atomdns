@@ -16,9 +16,14 @@ node scripts/native-build-manifest.mjs prepare "${MANIFEST}"
 SOURCE_DIGEST="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).source_manifest_sha256)' "${MANIFEST}")"
 # A source-keyed directory prevents older restored mtimes from reusing a stale executable.
 NATIVE_TARGET_DIR="${CARGO_TARGET_DIR}/native-${SOURCE_DIGEST}"
-cargo "${CARGO_SUBCOMMAND:-build}" --locked --manifest-path rust/Cargo.toml -p atomdns-native-host --release --target-dir "${NATIVE_TARGET_DIR}"
+# cargo itself rejects <triple>.<glibc version> in CARGO_BUILD_TARGET; cargo-zigbuild only understands it as --target.
+TARGET_ARGS=()
+case "${CARGO_BUILD_TARGET:-}" in
+  *-gnu*.[0-9]*.[0-9]*) TARGET_ARGS=(--target "${CARGO_BUILD_TARGET}"); ZIG_TARGET="${CARGO_BUILD_TARGET}"; unset CARGO_BUILD_TARGET ;;
+esac
+cargo "${CARGO_SUBCOMMAND:-build}" ${TARGET_ARGS[@]+"${TARGET_ARGS[@]}"} --locked --manifest-path rust/Cargo.toml -p atomdns-native-host --release --target-dir "${NATIVE_TARGET_DIR}"
 # cargo-zigbuild accepts <triple>.<glibc version> (e.g. aarch64-unknown-linux-gnu.2.35); cargo's own directory has only the triple.
-TARGET_DIR_NAME="${CARGO_BUILD_TARGET:-}"
+TARGET_DIR_NAME="${ZIG_TARGET:-${CARGO_BUILD_TARGET:-}}"
 case "${TARGET_DIR_NAME}" in *-gnu*.[0-9]*.[0-9]*) TARGET_DIR_NAME="${TARGET_DIR_NAME%.*.*}" ;; esac
 ARTIFACT="${NATIVE_TARGET_DIR}/${TARGET_DIR_NAME:+${TARGET_DIR_NAME}/}release/atomdns"
 if [[ "${ARTIFACT}" != "${OUTPUT}" ]]; then cp "${ARTIFACT}" "${OUTPUT}"; fi
