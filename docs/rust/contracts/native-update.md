@@ -9,6 +9,9 @@ Design notes and the Go comparison: the task's `research/design.md` / `go-semant
 - A failed upgrade is rolled back automatically; this must not depend on `systemd` (the production unit is `Restart=always`, `RestartSec=2min`).
 - The first switch from Go to Rust is a deployment script (F-3b), not this feature.
 
+## Container mode (Docker image, 2026-11)
+`ATOMDNS_CONTAINER=1` (set by the image) turns the online updater off for **every** platform and architecture: `system.update` is unsupported with the reason "容器版请拉取新镜像并重建容器…", `POST /api/v1/update/apply` answers `501`, `update/status`/`check` report `update_available: false` with that message (the WebUI hides the whole update block through the capability). `config/export` stays. Instead, `main` runs `update/container.rs::prepare` before anything is loaded: an empty configuration volume is filled from the image's `config_rust.zip` (a non-empty directory without the configuration file is refused); an applied schema below `REQUIRED_CONFIG_SCHEMA` gets the image's `config_rust_up.zip` applied like the guard does (backup under `backup/container-schema-…`, state file written); an existing `ui/main` directory whose `ui_version` differs from the image's `atomdns-webui.tar.gz` is replaced by two renames through `update/`. The files are in `ATOMDNS_CONTAINER_ASSETS` (default `/usr/share/atomdns`). See [docker.md](../docker.md).
+
 ## Versions
 `atomdns version` and `GET /api/v1/system/health` `version` print the build version: the release tag (`ATOMDNS_BUILD_VERSION=vX.Y.Z`), or `v<crate version>` for any other build. The candidate of an update must report exactly the release tag. An update is *available* only when the release is strictly newer (Go also counts downgrades); `force` reinstalls.
 

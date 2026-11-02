@@ -10,7 +10,7 @@
 
 - AtomDNS 的行为目标是 MosDNS-T（[`jasonxtt/mosdns`](https://github.com/jasonxtt/mosdns)，基于 `yyysuo/mosdns` 持续维护的分支）：
   同样的配置、同样的专属分流组、在线规则、查询日志与 WebUI，用 Rust 重新实现运行时。
-  Go 版仍在 `jasonxtt/mosdns` 维护；它的安装脚本、Docker 镜像和 OpenWrt 软件源**不在本仓库**，本仓库也不提供这些发行形式。
+  Go 版仍在 `jasonxtt/mosdns` 维护；它的安装脚本和 OpenWrt 软件源**不在本仓库**，本仓库也不提供这些发行形式。Docker 镜像（`jasonxtt/atomdns`）由本仓库提供，见下。
 - 本仓库从 2026-10-21 起独立，保留 `jasonxtt/mosdns` 的 `rust` 分支的完整历史。
 - 2026-10-30 起项目更名为 AtomDNS：程序、crate（`atomdns-*`）、`ATOMDNS_*` 环境变量、`atomdns_*` 指标名、发布资产与更新来源（`jasonxtt/atomdns`）都用新名字。
   配置包标识（`channel "rust"`、`rust-config-schema-N`、`config_rust_up.zip`）和缓存转储格式名 `mosdns_cache_v2` 沿用旧名（持久化格式）。
@@ -25,7 +25,7 @@
 
 ## 安装与在线更新
 
-目前只发布 **Linux amd64** 程序，没有安装脚本。
+程序包有 Linux amd64（glibc、v3、musl）、arm64、armv7，在线更新只支持 amd64，没有安装脚本。Docker 用户见下一节。
 
 1. 从本仓库的 [Releases](https://github.com/jasonxtt/atomdns/releases) 下载 `atomdns-linux-amd64.tar.gz` 与 `atomdns-update-manifest.json`，
    用清单核对 sha256，解出 `atomdns`，放到例如 `/usr/local/bin/atomdns`。
@@ -44,6 +44,16 @@
 4. 在线更新：WebUI「系统设置」检查更新并“立即更新”。更新只来自 `jasonxtt/atomdns` 的 `vX.Y.Z` 发布，
    程序、（需要时的）配置包和（已安装时的）WebUI 都经 sha256 校验，新程序在守护进程下试运行，不健康会自动回滚到旧程序、旧配置和旧界面。
 
+## Docker
+
+```bash
+docker run -d --name atomdns --restart unless-stopped --network host \
+  -v "$PWD/atomdns-data:/cus/atomdns" jasonxtt/atomdns:latest
+```
+
+镜像（amd64 / arm64 / armv7）首次启动自动初始化空配置目录，WebUI 在 `:9099`。容器版**关闭在线更新**，升级就是拉新镜像并重建容器，配置包和 WebUI 会随镜像同步到挂载目录。
+网络模式、compose 示例与升级细节见 [docker.md](docs/rust/docker.md)。
+
 ## 构建
 
 ```bash
@@ -60,7 +70,7 @@ cargo test --workspace --no-fail-fast --manifest-path rust/Cargo.toml
 - [不使用 WebUI：持久设置、校验与生效](docs/rust/headless.md)
 - [AGENTS.md](AGENTS.md)、[项目背景](docs/ai/project-context.md)、[配置说明](docs/ai/config-notes.md)
 - [产品契约](docs/rust/contracts/index.md)、[验证摘要](docs/rust/validation-summary.md)
-- [发版与手动替换](docs/rust/release.md)、[Go→Rust 切换（历史）](docs/rust/cutover.md)
+- [Docker 部署](docs/rust/docker.md)、[发版与手动替换](docs/rust/release.md)、[Go→Rust 切换（历史）](docs/rust/cutover.md)
 - 与上游 MosDNS 的同步范围：[UPSTREAM_SYNC.md](UPSTREAM_SYNC.md)
 
 ## 开源协议

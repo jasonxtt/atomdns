@@ -62,6 +62,12 @@
 5. 仅程序改动的发布到第 4 步为止。若本次发布需要新的配置包（结构性改动，`required_config_schema` 与 `config_package_id` 同时提高），
    配置包 `config_rust_up.zip` 放在 file 仓库并由清单的 `config.url` 指向（v0.5.0 前是同一 Release 的资产），按下面的顺序发版（配置包标识 `channel "rust"`、`rust-config-schema-N`、`config_rust_up.zip` 不随改名变化）。
 
+## Docker 镜像（Release 建好之后）
+
+镜像由 Release 文件拼装，见 [docker.md](docker.md) 的“构建与发布”。**发布正式 Release 后 `docker-image.yml` 会自动构建并推送 `jasonxtt/atomdns:vX.Y.Z` 与 `latest`**（需要仓库机密 `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN`）；
+要先本地检查可运行 `scripts/build-docker-image.sh vX.Y.Z`（不推送）。因此 Release 里必须一次带齐 `config_rust.zip`，建 Release 前先走完“带配置包的发版顺序”第 7 步。镜像要求 Release 带 `config_rust.zip`（其中 `ui/main` 版本等于 tag）和三个静态程序包（`amd64-musl`、`arm64`、`armv7`）。
+发布 Release 本身就是对外发布，已需要负责人确认；镜像随之推送不另设确认。
+
 ## 带配置包的发版顺序
 
 配置包与界面包放在 file 仓库的 `atomdns/` 目录（v0.5.0 起；布局见该目录的 README）：`config/full/config_rust/` 是配置源，`config/full/config_rust.zip` 是全新安装包，

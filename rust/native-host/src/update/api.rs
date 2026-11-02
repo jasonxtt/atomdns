@@ -104,6 +104,9 @@ fn not_allowed() -> Reply {
 
 /// Why the updater cannot run here (shown as the capability's reason), if it cannot.
 pub(crate) fn update_unsupported(root_known: bool) -> Option<&'static str> {
+    if super::container::enabled() {
+        return Some(super::container::UNSUPPORTED_REASON);
+    }
     if !super::platform_supported() {
         return Some("此平台不支持在线更新（仅 linux/amd64）");
     }

@@ -1,0 +1,14 @@
+# Recommended on Linux: the container shares the host network, so the default configuration's
+# companions on 127.0.0.1 (the proxy core's DNS on :6666 / :1053 / :2222) are reachable, every
+# listener of the configuration (:53, :3066, :3077, ...) is published without a port list, and the
+# query log sees the real client addresses. The host's port 53 must be free.
+services:
+  atomdns:
+    image: jasonxtt/atomdns:latest
+    container_name: atomdns
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - ./atomdns-data:/cus/atomdns

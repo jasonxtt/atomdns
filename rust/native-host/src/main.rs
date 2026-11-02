@@ -47,6 +47,9 @@ fn main() {
 /// process id, so the service manager never sees the service stop. If the replacement
 /// fails, the host is started again in this process and keeps serving.
 fn serve(config: &std::path::Path, dir: Option<&std::path::Path>) -> Result<(), String> {
+    if atomdns_native_host::container_enabled() {
+        prepare_container(config, dir)?;
+    }
     recover_interrupted_update(config, dir)?;
     loop {
         let (config_path, root) = atomdns_native_host::resolve_config_paths(config, dir)
@@ -79,6 +82,29 @@ fn serve(config: &std::path::Path, dir: Option<&std::path::Path>) -> Result<(), 
         eprintln!("atomdns: restart failed ({error}); starting again in this process");
         atomdns_native_host::abandon_failed_update_exec(target, &error.to_string());
     }
+}
+
+/// Container image: fills an empty configuration volume and brings an older one (configuration
+/// package, web interface) in line with the image, before anything is loaded from it.
+fn prepare_container(
+    config: &std::path::Path,
+    dir: Option<&std::path::Path>,
+) -> Result<(), String> {
+    let (config_path, root) = atomdns_native_host::resolve_config_paths(config, dir)
+        .map_err(|error| error.to_string())?;
+    let root = root.unwrap_or_else(|| {
+        config_path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .to_path_buf()
+    });
+    for line in atomdns_native_host::prepare_container(&config_path, &root)
+        .map_err(|error| format!("container setup failed: {error}"))?
+    {
+        eprintln!("atomdns: {line}");
+    }
+    Ok(())
 }
 
 /// Before the configuration is loaded: an update that was interrupted (power loss, a killed

@@ -10,6 +10,7 @@
 
 pub(crate) mod api;
 pub(crate) mod archive;
+pub(crate) mod container;
 pub(crate) mod fsio;
 pub(crate) mod guard;
 pub(crate) mod package;
@@ -527,7 +528,10 @@ impl Manager {
             Some(current) => version > current,
             None => true,
         };
-        if !platform_supported() {
+        if container::enabled() {
+            status.update_available = false;
+            status.message = container::UNSUPPORTED_REASON.to_owned();
+        } else if !platform_supported() {
             status.update_available = false;
             status.message = format!("此平台不支持在线更新（仅 {}）", architecture());
         }

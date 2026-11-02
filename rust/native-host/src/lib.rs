@@ -62,6 +62,21 @@ pub use assembly::{
 pub use cache::{
     CacheAdapterError, CacheCatalog, CacheClock, CacheTestClock, NativeCacheAdapter, PendingStore,
 };
+/// Container mode (`ATOMDNS_CONTAINER=1`): whether it is on, and the start-up step that brings
+/// the configuration volume in line with the image. Returns the lines to log.
+#[must_use]
+pub fn container_enabled() -> bool {
+    update::container::enabled()
+}
+
+/// See [`container_enabled`].
+pub fn prepare_container(
+    config: &std::path::Path,
+    root: &std::path::Path,
+) -> Result<Vec<String>, String> {
+    update::container::prepare(config, root)
+}
+
 pub use cli::{CliCommand, CliError, parse_args, resolve_config_paths};
 pub use config::{
     ApiConfig, CacheId, CacheKind, CachePluginConfig, CheckFinding, CheckFindingKind, CheckReport,
@@ -74,7 +89,6 @@ pub use config::{
 pub use diag::record_fatal;
 pub use managed::{ManagedDomainSet, ManagedSetError, PersistFault, PersistGate};
 pub use memory::configure_process_memory;
-pub use process_metrics::mark_image_start;
 pub use observer::{
     AdmissionError, AnswerDetailsStatus, AuditAnswer, AuditClock, AuditRecord, AuditSnapshot,
     AuditTestClock, CacheStatus, DurationHistogramBucket, DurationHistogramSnapshot,
@@ -83,6 +97,7 @@ pub use observer::{
     UpstreamAttemptOutcome, UpstreamAttemptRecord, UpstreamDiagnosticAttempt,
     UpstreamDiagnosticSelected, UpstreamDiagnostics, UpstreamTransport,
 };
+pub use process_metrics::mark_image_start;
 pub use restart::{
     RestartTarget, capture as capture_restart_target, captured as restart_target, take_pending,
 };
