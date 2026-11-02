@@ -19,6 +19,7 @@ WebUI 在 `http://<主机>:9099/`。
 - 已有配置目录（例如从裸机 `/cus/atomdns` 迁来）直接挂载即可，保留原有数据。
 - 默认配置的上游指向宿主机上的伴生服务（`127.0.0.1:6666`、`:1053`、`:2222`）。**host 网络下可直接使用**；bridge 网络下容器内的 `127.0.0.1` 是容器自己，要把这些上游改成宿主机地址（`host.docker.internal` 加 `extra_hosts: host-gateway`）或伴生容器的服务名，否则查询返回 SERVFAIL。
 - bridge 网络下，专属分流组等额外监听端口（3066、3077 …）要自己加端口映射；host 网络没有这个问题，并且查询日志里是真实的客户端地址。
+- host 网络下，默认配置的**所有**监听端口（53、2222、3066、3077、3099、3111、3333、4444、7777、8888，以及 API 9099）都要求宿主机上空闲；任何一个被占用，容器会以 `TCP bind failed: Address in use` 退出重启。端口冲突时改用 bridge 网络（只映射 53 和 9099），或在配置里改掉冲突的 `listen`。
 - 容器以 root 运行，监听 53 不需要额外能力。
 - 查看版本：`docker run --rm jasonxtt/atomdns version`；检查配置：`docker run --rm -v "$PWD/atomdns-data:/cus/atomdns" jasonxtt/atomdns check -d /cus/atomdns -c config_custom.yaml`。
 
