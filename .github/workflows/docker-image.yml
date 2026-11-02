@@ -60,3 +60,9 @@ jobs:
         run: |
           docker run --rm --platform linux/amd64 "jasonxtt/atomdns:${TAG}" version
           docker buildx imagetools inspect "jasonxtt/atomdns:latest"
+      - name: Update the Docker Hub overview
+        if: ${{ env.PUSH == '1' }}
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: scripts/sync-dockerhub-readme.sh

@@ -55,6 +55,9 @@ PUSH=1 LATEST=1 scripts/build-docker-image.sh vX.Y.Z   # 推送多平台镜像�
 `.github/workflows/docker-image.yml` 自动构建并推送 `jasonxtt/atomdns:vX.Y.Z` 和 `latest`；草稿、预发布和非 `vX.Y.Z` 的标签不触发。
 前提是仓库机密 `DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`（Docker Hub 访问令牌）已设置，且 Release 已带齐 `config_rust.zip` 与各程序包
 （缺文件时构建会失败，补上后在 Actions 手动运行同一标签即可）。手动运行（`push` 默认关闭）也可用来重建某个标签。
+
+Docker Hub 页面的概览和 compose 示例来自 [docker/README.md](../../docker/README.md)，推送镜像后由同一工作流用 `scripts/sync-dockerhub-readme.sh` 同步；
+只改说明时直接在本机运行该脚本即可（用 `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN`，未设置时读 `~/.docker/config.json` 的登录）。改 compose 示例要同时改 `docker/docker-compose.*.yml` 与 `docker/README.md`。
 推送镜像属于对外发布，先核对再确认。Dockerfile 里没有针对目标平台的 `RUN`，多平台构建不需要模拟器。
 
 环境变量：`ATOMDNS_CONTAINER=1` 打开容器模式（镜像已设）；`ATOMDNS_CONTAINER_ASSETS` 改内置文件目录（默认 `/usr/share/atomdns`，测试用）。
