@@ -5775,9 +5775,11 @@ fn compile_response_ip(
         path,
         inputs.as_mut(),
         |line, location| {
-            let (ip, bits) =
-                policy::ip_prefix(line.split_whitespace().next().unwrap_or(""), location)?;
-            prefixes.append(ip, bits);
+            for (ip, bits) in
+                policy::ip_entries(line.split_whitespace().next().unwrap_or(""), location)?
+            {
+                prefixes.append(ip, bits);
+            }
             Ok(())
         },
     )?;

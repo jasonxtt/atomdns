@@ -472,6 +472,137 @@ pub(crate) fn ip_prefix(field: &str, path: &str) -> Result<(IpAddr, u8), ConfigE
     }
     Ok((address, bits))
 }
+/// One IP list entry: an address, a prefix, or an inclusive range `start-end` of two
+/// addresses of one family, which becomes the fewest prefixes covering it.
+pub(crate) fn ip_entries(field: &str, path: &str) -> Result<Vec<(IpAddr, u8)>, ConfigError> {
+    let Some((start, end)) = field.split_once('-') else {
+        return ip_prefix(field, path).map(|prefix| vec![prefix]);
+    };
+    let invalid = || ConfigError::new(path, format!("invalid IP range `{field}`"));
+    let start = start.parse::<IpAddr>().map_err(|_| invalid())?;
+    let end = end.parse::<IpAddr>().map_err(|_| invalid())?;
+    let (start, end, width) = match (start, end) {
+        (IpAddr::V4(a), IpAddr::V4(b)) => (u128::from(u32::from(a)), u128::from(u32::from(b)), 32),
+        (IpAddr::V6(a), IpAddr::V6(b)) => (u128::from(a), u128::from(b), 128),
+        _ => return Err(invalid()),
+    };
+    if start > end {
+        return Err(invalid());
+    }
+    Ok(covering_prefixes(start, end, width)
+        .into_iter()
+        .map(|(network, bits)| {
+            let ip = match width {
+                32 => IpAddr::from(std::net::Ipv4Addr::from(network as u32)),
+                _ => IpAddr::from(std::net::Ipv6Addr::from(network)),
+            };
+            (ip, bits)
+        })
+        .collect())
+}
+/// The fewest aligned blocks covering `start..=end` (addresses of `width` bits),
+/// as (network, prefix length).
+fn covering_prefixes(start: u128, end: u128, width: u32) -> Vec<(u128, u8)> {
+    let mut blocks = Vec::new();
+    let mut next = start;
+    loop {
+        // The largest host-bit count that both the remaining span and the alignment of
+        // `next` allow.
+        let fits = match (end - next).checked_add(1) {
+            Some(count) => 127 - count.leading_zeros(),
+            None => 128,
+        };
+        let aligned = if next == 0 {
+            128
+        } else {
+            next.trailing_zeros()
+        };
+        let host_bits = fits.min(aligned).min(width);
+        let last = if host_bits == 128 {
+            u128::MAX
+        } else {
+            next + ((1u128 << host_bits) - 1)
+        };
+        blocks.push((next, (width - host_bits) as u8));
+        if last >= end {
+            return blocks;
+        }
+        next = last + 1;
+    }
+}
+#[cfg(test)]
+mod ip_entry_tests {
+    use super::*;
+
+    fn text(entries: &[(IpAddr, u8)]) -> Vec<String> {
+        entries
+            .iter()
+            .map(|(ip, bits)| format!("{ip}/{bits}"))
+            .collect()
+    }
+
+    #[test]
+    fn a_range_becomes_the_covering_prefixes() {
+        let entries = ip_entries("10.0.0.100-10.0.0.199", "test").unwrap();
+        assert_eq!(
+            text(&entries),
+            [
+                "10.0.0.100/30",
+                "10.0.0.104/29",
+                "10.0.0.112/28",
+                "10.0.0.128/26",
+                "10.0.0.192/29"
+            ]
+        );
+    }
+
+    #[test]
+    fn single_addresses_and_prefixes_are_unchanged() {
+        assert_eq!(
+            text(&ip_entries("192.0.2.7", "test").unwrap()),
+            ["192.0.2.7/32"]
+        );
+        assert_eq!(
+            text(&ip_entries("198.51.100.0/24", "test").unwrap()),
+            ["198.51.100.0/24"]
+        );
+        assert_eq!(
+            text(&ip_entries("2001:db8::/32", "test").unwrap()),
+            ["2001:db8::/32"]
+        );
+    }
+
+    #[test]
+    fn ranges_cover_exactly_their_addresses() {
+        for (start, end) in [
+            (0u32, 0u32),
+            (5, 9),
+            (250, 1030),
+            (0, u32::MAX),
+            (u32::MAX - 3, u32::MAX),
+        ] {
+            let blocks = covering_prefixes(u128::from(start), u128::from(end), 32);
+            let total: u128 = blocks.iter().map(|(_, bits)| 1u128 << (32 - bits)).sum();
+            assert_eq!(total, u128::from(end - start) + 1, "{start}-{end}");
+            assert_eq!(blocks[0].0, u128::from(start));
+        }
+        let whole = covering_prefixes(0, u128::MAX, 128);
+        assert_eq!(whole, [(0, 0)]);
+    }
+
+    #[test]
+    fn invalid_ranges_are_rejected() {
+        for field in [
+            "10.0.0.199-10.0.0.100",
+            "10.0.0.1-2001:db8::1",
+            "10.0.0.1-",
+            "-10.0.0.1",
+            "10.0.0.1-x",
+        ] {
+            assert!(ip_entries(field, "test").is_err(), "{field}");
+        }
+    }
+}
 #[cfg(test)]
 pub(crate) fn ip_list(
     inline: &[String],
@@ -487,7 +618,7 @@ pub(crate) fn ip_list_with_inputs(
     inputs: Option<&mut crate::special_groups::CandidateInputSet>,
 ) -> Result<Rc<IpListHandle>, ConfigError> {
     for (index, entry) in inline.iter().enumerate() {
-        ip_prefix(entry, &format!("{path}.ips[{index}]"))?;
+        ip_entries(entry, &format!("{path}.ips[{index}]"))?;
     }
     let mut prefixes = IpPrefixList::new();
     RuleBudget::default().load_with_inputs(
@@ -497,8 +628,9 @@ pub(crate) fn ip_list_with_inputs(
         path,
         inputs,
         |line, location| {
-            let (ip, bits) = ip_prefix(line.split_whitespace().next().unwrap_or(""), location)?;
-            prefixes.append(ip, bits);
+            for (ip, bits) in ip_entries(line.split_whitespace().next().unwrap_or(""), location)? {
+                prefixes.append(ip, bits);
+            }
             Ok(())
         },
     )?;

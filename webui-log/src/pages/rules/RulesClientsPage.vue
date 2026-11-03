@@ -9,7 +9,7 @@ import ListEditor from '../../components/rules/ListEditor.vue'
     <section class="panel rt-panel-group">
       <FlagSwitches page="clients" />
       <div class="rt-divider" role="separator"><i></i></div>
-      <ListEditor tag="client_ip" title="客户端 IP" hint="配合上面的“客户端分流”使用：AtomDNS 要直接作为 DNS 下发给客户端（占用 53 端口），名单才生效。例如 192.0.2.10 或 198.51.100.0/24。" />
+      <ListEditor tag="client_ip" title="客户端 IP" hint="配合上面的“客户端分流”使用：AtomDNS 要直接作为 DNS 下发给客户端（占用 53 端口），名单才生效。每行一个条目，可以是单个 IP（192.0.2.10）、网段（198.51.100.0/24）或 IP 范围（10.0.0.100-10.0.0.199）。" />
     </section>
     <ClientAliasPanel />
   </div>

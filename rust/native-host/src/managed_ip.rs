@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::managed::{PersistFault, PersistGate, persist_rules_atomically};
-use crate::policy::{IpListHandle, POLICY_BYTES_LIMIT, POLICY_RULE_LIMIT, ip_prefix};
+use crate::policy::{IpListHandle, POLICY_BYTES_LIMIT, POLICY_RULE_LIMIT, ip_entries};
 
 pub(crate) enum ReplaceError {
     Limits,
@@ -75,8 +75,10 @@ impl ManagedIpSet {
             }
             let mut list = atomdns_matcher_core::IpPrefixList::new();
             for value in values {
-                if let Ok((ip, bits)) = ip_prefix(&value, "post") {
-                    list.append(ip, bits);
+                if let Ok(entries) = ip_entries(&value, "post") {
+                    for (ip, bits) in entries {
+                        list.append(ip, bits);
+                    }
                 }
             }
             list.rebuild();
