@@ -63,5 +63,7 @@ test('the update page shows the configuration package state from health and stat
   for (const field of ['applied_config_schema', 'required_config_schema', 'config_update_status', 'rollback_performed', 'last_error']) {
     assert.match(update, new RegExp(field), field)
   }
-  assert.doesNotMatch(update, /prefer_v3: preferV3|切换 v3/, 'no Go amd64 level switch')
+  // The x86-64-v3 switch (v0.6.1): shown only when the CPU can run v3 and the running build is not v3.
+  assert.match(update, /amd64_v3_capable && !update\.status\?\.current_is_v3/, 'v3 switch only when capable and not already v3')
+  assert.match(update, /prefer_v3: preferV3/, 'the switch asks the host for the v3 package')
 })
