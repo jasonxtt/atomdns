@@ -77,6 +77,21 @@ export function parseProcessMetrics(text) {
 }
 
 // Hits / lookups summed over every named cache's counters; null without lookups.
+// The summed cumulative hit and query counters of every cache, or null when there are none.
+export function cacheCounters(text) {
+  let hits = 0
+  let queries = 0
+  for (const line of String(text || '').split('\n')) {
+    const match = line.match(/^atomdns_cache_(hit_total|query_total)\{[^}]*\}\s+(\S+)/)
+    if (!match) continue
+    const value = Number(match[2])
+    if (!Number.isFinite(value) || value < 0) continue
+    if (match[1] === 'hit_total') hits += value
+    else queries += value
+  }
+  return queries > 0 ? { hits, queries } : null
+}
+
 export function cacheHitPercent(text) {
   let hits = 0
   let queries = 0

@@ -3,11 +3,13 @@ import { capabilityState, operationReason, supportsOperation } from '../api/runt
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { getJSON, getJSONWithHeaders, getText } from '../api/http'
 import AppIcon from '../components/AppIcon.vue'
+import Sparkline from '../components/Sparkline.vue'
 import DetailField from '../components/DetailField.vue'
 import { setError, setSuccess } from '../utils/notice'
 import { formatDateTime } from '../utils/time'
 import {
   cacheHitPercent,
+  cacheCounters,
   cacheHitTone,
   coverageText,
   cpuPercent,
@@ -308,6 +310,30 @@ const statCards = computed(() => {
 
 const learnerCategories = computed(() => (Array.isArray(learner.value?.categories) ? learner.value.categories : []))
 const learnerTotal = computed(() => learnerCategories.value.reduce((sum, item) => sum + Number(item?.entries || 0), 0))
+
+// "53.4 MiB" / "3 小时 22 分钟": the figures stay large, their units go small beside them.
+function valueParts(value) {
+  return String(value).split(/(\d[\d,.]*)/).filter(Boolean).map((text) => ({ text, unit: !/^\d/.test(text) }))
+}
+
+const TREND_COLORS = {
+  queries: 'var(--rp-pine)',
+  latency: 'var(--rp-love)',
+  cache: 'var(--rp-iris)',
+  clients: 'var(--rp-rose)',
+  domains: 'var(--rp-foam)',
+  cpu: 'var(--rp-gold)',
+  memory: 'var(--rp-pine)'
+}
+
+// 运行时间 has no series: its bar fills towards the next milestone (1 小时, 1 天, 7 天, 30 天, ...).
+const UPTIME_MILESTONES = [3600, 86400, 7 * 86400, 30 * 86400, 365 * 86400]
+const uptimeProgress = computed(() => {
+  if (process.startTime === null) return 0
+  const seconds = process.sampledAt / 1000 - process.startTime
+  const next = UPTIME_MILESTONES.find((milestone) => seconds < milestone) || UPTIME_MILESTONES[UPTIME_MILESTONES.length - 1]
+  return Math.max(0, Math.min(1, seconds / next))
+})
 
 function toneClass(tone) {
   return tone ? `rt-text-${tone}` : ''
@@ -694,15 +720,35 @@ function closeRankingDetail() {
 }
 
 // `at`: when the metrics text arrived, so slow requests of the same refresh do not stretch the interval.
+// Trend lines of the stat cards: one point per refresh, kept for this page visit only.
+const TREND_POINTS = 60
+const trends = reactive({ queries: [], latency: [], clients: [], domains: [], cpu: [], memory: [], cache: [] })
+let cacheCounterSample = null
+function pushTrend(key, value) {
+  if (!Number.isFinite(value)) return
+  trends[key].push(value)
+  if (trends[key].length > TREND_POINTS) trends[key].shift()
+}
+// The hit rate between two refreshes, from the cumulative counters.
+function sampleCacheTrend(metricsText) {
+  const counters = cacheCounters(metricsText)
+  if (counters && cacheCounterSample && counters.queries > cacheCounterSample.queries) {
+    pushTrend('cache', ((counters.hits - cacheCounterSample.hits) / (counters.queries - cacheCounterSample.queries)) * 100)
+  }
+  if (counters) cacheCounterSample = counters
+}
+
 function applyProcessMetrics(metricsText, at) {
   const figures = parseProcessMetrics(metricsText)
   process.residentBytes = figures.residentBytes
   process.startTime = figures.startTime
   process.sampledAt = at
+  if (figures.residentBytes !== null) pushTrend('memory', figures.residentBytes / 1024 / 1024)
   if (figures.cpuSeconds !== null) {
     const sample = { cpuSeconds: figures.cpuSeconds, at }
     const percent = cpuPercent(cpuSample, sample)
     if (percent !== null || cpuSample === null) process.cpuPercent = percent
+    if (percent !== null) pushTrend('cpu', percent)
     cpuSample = sample
   }
 }
@@ -711,10 +757,59 @@ async function sampleCpuOnly() {
   cpuFollowUpTimerId = 0
   if (!supportsOperation('metrics.cache') || !supportsOperation('metrics.process')) return
   try {
-    applyProcessMetrics(await getText('/metrics'), Date.now())
+    const text = await getText('/metrics')
+    applyProcessMetrics(text, Date.now())
+    cacheHit.value = cacheHitPercent(text)
+    sampleCacheTrend(text)
   } catch {
-    // the next refresh tries again
+    // the next sample tries again
   }
+}
+
+// CPU, memory and cache hit rate move on their own clock, not the page's refresh interval.
+const LIVE_SAMPLE_MS = 3000
+let liveTimerId = 0
+const DISTINCT_SAMPLE_EVERY = 3
+let liveTick = 0
+let auditSample = null
+// New queries and their mean response time since the previous sample, from the audit totals.
+async function sampleAuditTrend() {
+  if (!supportsOperation('audit.read')) return
+  try {
+    const data = await getJSON('/api/v2/audit/stats')
+    const total = Number(data?.total_queries || 0)
+    const sum = total * Number(data?.average_duration_ms || 0)
+    if (auditSample && total > auditSample.total) {
+      pushTrend('queries', total - auditSample.total)
+      pushTrend('latency', (sum - auditSample.sum) / (total - auditSample.total))
+    } else if (auditSample) {
+      pushTrend('queries', 0)
+    }
+    auditSample = { total, sum }
+  } catch {
+    // the next sample tries again
+  }
+}
+
+// Distinct clients and domains change slowly and cost a scan each: every third sample.
+async function sampleDistinctTrend() {
+  if (!supportsOperation('query.rank')) return
+  try {
+    const clients = await getJSON(`/api/v2/audit/rank/client?limit=${RANK_SCAN_LIMIT}`)
+    if (Array.isArray(clients)) pushTrend('clients', clients.length)
+    const domains = await getJSONWithHeaders(`/api/v2/audit/rank/domain?limit=1`)
+    const count = parseDistinctDomainCount(domains?.headers?.get('X-Audit-Distinct-Domains'))
+    if (count !== null) pushTrend('domains', count)
+  } catch {
+    // the next sample tries again
+  }
+}
+
+function sampleLive() {
+  if (document.hidden || cpuSample === null) return
+  sampleCpuOnly()
+  sampleAuditTrend()
+  if (liveTick++ % DISTINCT_SAMPLE_EVERY === 0) sampleDistinctTrend()
 }
 
 async function reloadOverview(showMessage = false) {
@@ -796,6 +891,7 @@ async function reloadOverview(showMessage = false) {
     learner.value = learnerRes.error ? null : learnerRes.data
     if (!metricsRes.error && metricsRes.data !== null) {
       cacheHit.value = cacheHitPercent(metricsRes.data.text)
+      sampleCacheTrend(metricsRes.data.text)
       if (supportsOperation('metrics.process')) {
         const first = cpuSample === null
         applyProcessMetrics(metricsRes.data.text, metricsRes.data.at)
@@ -849,6 +945,7 @@ watch(upstreamStatSections, () => nextTick(fitUpstreamColumns))
 
 onMounted(() => {
   reloadOverview(false)
+  liveTimerId = window.setInterval(sampleLive, LIVE_SAMPLE_MS)
   window.addEventListener('atomdns-log-refresh', handleGlobalRefresh)
   if (typeof ResizeObserver === 'function' && upstreamWrap.value) {
     upstreamObserver = new ResizeObserver(() => {
@@ -865,16 +962,20 @@ onBeforeUnmount(() => {
   if (cpuFollowUpTimerId) window.clearTimeout(cpuFollowUpTimerId)
   window.removeEventListener('atomdns-log-refresh', handleGlobalRefresh)
   upstreamObserver?.disconnect()
+  if (liveTimerId) window.clearInterval(liveTimerId)
 })
 </script>
 
 <template>
   <section class="overview-page">
     <div class="rt-stat-grid" data-overview-stats>
-      <article v-for="card in statCards" :key="card.key" class="rt-stat" :data-stat="card.key">
+      <article v-for="card in statCards" :key="card.key" class="rt-stat" :data-stat="card.key" :title="card.note">
         <span class="rt-stat-label"><AppIcon :name="STAT_ICONS[card.key]" :size="18" />{{ card.title }}</span>
-        <strong class="rt-stat-value" :class="toneClass(card.tone)">{{ card.value }}</strong>
-        <small class="rt-stat-note">{{ card.note }}</small>
+        <div class="rt-stat-row">
+          <strong class="rt-stat-value" :class="toneClass(card.tone)"><template v-for="(part, index) in valueParts(card.value)" :key="index"><span v-if="part.unit" class="rt-stat-unit">{{ part.text }}</span><template v-else>{{ part.text }}</template></template></strong>
+          <span v-if="card.key === 'uptime'" class="rt-stat-trend rt-stat-bar"><i :style="{ width: `${(uptimeProgress * 100).toFixed(1)}%` }"></i></span>
+          <span v-else-if="trends[card.key]" class="rt-stat-trend"><Sparkline :values="trends[card.key]" :color="TREND_COLORS[card.key]" /></span>
+        </div>
       </article>
     </div>
 
