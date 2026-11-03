@@ -481,3 +481,56 @@ test('the upstream page hides groups not in use unless asked, and checks before 
   assert.doesNotMatch(upstream, /tag="ddnslist"/)
   assert.match(routing, /运行模式 › DDNS 优先国外解析/)
 })
+
+// ----- global search ---------------------------------------------------------------------
+
+import { aliasEntries, flagEntries, lineCoversIP, listMatches, looksLikeLookup, parseIP, pick, rank, ruleCoversDomain } from '../src/utils/globalSearch.js'
+
+test('search ranks exact before prefix before substring and drops non-matches', () => {
+  assert.equal(rank('cache', ['cache']), 0)
+  assert.equal(rank('cache', ['cache size']), 1)
+  assert.equal(rank('cache', ['lazy cache']), 2)
+  assert.equal(rank('cache', ['upstream']), 3)
+  const entries = [{ title: 'lazy cache' }, { title: 'cache size' }, { title: 'upstream' }, { title: 'cache' }]
+  assert.deepEqual(pick(entries, 'cache').map((entry) => entry.title), ['cache', 'cache size', 'lazy cache'])
+})
+
+test('a client address is found in single addresses, networks and ranges', () => {
+  assert.equal(lineCoversIP('192.168.1.5', '192.168.1.5'), true)
+  assert.equal(lineCoversIP('192.168.1.0/24', '192.168.1.77'), true)
+  assert.equal(lineCoversIP('192.168.1.0/24', '192.168.2.1'), false)
+  assert.equal(lineCoversIP('10.0.0.100-10.0.0.199', '10.0.0.150'), true)
+  assert.equal(lineCoversIP('10.0.0.100-10.0.0.199', '10.0.0.200'), false)
+  assert.equal(lineCoversIP('2001:db8::/32', '2001:db8:1::5'), true)
+  assert.equal(lineCoversIP('2001:db8::/32', '2001:db9::1'), false)
+  assert.equal(parseIP('1.2.3.400'), null)
+  assert.equal(parseIP('example.com'), null)
+})
+
+test('a list search matches text, and an address list also matches by coverage', () => {
+  const text = 'full:a.example.com\ndomain:example.org\n10.0.0.0/8\n'
+  assert.deepEqual(listMatches(text, 'example').lines, ['full:a.example.com', 'domain:example.org'])
+  assert.deepEqual(listMatches(text, '10.1.2.3', { ip: true }).lines, ['10.0.0.0/8'])
+  assert.deepEqual(listMatches(text, '10.1.2.3', { ip: false }).lines, [])
+  assert.equal(listMatches(text, 'example', { limit: 1 }).total, 2)
+})
+
+test('search entries point at the page that shows them', () => {
+  const [entry] = flagEntries([{ key: 'client_routing', label: '客户端分流', section: 'client' }], pageOfFlag)
+  assert.deepEqual(entry.route, { path: '/rules/clients', query: { flag: 'client_routing' } })
+  assert.deepEqual(aliasEntries({ '192.0.2.1': '客厅电视' })[0].keys, ['客厅电视', '192.0.2.1'])
+  assert.equal(looksLikeLookup('a'), false)
+  assert.equal(looksLikeLookup('example.com'), true)
+  assert.equal(looksLikeLookup('客厅'), false)
+})
+
+test('a domain rule covers the names under it, and a domain list search finds the covering rule', () => {
+  assert.equal(ruleCoversDomain('domain:example.org', 'a.example.org'), true)
+  assert.equal(ruleCoversDomain('example.org', 'example.org'), true)
+  assert.equal(ruleCoversDomain('domain:example.org', 'badexample.org'), false)
+  assert.equal(ruleCoversDomain('full:example.org', 'a.example.org'), false)
+  assert.equal(ruleCoversDomain('keyword:track', 'a.tracker.net'), true)
+  assert.equal(ruleCoversDomain('regexp:^ad[0-9]+\\.', 'ad12.example.com'), true)
+  assert.equal(ruleCoversDomain('example.com 192.0.2.1  # note', 'www.example.com'), true)
+  assert.deepEqual(listMatches('domain:example.org\nfull:other.com', 'www.example.org').lines, ['domain:example.org'])
+})

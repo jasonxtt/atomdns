@@ -3,7 +3,9 @@ import AppIcon from './AppIcon.vue'
 import CapabilityBoundary from './CapabilityBoundary.vue'
 import DetailField from './DetailField.vue'
 import { supportsOperation, operationReason } from '../api/runtimeCapabilities'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
+import { queryText } from '../utils/deepLink'
 import { getJSON, postJSON } from '../api/http'
 import { normalizeAliasMap, normalizeIP } from '../utils/clientAliases'
 import { latencyTone } from '../utils/overviewMetrics'
@@ -21,6 +23,7 @@ defineEmits(['open-diagnostic', 'close'])
 
 const loading = ref(false)
 
+const route = useRoute()
 const searchInput = ref('')
 const logs = ref([])
 const pagination = ref({
@@ -572,9 +575,19 @@ onMounted(async () => {
     loadAliases(),
     loadSpecialGroups()
   ])
+  // A search hit (`/logs?q=<domain or address>`) opens the log filtered by it.
   if (isLiveMode.value) {
+    const found = queryText(route.query.q).trim()
+    if (found) searchInput.value = found
     refreshLogs()
   }
+})
+
+watch(() => route.query.q, (value) => {
+  const found = queryText(value).trim()
+  if (!isLiveMode.value || !found || found === searchInput.value) return
+  searchInput.value = found
+  refreshLogs()
 })
 
 onBeforeUnmount(() => {

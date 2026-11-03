@@ -1,10 +1,12 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { getText, postJSON } from '../../api/http'
 import { operationReason, supportsOperation } from '../../api/runtimeCapabilities'
 import { LIST_LINE_CAP, canSaveList, filterLines, readList, sameRules, showUrl, splitRules } from '../../utils/ruleList'
 import { clearTopNotice, setSuccess } from '../../utils/notice'
 import { clearDirty, setDirty } from '../../utils/unsaved'
+import { flashSelector, queryText } from '../../utils/deepLink'
 
 // The one editor for every manual list (white/grey/black list, DDNS domains, direct IPs,
 // client IPs, redirects, the fakeip filters and the lists of special groups): row count,
@@ -35,6 +37,7 @@ const saving = ref(false)
 const error = ref('')
 const notice = ref('')
 const search = ref('')
+const route = useRoute()
 
 const canRead = computed(() => supportsOperation('rules.local.read'))
 const canWrite = computed(() => supportsOperation('rules.local.manage'))
@@ -132,7 +135,16 @@ function revert() {
   error.value = ''
 }
 
+// A search hit (`?list=<tag>&find=<line>`) fills this list's search box and scrolls to it.
+function showFound() {
+  if (queryText(route.query.list) !== props.tag) return
+  search.value = queryText(route.query.find)
+  nextTick(() => flashSelector(`[data-list="${CSS.escape(props.tag)}"]`))
+}
+watch(() => [route.query.list, route.query.find], showFound)
+
 onMounted(() => {
+  showFound()
   load()
   window.addEventListener('atomdns-log-refresh', refresh)
 })

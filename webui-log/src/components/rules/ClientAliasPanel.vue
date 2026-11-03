@@ -1,10 +1,12 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { getJSON, putJSON } from '../../api/http'
 import { operationReason, supportsOperation } from '../../api/runtimeCapabilities'
 import { aliasMapFromRows, aliasRowsFrom, aliasesChanged, normalizeAliasMap, normalizeIP, sortAliasRows } from '../../utils/clientAliases'
 import { clearTopNotice, setError, setSuccess } from '../../utils/notice'
 import { clearDirty, setDirty } from '../../utils/unsaved'
+import { flashSelector, queryText } from '../../utils/deepLink'
 
 // Names for client addresses; the log pages show and search by them.
 const uid = `aliases:${Math.random().toString(36).slice(2)}`
@@ -14,7 +16,8 @@ const loading = ref(false)
 const saving = ref(false)
 const manualIp = ref('')
 const manualName = ref('')
-const filter = ref('')
+const route = useRoute()
+const filter = ref(queryText(route.query.client))
 const importInput = ref(null)
 // The saved aliases were read; until then nothing can be saved (a save replaces them all).
 const loaded = ref(false)
@@ -28,6 +31,11 @@ const shown = computed(() => {
 })
 
 watch(dirty, (value) => setDirty(uid, value), { immediate: true })
+// A search hit (`?client=<address>`) filters the table to that client.
+watch(() => route.query.client, (value) => {
+  filter.value = queryText(value)
+  if (filter.value) flashSelector('[data-aliases]')
+})
 
 async function load() {
   if (!allowed.value || dirty.value || saving.value) return
@@ -129,6 +137,7 @@ async function exportFile() {
 
 onMounted(() => {
   load()
+  if (filter.value) flashSelector('[data-aliases]')
   window.addEventListener('atomdns-log-refresh', load)
 })
 onBeforeUnmount(() => {

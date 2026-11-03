@@ -2784,6 +2784,24 @@ label.switch-table *,
   background: var(--rp-selected);
 }
 
+.rt-palette-heading {
+  padding: 8px 12px 4px;
+  color: var(--ink-1);
+  font-size: 0.78rem;
+  cursor: default;
+}
+
+.rt-palette-list li.rt-palette-heading {
+  display: block;
+}
+
+.rt-palette-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .rt-palette-group,
 .rt-palette-empty {
   color: var(--ink-1);
@@ -2792,6 +2810,9 @@ label.switch-table *,
 
 .rt-palette-group {
   margin-left: auto;
+  flex-shrink: 0;
+  max-width: 45%;
+  text-align: right;
 }
 
 .rt-palette-empty {
@@ -3682,4 +3703,26 @@ a.btn {
   color: var(--ink-1);
   font-size: 0.75rem;
   opacity: 0.8;
+}
+
+/* ---- landing on a search hit ---- */
+
+.rt-found {
+  animation: rt-found-flash 2.4s ease-out;
+}
+
+@keyframes rt-found-flash {
+  0%, 40% { box-shadow: 0 0 0 2px var(--rp-pine); background: var(--rp-selected); }
+  100% { box-shadow: 0 0 0 2px transparent; }
+}
+
+/* ---- landing on a search hit ---- */
+
+.rt-found {
+  animation: rt-found-flash 2.4s ease-out;
+}
+
+@keyframes rt-found-flash {
+  0%, 40% { box-shadow: 0 0 0 2px var(--rp-pine); background: var(--rp-selected); }
+  100% { box-shadow: 0 0 0 2px transparent; }
 }

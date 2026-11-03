@@ -1,9 +1,11 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { deleteRequest, getJSON, postJSON } from '../../api/http'
 import { flagDescription, flagsForPage, isValidFlagList, optionLabel, optionText, runFlagChange } from '../../api/flags'
 import { supportsOperation } from '../../api/runtimeCapabilities'
 import { clearTopNotice, setError, setSuccess } from '../../utils/notice'
+import { flashSelector, queryText } from '../../utils/deepLink'
 import SettingRow from '../settings/SettingRow.vue'
 
 // The switches of one sub-item of 规则设置: the flags the configuration declares for
@@ -17,6 +19,7 @@ const props = defineProps({
   joined: { type: Boolean, default: false }
 })
 
+const route = useRoute()
 const flags = ref([])
 const loaded = ref(false)
 const loadError = ref('')
@@ -85,6 +88,14 @@ function descriptionLines(flag) {
 function valueText(flag) {
   return flag.kind === 'choice' ? optionLabel(flag, flag.value) : flag.value ? '开启' : '关闭'
 }
+
+// A search hit (`?flag=<key>`) scrolls to its switch and flashes it.
+function showFound() {
+  const key = queryText(route.query.flag)
+  if (!key || !pageFlags.value.some((flag) => flag.key === key)) return
+  nextTick(() => flashSelector(`[data-flag="${CSS.escape(key)}"]`))
+}
+watch(() => [route.query.flag, pageFlags.value.length], showFound)
 
 onMounted(() => {
   load()
