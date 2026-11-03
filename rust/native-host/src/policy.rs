@@ -493,6 +493,17 @@ pub(crate) fn ip_line_field(line: &str) -> String {
         first.to_owned()
     }
 }
+/// An inline entry must be the whole entry: a range may have spaces around its dash, but
+/// anything else after the address is an error (unlike a list line, which may carry a note).
+pub(crate) fn ip_inline_field(entry: &str) -> String {
+    let squeezed: String = entry.split_whitespace().collect();
+    let field = ip_line_field(entry);
+    if squeezed == field {
+        field
+    } else {
+        entry.trim().to_owned()
+    }
+}
 /// One IP list entry: an address, a prefix, or an inclusive range `start-end` of two
 /// addresses of one family, which becomes the fewest prefixes covering it.
 pub(crate) fn ip_entries(field: &str, path: &str) -> Result<Vec<(IpAddr, u8)>, ConfigError> {
@@ -628,6 +639,23 @@ mod ip_entry_tests {
     }
 
     #[test]
+    fn an_inline_entry_is_the_whole_entry() {
+        assert_eq!(ip_inline_field("10.0.0.1 - 10.0.0.9"), "10.0.0.1-10.0.0.9");
+        assert_eq!(ip_inline_field(" 192.0.2.1 "), "192.0.2.1");
+        for entry in [
+            "192.0.2.1 invalid",
+            "192.0.2.1 - office",
+            "192.0.2.1 # note",
+        ] {
+            assert!(
+                ip_entries(&ip_inline_field(entry), "test").is_err(),
+                "{entry}"
+            );
+        }
+        assert!(ip_entries(&ip_inline_field("10.0.0.1 - 10.0.0.9"), "test").is_ok());
+    }
+
+    #[test]
     fn a_dash_before_a_note_does_not_make_a_range() {
         for line in [
             "192.0.2.1 - office",
@@ -669,7 +697,7 @@ pub(crate) fn ip_list_with_inputs(
     inputs: Option<&mut crate::special_groups::CandidateInputSet>,
 ) -> Result<Rc<IpListHandle>, ConfigError> {
     for (index, entry) in inline.iter().enumerate() {
-        ip_entries(&ip_line_field(entry), &format!("{path}.ips[{index}]"))?;
+        ip_entries(&ip_inline_field(entry), &format!("{path}.ips[{index}]"))?;
     }
     let mut prefixes = IpPrefixList::new();
     RuleBudget::default().load_with_inputs(
