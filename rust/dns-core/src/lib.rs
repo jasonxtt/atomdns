@@ -47,7 +47,7 @@ pub use header::{
 };
 pub use query::{
     QueryError, QueryHeader, QueryParseError, QueryUnsupportedError, QuestionInfo, parse_query,
-    parse_question,
+    parse_question, query_error_reply,
 };
 pub use resolver::{
     AddressFamily, CnameChainPolicy, QueryIdSource, RESOLVER_DEFAULT_MAX_CNAME_LINKS,

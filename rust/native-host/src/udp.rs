@@ -229,11 +229,18 @@ async fn process_request(task: RequestTask) {
         enable_audit,
         _admission,
     } = task;
-    let Ok((header, question)) = atomdns_dns_core::parse_query(&raw) else {
-        // Malformed UDP input is isolated to this datagram and produces no
-        // response, matching the frozen server behavior.
-        observer.record_malformed();
-        return;
+    let (header, question) = match atomdns_dns_core::parse_query(&raw) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            // Malformed or unsupported input is isolated to this datagram. It is
+            // answered with a header-only FORMERR/NOTIMP when it carries an ID
+            // and is not itself a response, so clients do not wait for a timeout.
+            observer.record_malformed();
+            if let Some(reply) = atomdns_dns_core::query_error_reply(&raw, error) {
+                let _ = send_with_control(&request_shutdown, socket.send_to(&reply, peer)).await;
+            }
+            return;
+        }
     };
 
     // A dual-stack wildcard socket reports IPv4 peers as IPv4-mapped IPv6;

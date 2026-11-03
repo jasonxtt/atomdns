@@ -234,10 +234,19 @@ async fn process_connection(task: ConnectionTask) {
         let cache = admission.snapshot.cache.clone();
         let options = admission.options.clone();
         let enable_audit = admission.enable_audit;
-        let Ok((header, question)) = parse_query(&frame) else {
-            // A malformed or partial DNS message closes only this connection.
-            observer.record_malformed();
-            return;
+        let (header, question) = match parse_query(&frame) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                // A malformed or unsupported DNS message is answered with a
+                // header-only FORMERR/NOTIMP and closes only this connection.
+                observer.record_malformed();
+                if let Some(reply) = atomdns_dns_core::query_error_reply(&frame, error) {
+                    let mut framed = (reply.len() as u16).to_be_bytes().to_vec();
+                    framed.extend_from_slice(&reply);
+                    let _ = write_response(&mut stream, &framed, &connection_shutdown).await;
+                }
+                return;
+            }
         };
         let mut admitted = match observer.try_admit_on_listener(
             enable_audit,

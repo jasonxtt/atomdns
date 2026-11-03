@@ -366,6 +366,25 @@ fn malformed_datagram_is_dropped_and_listener_stays_available() {
             .expect("malformed send");
         let mut dropped = [0_u8; 64];
         assert!(malformed.recv_from(&mut dropped).is_err());
+        // A header-only query (QDCOUNT=0) is answered FORMERR, an opcode STATUS NOTIMP.
+        tokio::task::spawn_blocking(move || {
+            malformed
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("reply timeout");
+            let mut reply = [0_u8; 64];
+            for (packet, rcode) in [
+                ([0x11, 0x11, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0], 1),
+                ([0x22, 0x22, 0x10, 0, 0, 1, 0, 0, 0, 0, 0, 0], 4),
+            ] {
+                malformed.send_to(&packet, listener).expect("refused send");
+                let (length, _) = malformed.recv_from(&mut reply).expect("error reply");
+                assert_eq!(length, 12);
+                assert_eq!(reply[..2], packet[..2]);
+                assert_eq!(reply[3] & 0x0f, rcode);
+            }
+        })
+        .await
+        .expect("refused client task");
 
         let response = tokio::task::spawn_blocking(move || {
             client_request(

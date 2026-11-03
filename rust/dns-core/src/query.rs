@@ -161,6 +161,28 @@ impl From<QueryParseError> for QueryError {
     }
 }
 
+/// The header-only error reply for a packet [`parse_query`] refused: NOTIMP for an
+/// unsupported opcode, FORMERR for any other defect. `None` when no reply is
+/// owed: the packet is shorter than a header (no ID to echo) or is itself a
+/// response. The reply is a 12-byte header, never larger than the request, so it
+/// cannot amplify.
+pub fn query_error_reply(packet: &[u8], error: QueryError) -> Option<Vec<u8>> {
+    if packet.len() < DNS_HEADER_LEN || packet[2] & 0x80 != 0 {
+        return None;
+    }
+    let rcode = match error {
+        QueryError::Unsupported(QueryUnsupportedError::ResponseBit) => return None,
+        QueryError::Unsupported(QueryUnsupportedError::Opcode(_)) => 4,
+        _ => 1,
+    };
+    let mut reply = vec![0u8; DNS_HEADER_LEN];
+    reply[..2].copy_from_slice(&packet[..2]);
+    // QR, the request's opcode and RD; the rcode in the low nibble of byte 3.
+    reply[2] = 0x80 | (packet[2] & 0x79);
+    reply[3] = rcode;
+    Some(reply)
+}
+
 /// Follows one compression pointer: validates the two-byte wire form and
 /// returns the target offset. `None` means the pointer bytes are truncated or
 /// the target lies outside the packet.
@@ -490,5 +512,26 @@ mod tests {
                 other => panic!("case {i} expected Unsupported({want:?}), got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn refused_queries_get_a_header_only_reply() {
+        let reply = |wire: &[u8]| {
+            parse_query(wire)
+                .err()
+                .and_then(|e| super::query_error_reply(wire, e))
+        };
+        // QDCOUNT=0, RD set: FORMERR echoing the ID and RD.
+        let qd0 = [0x11, 0x11, 0x01, 0x00, 0, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(
+            reply(&qd0).unwrap(),
+            [0x11, 0x11, 0x81, 0x01, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+        // STATUS (opcode 2): NOTIMP with the opcode echoed.
+        let status = [0x22, 0x22, 0x10, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
+        assert_eq!(reply(&status).unwrap()[2..4], [0x90, 0x04]);
+        // A response, or a datagram without a full header, is not answered.
+        assert!(reply(&[0x33, 0x33, 0x80, 0, 0, 1, 0, 0, 0, 0, 0, 0]).is_none());
+        assert!(reply(&[0x33, 0x33, 0x01]).is_none());
     }
 }
