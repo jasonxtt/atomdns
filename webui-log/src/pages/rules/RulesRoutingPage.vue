@@ -47,7 +47,7 @@ const active = computed(() => TABS.some(tab => tab.id === route.query.tab) ? rou
       <ListEditor tag="cnfakeipfilter" title="CN fakeip filter" hint="名单里的域名向国内 DNS 解析并返回真实 IP，不使用 FakeIP。适合必须用真实 IP 连接的域名。" />
     </template>
     <template v-else-if="active === 'ip-rewrite'">
-      <ListEditor tag="direct_ip" title="直连 IP" hint="不在任何域名名单里的域名，解析出的 IP 属于这个名单时，该域名归入直连。例如 203.0.113.0/24。" />
+      <ListEditor tag="direct_ip" title="直连 IP" hint="不在任何域名名单里的域名，解析出的 IP 属于这个名单时，该域名归入直连。每行一个条目，可以是单个 IP、网段（203.0.113.0/24）或 IP 范围（203.0.113.10-203.0.113.99）。" />
       <ListEditor tag="rewrite" title="重定向" hint="每行“域名 IP或域名”，例如 example.com 192.0.2.1，或 test.example example.com。支持 full:、domain: 等写法。" />
     </template>
     <template v-else>

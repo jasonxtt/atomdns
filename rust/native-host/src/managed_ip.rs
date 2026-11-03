@@ -5,7 +5,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::managed::{PersistFault, PersistGate, persist_rules_atomically};
-use crate::policy::{IpListHandle, POLICY_BYTES_LIMIT, POLICY_RULE_LIMIT, ip_entries};
+use crate::policy::{
+    IpListHandle, POLICY_BYTES_LIMIT, POLICY_RULE_LIMIT, ip_entries, ip_line_field,
+};
 
 pub(crate) enum ReplaceError {
     Limits,
@@ -75,7 +77,7 @@ impl ManagedIpSet {
             }
             let mut list = atomdns_matcher_core::IpPrefixList::new();
             for value in values {
-                if let Ok(entries) = ip_entries(&value, "post") {
+                if let Ok(entries) = ip_entries(&ip_line_field(&value), "post") {
                     for (ip, bits) in entries {
                         list.append(ip, bits);
                     }
@@ -181,6 +183,33 @@ mod tests {
                 assert_eq!(std::fs::read_to_string(&file).unwrap(), "192.0.2.7\n");
                 assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
             }
+        });
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_saved_range_may_have_spaces_and_a_note_after_it() {
+        let root = std::env::temp_dir().join(format!("ip-spaced-range-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("ips.txt");
+        std::fs::write(&file, "192.0.2.7\n").unwrap();
+        let prefixes = crate::policy::ip_list(&[], std::slice::from_ref(&file), "test").unwrap();
+        let set = ManagedIpSet::new(&[], std::slice::from_ref(&file), prefixes);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let values = vec![
+                "10.0.0.4 - 10.0.0.7".to_owned(),
+                "192.0.2.9 - office".to_owned(),
+            ];
+            assert!(matches!(set.replace(values).await, Ok(2)));
+            assert_eq!(set.show(), "10.0.0.4/30\n192.0.2.9/32\n");
+            assert_eq!(
+                std::fs::read_to_string(&file).unwrap(),
+                "10.0.0.4/30\n192.0.2.9/32\n"
+            );
         });
         std::fs::remove_dir_all(root).unwrap();
     }

@@ -472,6 +472,27 @@ pub(crate) fn ip_prefix(field: &str, path: &str) -> Result<(IpAddr, u8), ConfigE
     }
     Ok((address, bits))
 }
+/// The IP entry of one list line: its first word, or a range written with spaces around the
+/// dash (`10.0.0.1 - 10.0.0.9`). The dash only joins when both sides are addresses, so a
+/// trailing note such as `192.0.2.1 - office` still reads as the single address.
+pub(crate) fn ip_line_field(line: &str) -> String {
+    let line = line.trim();
+    let first = line.split_whitespace().next().unwrap_or("");
+    let rest = line[first.len()..].trim_start();
+    let (head, tail) = if let Some(head) = first.strip_suffix('-') {
+        (head, rest)
+    } else if let Some(tail) = rest.strip_prefix('-') {
+        (first, tail.trim_start())
+    } else {
+        return first.to_owned();
+    };
+    let end = tail.split_whitespace().next().unwrap_or("");
+    if head.parse::<IpAddr>().is_ok() && end.parse::<IpAddr>().is_ok() {
+        format!("{head}-{end}")
+    } else {
+        first.to_owned()
+    }
+}
 /// One IP list entry: an address, a prefix, or an inclusive range `start-end` of two
 /// addresses of one family, which becomes the fewest prefixes covering it.
 pub(crate) fn ip_entries(field: &str, path: &str) -> Result<Vec<(IpAddr, u8)>, ConfigError> {
@@ -591,6 +612,36 @@ mod ip_entry_tests {
     }
 
     #[test]
+    fn a_range_may_have_spaces_around_the_dash() {
+        for line in [
+            "10.0.0.100 - 10.0.0.199",
+            "10.0.0.100 -10.0.0.199",
+            "10.0.0.100- 10.0.0.199",
+            "10.0.0.100-10.0.0.199 # office",
+        ] {
+            assert_eq!(ip_line_field(line), "10.0.0.100-10.0.0.199", "{line}");
+        }
+        assert_eq!(
+            text(&ip_entries(&ip_line_field("2001:db8::1 - 2001:db8::2"), "test").unwrap()),
+            ["2001:db8::1/128", "2001:db8::2/128"]
+        );
+    }
+
+    #[test]
+    fn a_dash_before_a_note_does_not_make_a_range() {
+        for line in [
+            "192.0.2.1 - office",
+            "192.0.2.1 -x",
+            "192.0.2.1",
+            "192.0.2.1 # a-b",
+        ] {
+            assert_eq!(ip_line_field(line), "192.0.2.1", "{line}");
+        }
+        assert_eq!(ip_line_field("198.51.100.0/24 - lan"), "198.51.100.0/24");
+        assert_eq!(ip_line_field("10.0.0.1 - "), "10.0.0.1");
+    }
+
+    #[test]
     fn invalid_ranges_are_rejected() {
         for field in [
             "10.0.0.199-10.0.0.100",
@@ -618,7 +669,7 @@ pub(crate) fn ip_list_with_inputs(
     inputs: Option<&mut crate::special_groups::CandidateInputSet>,
 ) -> Result<Rc<IpListHandle>, ConfigError> {
     for (index, entry) in inline.iter().enumerate() {
-        ip_entries(entry, &format!("{path}.ips[{index}]"))?;
+        ip_entries(&ip_line_field(entry), &format!("{path}.ips[{index}]"))?;
     }
     let mut prefixes = IpPrefixList::new();
     RuleBudget::default().load_with_inputs(
@@ -628,7 +679,7 @@ pub(crate) fn ip_list_with_inputs(
         path,
         inputs,
         |line, location| {
-            for (ip, bits) in ip_entries(line.split_whitespace().next().unwrap_or(""), location)? {
+            for (ip, bits) in ip_entries(&ip_line_field(line), location)? {
                 prefixes.append(ip, bits);
             }
             Ok(())
