@@ -100,6 +100,8 @@ v0.5.0 起 `config.url` 指向 file 仓库（此前指向 Release 资产）；�
 - 页面保存名单时，行末带说明的行（如 `192.0.2.9 - office`）以前会被悄悄丢掉，现在保留前面的 IP。
 - 全局搜索（Ctrl/Cmd+K）：除页面外，还能搜设置项、客户端别名与 IP、各手动名单（含专属分流组的名单）、专属分流组和查询日志。IP 按“覆盖”匹配（搜 `10.1.2.3` 能命中 `10.0.0.0/8` 或范围），域名按覆盖它的规则匹配（搜 `a.example.org` 能命中 `domain:example.org`）。选中后跳到对应页面并定位。
 - 概览的统计卡改为页面底色，带趋势线（页面自己每 3 秒采样一次）。
+- 服务端：解析不了的查询（如问题数为 0）以前不回包，客户端只能等超时；现在 UDP/TCP 都回只含头部的 FORMERR，不支持的操作码回 NOTIMP。回包不会比请求大；短于 12 字节的数据报和本身是响应的包仍不回。
+- 文档：`docs/api_reference.md` 说明 `adguard_rule` 的 `@@` 例外规则只在直接 `qname $tag` 引用时生效，经 `domain_mapper`（广告屏蔽开关）时不生效。
 - Docker 镜像改用 Debian slim + glibc（glibc 的内存收缩设置让常驻内存少十几 MB）。Release 新增 `atomdns-linux-arm64-gnu.tar.gz`、`atomdns-linux-armv7-gnu.tar.gz`（glibc ≥ 2.35，供镜像和手动安装）；原有的静态 musl `arm64`、`armv7` 包照旧。
 - 构建：GitHub Actions 的 `checkout`、`setup-node`、`upload-artifact` 升到 v6。
 - 资产：七种程序包（在线更新默认只认 `amd64`）、`atomdns-webui.tar.gz`、清单、全新安装包 `config_rust.zip`。
