@@ -35,7 +35,7 @@ is redesigned (gap list M1-f). `aliapi` takes its values from YAML only.
 
 ### rewrite
 
-- `files` (at least one; the first is the `/post` target, a missing file is allowed) and `dns` (`host[:port]`, port 53; a host name is resolved by the system resolver for each lookup, the first address is used).
+- `files` (at least one; the first is the `/post` target, a missing file is allowed) and `dns` (`host[:port]`, port 53; a host name is resolved by the system resolver for each lookup, the first address is used; **`$sequence_tag`** names a sequence of this process, which is run over the query with no socket and no audit record. The tag must name a `sequence` (checked at compile time). Such a run answers like a listener would (`entry` option of the request); its own `rewrite` calls never start another one, so a sequence that rewrites again ends the lookup as a failure (SERVFAIL) instead of looping).
 - A rule is `pattern target`, exactly two fields; blank lines and whole-line `#` comments are skipped; pattern grammar is the
   shared domain matcher (default `full`); a target is an IP (IPv4-mapped counts as IPv4) or a domain name.
 - A match sets the audit `domain_set` label `重定向` and **accepts** the query (the rest of the current chain does not run).

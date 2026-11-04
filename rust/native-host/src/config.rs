@@ -2849,10 +2849,20 @@ fn compile_definitions(
     let rewrites = rewrites
         .into_iter()
         .map(|(tag, runtime)| {
+            let sequence = match runtime.sequence_tag() {
+                Some(name) => Some(program.sequence_id(name).ok_or_else(|| {
+                    ConfigError::new(
+                        format!("$.plugins.{tag}.args.dns"),
+                        format!("`${name}` does not reference a sequence"),
+                    )
+                })?),
+                None => None,
+            };
             Ok(RewriteConfig {
                 executable: external_id(&program, &tag, "$.plugins")?,
                 tag,
                 runtime,
+                sequence,
             })
         })
         .collect::<Result<Vec<_>, ConfigError>>()?;
@@ -2884,6 +2894,14 @@ fn compile_definitions(
         .collect();
     for requery in &requeries {
         requery.runtime.protect_flush(learned_tags.clone());
+        if let Some(name) = requery.runtime.sequence_tag() {
+            if program.sequence_id(name).is_none() {
+                return Err(ConfigError::new(
+                    format!("$.plugins.{}.args.resolver", requery.tag),
+                    format!("`${name}` does not reference a sequence"),
+                ));
+            }
+        }
     }
     let learners = learners
         .into_iter()
@@ -3743,7 +3761,7 @@ fn compile_route_learn(
 fn compile_requery(plugin: &RawPlugin) -> Result<(Requery, PathBuf), ConfigError> {
     let path = format!("{}.args", plugin.source_path);
     let args = expect_map(&plugin.args, &path, "requery args must be a mapping")?;
-    args.reject_unknown(&["file"], &path)?;
+    args.reject_unknown(&["file", "resolver"], &path)?;
     let file = match args.get("file") {
         None | Some(RawValue::Null) => String::new(),
         Some(value) => expect_string(value, &format!("{path}.file"))?,
@@ -3754,8 +3772,24 @@ fn compile_requery(plugin: &RawPlugin) -> Result<(Requery, PathBuf), ConfigError
             "'file' for config json must be specified",
         ));
     }
+    // `resolver: $sequence` re-asks the names inside this process instead of
+    // sending UDP to the state file's `resolver_address`.
+    let sequence = match args.get("resolver") {
+        None | Some(RawValue::Null) => None,
+        Some(value) => {
+            let text = expect_string(value, &format!("{path}.resolver"))?;
+            let tag = text.strip_prefix('$').unwrap_or_default();
+            if tag.is_empty() || tag.contains(char::is_whitespace) {
+                return Err(ConfigError::new(
+                    format!("{path}.resolver"),
+                    "resolver must name exactly one sequence (`$sequence_tag`)",
+                ));
+            }
+            Some(tag.to_owned())
+        }
+    };
     let file = resolve_rule_path(&file, &plugin.root_dir);
-    let requery = Requery::load(&plugin.tag, file.clone(), plugin.root_dir.clone())
+    let requery = Requery::load(&plugin.tag, file.clone(), plugin.root_dir.clone(), sequence)
         .map_err(|reason| ConfigError::new(format!("{path}.file"), reason))?;
     Ok((requery, file))
 }

@@ -413,6 +413,59 @@ fn a_task_saves_merges_flushes_requeries_and_saves_again() {
 }
 
 #[test]
+fn a_resolver_sequence_re_asks_the_names_inside_the_process() {
+    let tree = Tree::new("run-sequence");
+    let ports = ports();
+    let upstream = Upstream::start();
+    config(&tree, &ports, &upstream);
+    // `resolver: $entry` replaces the UDP address: no socket is involved.
+    let yaml = std::fs::read_to_string(tree.path("config.yaml")).unwrap();
+    let yaml = yaml.replace(
+        "args: {file: webinfo/requeryconfig.json}",
+        "args: {file: webinfo/requeryconfig.json, resolver: $entry}",
+    );
+    assert!(yaml.contains("resolver: $entry"));
+    tree.write("config.yaml", &yaml);
+    tree.write("gen/extra.txt", "full:c.example\nfull:d.example\n");
+    // The state file still names a UDP address, where nothing listens.
+    let dead = Ports {
+        dns: 1,
+        api: ports.api,
+    };
+    state(
+        &tree,
+        &dead,
+        200,
+        &[("extra", "gen/extra.txt")],
+        NO_SCHEDULER,
+        IDLE,
+    );
+    let host = host(&tree);
+    host.block_on(async {
+        let (shutdown, task) = serve(&host).await;
+        let started = api(ports.api, "POST", "/plugins/requery/trigger", "").await;
+        assert_eq!(started.status, 200);
+        let done = until_state(&ports, "idle").await;
+        assert_eq!(done["last_run_domain_count"], 2);
+        assert!(done.get("last_error").is_none(), "{done}");
+        let mut asked: Vec<(String, u16)> =
+            upstream.queries().into_iter().map(|q| (q.0, q.1)).collect();
+        asked.sort();
+        assert_eq!(
+            asked,
+            [
+                ("c.example".to_owned(), 1),
+                ("c.example".to_owned(), 28),
+                ("d.example".to_owned(), 1),
+                ("d.example".to_owned(), 28)
+            ]
+        );
+        shutdown.cancel();
+        task.await.unwrap();
+    });
+}
+
+#[test]
 fn a_second_trigger_conflicts_and_cancel_stops_the_task_at_once() {
     let tree = Tree::new("cancel");
     let ports = ports();

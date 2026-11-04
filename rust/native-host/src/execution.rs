@@ -31,7 +31,7 @@ use crate::observer::{
     UpstreamDiagnosticBranch, UpstreamDiagnosticSelected, UpstreamDiagnostics,
     UpstreamMetricAttempt, UpstreamTransport,
 };
-use crate::rewrite::RewriteEnd;
+use crate::rewrite::{RewriteEnd, SequenceResolver};
 
 // E2E-1's real 3099 cold route exceeds 64 dispatches. User decision 2026-10-09:
 // front requests get 256; detached refresh retains its independent 64 limit.
@@ -98,6 +98,68 @@ pub(crate) struct ExecutionRequest<'a> {
     pub raw: &'a [u8],
     pub header: QueryHeader,
     pub question: QuestionInfo,
+}
+
+tokio::task_local! {
+    /// Set while a sequence runs for a `rewrite` target: a rewrite inside that
+    /// sequence's own chain must not start another one (it would never end).
+    static NESTED_RESOLUTION: ();
+}
+
+/// Runs a sequence of this process over a query with a fresh request budget
+/// and no audit record: the in-process counterpart of asking a listener.
+pub(crate) struct EngineResolver<'a, E: ExchangeExecutor + ?Sized> {
+    pub config: &'a CompiledConfig,
+    pub cache: &'a CacheCatalog,
+    pub executor: &'a E,
+    pub options: &'a HostOptions,
+    pub cancellation: TransportCancellation,
+}
+
+impl<E: ExchangeExecutor + ?Sized> SequenceResolver for EngineResolver<'_, E> {
+    // Boxed: the sequence may reach another `rewrite`, which calls this again.
+    fn resolve<'b>(
+        &'b self,
+        sequence: SequenceId,
+        query: &'b [u8],
+        deadline: Instant,
+    ) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + 'b>> {
+        Box::pin(async move {
+            if NESTED_RESOLUTION.try_with(|()| ()).is_ok() {
+                return None;
+            }
+            let (header, question) = atomdns_dns_core::parse_query(query).ok()?;
+            let mut options = self.options.clone();
+            options.entry_sequence = Some(sequence);
+            options.admission_deadline = Some(deadline);
+            let mut checkpoint = ExecutionCheckpoint::new(false);
+            let request = ExecutionRequest {
+                client: atomdns_sequence_core::ClientContext::from_peer(
+                    std::net::Ipv4Addr::LOCALHOST.into(),
+                    atomdns_sequence_core::ClientTransport::Udp,
+                ),
+                config: self.config,
+                cache: self.cache,
+                options: &options,
+                raw: query,
+                header,
+                question,
+            };
+            let result = NESTED_RESOLUTION
+                .scope(
+                    (),
+                    execute_request_with_observation(
+                        request,
+                        self.executor,
+                        self.cancellation.clone(),
+                        &mut checkpoint,
+                    ),
+                )
+                .await;
+            matches!(result.response, crate::observer::ResponseState::Dns { .. })
+                .then_some(result.response_wire)
+        })
+    }
 }
 
 pub(crate) struct RefreshEnvironment {
@@ -1597,6 +1659,13 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                     .iter()
                     .find(|rewrite| rewrite.executable == dispatch.executable())
                 {
+                    let resolver = EngineResolver {
+                        config,
+                        cache,
+                        executor,
+                        options,
+                        cancellation: request_shutdown.clone(),
+                    };
                     let outcome = match rewrite
                         .runtime
                         .run(
@@ -1604,6 +1673,9 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                             raw,
                             request_deadline,
                             &[&request_shutdown],
+                            rewrite
+                                .sequence
+                                .map(|id| (id, &resolver as &dyn SequenceResolver)),
                         )
                         .await
                     {
@@ -2536,6 +2608,19 @@ async fn drive_branch_inner<'a, E: ExchangeExecutor + ?Sized>(
                     .find(|rewrite| rewrite.executable == dispatch.executable())
                 {
                     let raw = context.raw();
+                    // A branch carries no host options; the lazy-refresh
+                    // environment is the only part a nested sequence needs.
+                    let branch_options = HostOptions {
+                        refresh_environment: context.refresh_environment.clone(),
+                        ..HostOptions::default()
+                    };
+                    let resolver = EngineResolver {
+                        config: context.config,
+                        cache: context.cache,
+                        executor: context.executor,
+                        options: &branch_options,
+                        cancellation: context.branch_cancellation.clone(),
+                    };
                     let outcome = match rewrite
                         .runtime
                         .run(
@@ -2543,6 +2628,9 @@ async fn drive_branch_inner<'a, E: ExchangeExecutor + ?Sized>(
                             raw,
                             context.deadline,
                             &[&context.root_cancellation, &context.branch_cancellation],
+                            rewrite
+                                .sequence
+                                .map(|id| (id, &resolver as &dyn SequenceResolver)),
                         )
                         .await
                     {
@@ -3039,6 +3127,17 @@ fn run_target<'a, E: ExchangeExecutor + ?Sized>(
                     .find(|rewrite| rewrite.executable == executable)
                 {
                     let raw = context.raw();
+                    let branch_options = HostOptions {
+                        refresh_environment: context.refresh_environment.clone(),
+                        ..HostOptions::default()
+                    };
+                    let resolver = EngineResolver {
+                        config: context.config,
+                        cache: context.cache,
+                        executor: context.executor,
+                        options: &branch_options,
+                        cancellation: context.branch_cancellation.clone(),
+                    };
                     return match rewrite
                         .runtime
                         .run(
@@ -3046,6 +3145,9 @@ fn run_target<'a, E: ExchangeExecutor + ?Sized>(
                             raw,
                             context.deadline,
                             &[&context.root_cancellation, &context.branch_cancellation],
+                            rewrite
+                                .sequence
+                                .map(|id| (id, &resolver as &dyn SequenceResolver)),
                         )
                         .await
                     {

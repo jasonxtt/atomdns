@@ -89,6 +89,20 @@ pub(crate) struct LocalApi {
 }
 
 impl LocalApi {
+    /// Runs the sequence `tag` of the live configuration over the DNS query
+    /// `packet` inside this process (no socket) and returns the response wire.
+    /// `None`: the host is stopping or applying a configuration, the sequence
+    /// is gone, or it produced no response within `timeout`.
+    pub(crate) async fn resolve(
+        &self,
+        tag: &str,
+        packet: &[u8],
+        timeout: Duration,
+    ) -> Option<Vec<u8>> {
+        let control = self.control.upgrade()?;
+        crate::runtime_snapshot::resolve_sequence(&control, tag, packet, timeout).await
+    }
+
     /// Performs `method` on `target` and returns `(status, body)`.
     ///
     /// A local target is served in-process; a route the in-process entrance

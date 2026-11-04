@@ -291,6 +291,9 @@ struct Env {
 pub struct Requery {
     pub tag: String,
     file: PathBuf,
+    /// The sequence of this process that answers the re-asked names
+    /// (`resolver: $tag`). `None`: the UDP `resolver_address` of the state file.
+    sequence: Option<String>,
     /// The configuration root; relative source paths are read from here (the
     /// reference runs in it).
     root: PathBuf,
@@ -323,15 +326,38 @@ pub struct RequeryConfig {
 impl Requery {
     /// Validates `file` the way the reference does at load (a present file must
     /// parse); nothing is written until the host starts serving.
-    pub(crate) fn load(tag: &str, file: PathBuf, root: PathBuf) -> Result<Self, String> {
+    pub(crate) fn load(
+        tag: &str,
+        file: PathBuf,
+        root: PathBuf,
+        sequence: Option<String>,
+    ) -> Result<Self, String> {
         let existing = read_config(&file)?;
-        Ok(Self::new(tag, file, root, existing.unwrap_or_default()))
+        Ok(Self::new(
+            tag,
+            file,
+            root,
+            existing.unwrap_or_default(),
+            sequence,
+        ))
     }
 
-    fn new(tag: &str, file: PathBuf, root: PathBuf, config: Config) -> Self {
+    /// The sequence tag of `resolver: $tag` (`None` for the UDP address).
+    pub(crate) fn sequence_tag(&self) -> Option<&str> {
+        self.sequence.as_deref()
+    }
+
+    fn new(
+        tag: &str,
+        file: PathBuf,
+        root: PathBuf,
+        config: Config,
+        sequence: Option<String>,
+    ) -> Self {
         Self {
             tag: tag.to_owned(),
             file,
+            sequence,
             root,
             config: RefCell::new(config),
             seq: Cell::new(0),
@@ -786,10 +812,19 @@ impl Requery {
         qps: i64,
         resolver: &str,
     ) -> Result<(), ()> {
-        let address = tokio::net::lookup_host(resolver)
-            .await
-            .ok()
-            .and_then(|mut addresses| addresses.next());
+        // A `resolver: $sequence` runs inside this process (no socket); the
+        // state file's `resolver_address` is the fallback for a plain UDP one.
+        let address = match &self.sequence {
+            Some(tag) => self.env.borrow().as_ref().map(|env| Asker::Sequence {
+                api: env.api.clone(),
+                tag: tag.clone(),
+            }),
+            None => tokio::net::lookup_host(resolver)
+                .await
+                .ok()
+                .and_then(|mut addresses| addresses.next())
+                .map(Asker::Udp),
+        };
         let period = Duration::from_secs(1) / u32::try_from(qps.clamp(1, 1_000_000)).unwrap_or(1);
         let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -808,7 +843,7 @@ impl Requery {
             }
             while queries.try_join_next().is_some() {}
             let (name, ad, cd, dnssec) = split_flags(raw);
-            if let Some(address) = address {
+            if let Some(address) = &address {
                 for qtype in [1_u16, 28] {
                     let permit = tokio::select! {
                         biased;
@@ -825,12 +860,13 @@ impl Requery {
                         continue;
                     };
                     let token = token.clone();
+                    let address = address.clone();
                     queries.spawn_local(async move {
                         let _permit = permit;
                         let _ = tokio::select! {
                             biased;
                             () = token.cancelled() => None,
-                            reply = exchange(address, &packet) => reply,
+                            reply = ask(&address, &packet) => reply,
                         };
                     });
                 }
@@ -1204,6 +1240,22 @@ fn wire_name(name: &str) -> Option<Vec<u8>> {
     }
     wire.push(0);
     (wire.len() <= 255).then_some(wire)
+}
+
+/// Where the re-asked names go.
+#[derive(Clone)]
+enum Asker {
+    /// A UDP resolver: a fresh socket per query.
+    Udp(SocketAddr),
+    /// A sequence of this process, run without any socket.
+    Sequence { api: LocalApi, tag: String },
+}
+
+async fn ask(asker: &Asker, packet: &[u8]) -> Option<Vec<u8>> {
+    match asker {
+        Asker::Udp(address) => exchange(*address, packet).await,
+        Asker::Sequence { api, tag } => api.resolve(tag, packet, QUERY_TIMEOUT).await,
+    }
 }
 
 /// Sends `packet` to `address` from a fresh socket and waits for one datagram.

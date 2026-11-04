@@ -19,7 +19,7 @@ by the reference are read and answered identically, and the reference reads nati
 
 Only one task runs at a time. A task: (1) `GET` each `save_rules` URL in order, `url_call_delay_ms` apart; (2) read the source files and merge
 the names: `full:<name>` lines and statistics lines `count date name[|AD|CD|DO]` whose date is within `date_range_days` (UTC), exact
-duplicates removed, missing files skipped; **no names: the task ends as `idle` and nothing is flushed**; (3) `GET` each `flush_rules` URL, **except those that flush a learned-route category** (see below); (4) ask `resolver_address` for the A and AAAA records of each name at `queries_per_second` names per second (UDP, a fresh socket and a 2 s
+duplicates removed, missing files skipped; **no names: the task ends as `idle` and nothing is flushed**; (3) `GET` each `flush_rules` URL, **except those that flush a learned-route category** (see below); (4) ask `resolver_address` (or, when the plugin sets `resolver: $sequence_tag`, run that sequence inside the process: no socket, no audit record, `resolver_address` is ignored) for the A and AAAA records of each name at `queries_per_second` names per second (UDP, a fresh socket and a 2 s
 limit per query, answers ignored; AD/CD from the name's suffixes, DO as a 4096-byte OPT; at most 1024 queries in flight; names go through the
 host's whole chain, which rebuilds cache and lists); (5) `GET` the `save_rules` URLs again. Progress is written every 100 names and at the end.
 A URL step fails the task unless the answer is 2xx (`failed during <step> step: bad response from URL U: status N, body: B`); cancelling

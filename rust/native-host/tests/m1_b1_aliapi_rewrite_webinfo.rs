@@ -1279,6 +1279,101 @@ fn rewrite_resolves_a_named_dns_server_at_query_time() {
     });
 }
 
+#[test]
+fn rewrite_resolves_a_domain_target_through_a_sequence_without_a_socket() {
+    let dns = rewrite_dns_server();
+    let forward = UdpServer::answering(99);
+    let tree = Tree::new("rewrite-sequence");
+    tree.write("rule/rewrite.txt", REWRITE_RULES);
+    let ports = ports();
+    // `$resolve` is a plain sequence of this process: it is not bound to any port.
+    let plugins = format!(
+        "  - tag: fwd\n    type: forward\n    args: {{upstreams: [{{addr: \"udp://{}\"}}]}}\n  - tag: fwd_dns\n    type: forward\n    args: {{upstreams: [{{addr: \"udp://{}\"}}]}}\n  - tag: resolve\n    type: sequence\n    args:\n      - exec: $fwd_dns\n  - tag: rewrite\n    type: rewrite\n    args:\n      files: [\"rule/rewrite.txt\"]\n      dns: \"$resolve\"\n",
+        forward.address, dns.address
+    );
+    let yaml = config(
+        &ports,
+        &plugins,
+        "      - exec: $rewrite\n      - exec: $fwd\n",
+    );
+    let host = assemble(&tree, &yaml, HostOptions::default());
+    host.block_on(async {
+        let (shutdown, task) = serve(&host).await;
+        let reply = a_query(ports.dns, "x.alias.test").await;
+        assert_eq!(
+            addresses(&reply),
+            [IpAddr::from([192, 0, 2, 77]), IpAddr::from([192, 0, 2, 78])]
+        );
+        assert_eq!(first_ttl(&reply), 5);
+        assert!(dns.count() >= 1, "the sequence reached its upstream");
+        // The target does not exist: a failed lookup is SERVFAIL.
+        assert_eq!(rcode(&a_query(ports.dns, "nx.test").await), 2);
+        assert_eq!(forward.count(), 0, "a match accepts the query");
+        shutdown.cancel();
+        task.await.unwrap();
+    });
+    // Only the two client queries are audited, not the sequence runs.
+    assert_eq!(host.audit_snapshot().records.len(), 2);
+}
+
+#[test]
+fn rewrite_sequence_that_rewrites_again_ends_in_servfail_instead_of_looping() {
+    let forward = UdpServer::answering(99);
+    let tree = Tree::new("rewrite-sequence-loop");
+    tree.write(
+        "rule/rewrite.txt",
+        "full:ping.test pong.test\nfull:pong.test ping.test\n",
+    );
+    let ports = ports();
+    // `entry` itself runs `$rewrite`, so the two rules chase each other.
+    let plugins = format!(
+        "  - tag: fwd\n    type: forward\n    args: {{upstreams: [{{addr: \"udp://{}\"}}]}}\n  - tag: rewrite\n    type: rewrite\n    args:\n      files: [\"rule/rewrite.txt\"]\n      dns: \"$entry\"\n",
+        forward.address
+    );
+    let yaml = config(
+        &ports,
+        &plugins,
+        "      - exec: $rewrite\n      - exec: $fwd\n",
+    );
+    let host = assemble(&tree, &yaml, HostOptions::default());
+    host.block_on(async {
+        let (shutdown, task) = serve(&host).await;
+        assert_eq!(rcode(&a_query(ports.dns, "ping.test").await), 2);
+        assert_eq!(forward.count(), 0);
+        // A name outside the loop is still forwarded.
+        let reply = a_query(ports.dns, "other.test").await;
+        assert_eq!(addresses(&reply), [IpAddr::from([192, 0, 2, 99])]);
+        shutdown.cancel();
+        task.await.unwrap();
+    });
+}
+
+#[test]
+fn rewrite_dns_must_name_an_existing_sequence() {
+    let compile = |dns: &str| {
+        let tree = Tree::new("rewrite-sequence-compile");
+        tree.write("rule/ok.txt", "full:a.test b.test\n");
+        let yaml = format!(
+            "log: {{level: error}}\nplugins:\n  - tag: f\n    type: forward\n    args: {{upstreams: [{{addr: \"udp://127.0.0.1:9\"}}]}}\n  - tag: r\n    type: rewrite\n    args: {{files: [rule/ok.txt], dns: '{dns}'}}\n  - tag: entry\n    type: sequence\n    args: [{{exec: $r}}, {{exec: $f}}]\n  - tag: l\n    type: udp_server\n    args: {{entry: entry, listen: \"127.0.0.1:15401\"}}\n"
+        );
+        atomdns_native_host::compile_yaml_with_base(&yaml, &tree.0)
+            .err()
+            .map(|error| error.reason)
+    };
+    assert!(compile("$entry").is_none());
+    assert!(
+        compile("$missing")
+            .unwrap()
+            .contains("does not reference a sequence")
+    );
+    assert!(
+        compile("$f")
+            .unwrap()
+            .contains("does not reference a sequence")
+    );
+    assert!(compile("$").unwrap().contains("exactly one sequence"));
+}
+
 // ----- webinfo ----------------------------------------------------------------
 
 #[test]

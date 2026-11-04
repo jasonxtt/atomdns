@@ -1,6 +1,7 @@
 //! The `rewrite` plugin: `domain:x.com <IP or domain>` rules that answer a
 //! matching A/AAAA query directly. An IP target is answered locally; a domain
-//! target is resolved through one fixed UDP DNS server and its answers are
+//! target is resolved through one fixed UDP DNS server, or through a sequence
+//! of this same process (`dns: $sequence_tag`, no socket), and its answers are
 //! returned with a fixed TTL and no CNAME. A match accepts the query, so the
 //! rest of the current chain does not run.
 //!
@@ -9,13 +10,15 @@
 //! comments are skipped, and a rule file that does not exist is allowed.
 
 use std::cell::RefCell;
+use std::future::Future;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use atomdns_matcher_core::{MixMatcher, normalize};
-use atomdns_sequence_core::{ExecutionState, RoutingField, StateMutation};
+use atomdns_sequence_core::{ExecutionState, RoutingField, SequenceId, StateMutation};
 use atomdns_upstream_core::{
     Endpoint, ExchangeContext, ExchangeRequest, Transport, TransportCancellation, Upstream,
 };
@@ -164,17 +167,38 @@ pub(crate) enum RewriteEnd {
     Cancelled,
 }
 
-/// The DNS server a domain target resolves through: a fixed address, or a
-/// host name the system resolver turns into one address for each lookup.
+/// Runs a sequence of this process over a query and returns the response
+/// wire, `None` when it produced none (the executor owns the nesting guard).
+pub(crate) trait SequenceResolver {
+    fn resolve<'a>(
+        &'a self,
+        sequence: SequenceId,
+        query: &'a [u8],
+        deadline: Instant,
+    ) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + 'a>>;
+}
+
+/// The DNS server a domain target resolves through: a fixed address, a host
+/// name the system resolver turns into one address for each lookup, or a
+/// sequence of this process (`$tag`; no socket is opened).
 pub(crate) enum DnsServer {
     Fixed(Upstream),
     Named { host: String, port: u16 },
+    Sequence(String),
 }
 
 impl DnsServer {
     /// Parses `host[:port]` (port 53 by default; a bracketed or bare IPv6
-    /// address is accepted).
+    /// address is accepted), or `$sequence_tag`.
     pub(crate) fn parse(text: &str) -> Result<Self, String> {
+        if let Some(tag) = text.strip_prefix('$') {
+            if tag.is_empty() || tag.contains(char::is_whitespace) {
+                return Err(format!(
+                    "`{text}` must name exactly one sequence (`$sequence_tag`)"
+                ));
+            }
+            return Ok(Self::Sequence(tag.to_owned()));
+        }
         let fixed = |address: SocketAddr| {
             Endpoint::new(address, Transport::Udp)
                 .map(|endpoint| Self::Fixed(Upstream::new(endpoint)))
@@ -219,6 +243,8 @@ pub struct RewriteConfig {
     pub tag: String,
     pub executable: atomdns_sequence_core::ExecutableId,
     pub runtime: Rc<Rewrite>,
+    /// The sequence a `dns: $tag` setting names, resolved at compile time.
+    pub sequence: Option<SequenceId>,
 }
 
 impl Rewrite {
@@ -258,6 +284,14 @@ impl Rewrite {
         })
     }
 
+    /// The sequence a `$tag` dns setting names (`None` for a socket server).
+    pub(crate) fn sequence_tag(&self) -> Option<&str> {
+        match &self.dns {
+            DnsServer::Sequence(tag) => Some(tag),
+            _ => None,
+        }
+    }
+
     fn current(&self) -> Rc<RuleSet> {
         Rc::clone(&self.rules.borrow())
     }
@@ -270,6 +304,7 @@ impl Rewrite {
         raw: &[u8],
         deadline: Instant,
         cancellations: &[&TransportCancellation],
+        sequence: Option<(SequenceId, &dyn SequenceResolver)>,
     ) -> RewriteEnd {
         let question = &state.query.question;
         let Some(name) = crate::matchers::wire_name_to_ascii_domain(&question.qname_wire) else {
@@ -291,7 +326,7 @@ impl Rewrite {
                     skeleton(state, raw)
                 } else {
                     match self
-                        .resolve(&domain, qtype, raw, deadline, cancellations)
+                        .resolve(&domain, qtype, raw, deadline, cancellations, sequence)
                         .await
                     {
                         Resolved::Answers(answers) => domain_response(raw, &answers),
@@ -318,16 +353,24 @@ impl Rewrite {
         raw: &[u8],
         deadline: Instant,
         cancellations: &[&TransportCancellation],
+        sequence: Option<(SequenceId, &dyn SequenceResolver)>,
     ) -> Resolved {
         let Some(query) = upstream_query(domain, qtype, raw) else {
             return Resolved::Failed;
         };
         let deadline = deadline.min(Instant::now() + DNS_TIMEOUT);
         let exchange = async {
+            if let DnsServer::Sequence(_) = &self.dns {
+                // The resolver answers the wire itself; a missing sequence
+                // (not wired by the executor) is a failed lookup.
+                let (id, resolver) = sequence?;
+                return resolver.resolve(id, &query, deadline).await;
+            }
             let request = ExchangeRequest::new(&query).ok()?;
             let context = ExchangeContext::new(deadline, TransportCancellation::new());
             let remaining = deadline.saturating_duration_since(Instant::now());
-            match &self.dns {
+            let response = match &self.dns {
+                DnsServer::Sequence(_) => None,
                 DnsServer::Fixed(upstream) => upstream.exchange(request, context).await.ok(),
                 DnsServer::Named { host, port } => {
                     // The system resolver picks the address for this lookup.
@@ -345,7 +388,8 @@ impl Rewrite {
                         .await
                         .ok()
                 }
-            }
+            };
+            response.map(|response| response.wire().to_vec())
         };
         let cancelled = async {
             match cancellations {
@@ -367,7 +411,7 @@ impl Rewrite {
         let Some(response) = response else {
             return Resolved::Failed;
         };
-        match Message::from_vec(response.wire()) {
+        match Message::from_vec(&response) {
             Ok(message) if message.response_code() == ResponseCode::NoError => {
                 Resolved::Answers(message.answers().to_vec())
             }

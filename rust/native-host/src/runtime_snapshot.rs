@@ -1227,6 +1227,40 @@ impl RuntimeControl {
         })
     }
 
+    /// Admits a query the host asks of itself: it runs the sequence `name` of
+    /// the live snapshot, which a retiring generation waits for like any
+    /// listener request. `None` while DNS is closed or when no such sequence.
+    pub(crate) fn capture_sequence(
+        &self,
+        name: &str,
+    ) -> Option<(AdmittedSnapshot, atomdns_sequence_core::SequenceId)> {
+        let dns_open = (self.0.admitting.get() || self.0.management_only.get())
+            && !self.0.closed.get()
+            && !self.0.recovery_required.get();
+        if !dns_open {
+            return None;
+        }
+        let snapshot = self.0.current.borrow().clone();
+        let id = snapshot
+            .config
+            .program
+            .sequences
+            .iter()
+            .find(|s| !s.synthetic && s.name == name)?
+            .id;
+        let mut options = snapshot.options.clone();
+        options.entry_sequence = Some(id);
+        snapshot.active.set(snapshot.active.get() + 1);
+        Some((
+            AdmittedSnapshot {
+                snapshot,
+                options,
+                enable_audit: false,
+            },
+            id,
+        ))
+    }
+
     pub(crate) fn start(
         &self,
         shutdown: &atomdns_upstream_core::TransportCancellation,
@@ -1785,4 +1819,29 @@ mod file_commit_tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+/// Runs the sequence `tag` over the DNS query `packet` inside this process:
+/// no socket, no audit record. The response wire, or `None` when DNS is closed,
+/// the sequence is gone, or nothing answered within `timeout`.
+pub(crate) async fn resolve_sequence(
+    control: &RuntimeControl,
+    tag: &str,
+    packet: &[u8],
+    timeout: std::time::Duration,
+) -> Option<Vec<u8>> {
+    use crate::rewrite::SequenceResolver;
+    let (admitted, id) = control.capture_sequence(tag)?;
+    let deadline = std::time::Instant::now() + timeout;
+    let resolver = crate::execution::EngineResolver {
+        config: &admitted.snapshot.config,
+        cache: &admitted.snapshot.cache,
+        executor: admitted.snapshot.forwards.as_ref(),
+        options: &admitted.options,
+        cancellation: atomdns_upstream_core::TransportCancellation::new(),
+    };
+    tokio::time::timeout(timeout, resolver.resolve(id, packet, deadline))
+        .await
+        .ok()
+        .flatten()
 }
