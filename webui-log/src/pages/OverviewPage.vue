@@ -786,6 +786,10 @@ async function sampleAuditTrend() {
       pushTrend('queries', 0)
     }
     auditSample = { total, sum }
+    // The cards show the same figures the trend lines were just fed with.
+    stats.totalQueries = total
+    stats.averageDurationMs = Number(data?.average_duration_ms || 0)
+    rankingErrors.stats = ''
   } catch {
     // the next sample tries again
   }
@@ -796,10 +800,16 @@ async function sampleDistinctTrend() {
   if (!supportsOperation('query.rank')) return
   try {
     const clients = await getJSON(`/api/v2/audit/rank/client?limit=${RANK_SCAN_LIMIT}`)
-    if (Array.isArray(clients)) pushTrend('clients', clients.length)
+    if (Array.isArray(clients)) {
+      pushTrend('clients', clients.length)
+      clientCount.value = clients.length
+    }
     const domains = await getJSONWithHeaders(`/api/v2/audit/rank/domain?limit=1`)
     const count = parseDistinctDomainCount(domains?.headers?.get('X-Audit-Distinct-Domains'))
-    if (count !== null) pushTrend('domains', count)
+    if (count !== null) {
+      pushTrend('domains', count)
+      domainCount.value = count
+    }
   } catch {
     // the next sample tries again
   }
