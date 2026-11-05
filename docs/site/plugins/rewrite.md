@@ -12,7 +12,7 @@
   args:
     files:
       - "rule/rewrite.txt"
-    dns: 223.5.5.5
+    dns: $sequence_local      # 或写 DNS 地址，如 223.5.5.5
 
 - tag: main
   type: sequence
@@ -26,7 +26,7 @@
 | 参数 | 说明 |
 | --- | --- |
 | `files` | 规则文件，至少一个；第一个文件是 WebUI 保存的位置，不存在也可以 |
-| `dns` | 目标是域名时用来解析它的 DNS，`host[:port]`，默认端口 53 |
+| `dns` | 目标是域名时用来解析它的 DNS：`host[:port]`（默认端口 53），或 `$序列名`，在进程内用该序列解析，不经过网络、不记入查询日志 |
 
 ## 规则写法
 
@@ -39,7 +39,7 @@ cdn.example.com    other.example.net
 
 - 域名默认整域名匹配，也可以写 `domain:` 等前缀。
 - 目标是 IP：只应答同一地址族的 A / AAAA，TTL 5 秒；其它类型返回空应答。
-- 目标是域名：向 `dns` 查询目标域名的 A / AAAA，把地址作为原域名的应答返回；查询失败返回 SERVFAIL。
+- 目标是域名：用 `dns` 查询目标域名的 A / AAAA，把地址作为原域名的应答返回；查询失败返回 SERVFAIL。
 
 ## 与 redirect 的区别
 
