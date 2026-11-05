@@ -45,7 +45,7 @@ legacy value, else the default; reported as `EFFECTIVE feature_flag <key> value=
 The values are constants of the compiled generation. A query keeps the generation it was admitted to through branches, fallback, preference, redirect and lazy
 refresh, so all flags it sees come from one committed state and never change during it. A query that the host sends to one of its own listeners (requery, a
 loopback upstream) is a new admission and sees the generation current then — as with the former per-admission switch seed. The host reserves no fast-flag bits;
-`fast_mark`/mapper `mark` 32–47 and 49 are free for configurations (48 stays the `unified_matcher1` sentinel convention).
+`fast_mark`/mapper `mark` 32–47 and 49 are free for configurations (48 is the retired Go fast-path "already matched" sentinel; keep it unused).
 
 ## HTTP
 

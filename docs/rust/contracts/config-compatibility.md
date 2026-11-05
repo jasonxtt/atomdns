@@ -17,7 +17,7 @@ Read `docs/ai/config-notes.md` before changing configuration generation, upgrade
   versions preserve old UI details. The exact matrix is in the task's
   research/forward-contracts.md and native-audit-control.md below. This is a
   user-approved migration plan, not an implemented endpoint claim.
-- The host reserves no `fast_mark` bits since configuration schema 3 (switches became `feature_flag`s, see `native-feature-flags.md`); bit 48 stays the `unified_matcher1` sentinel convention of `config_rust`.
+- The host reserves no `fast_mark` bits since configuration schema 3 (switches became `feature_flag`s, see `native-feature-flags.md`); bit 48 is the historical "already matched" sentinel of the Go fast path: `config_rust` no longer tests or sets it since schema 7, and it stays unused for compatibility with older configurations.
 
 ## Rust backend selection
 
