@@ -86,7 +86,13 @@ def reply(query, rcode, answers):
 
 
 def code_answer(code, qtype):
-    """(rcode, [records]) for an answer code; None = no reply at all."""
+    """(rcode, [records]) for an answer code; None = no reply at all.
+
+    `a_b` answers A with code `a` and AAAA with code `b` (e.g. `cn_fo`: a CN IPv4 but a
+    foreign IPv6), to model dual-stack names whose families disagree."""
+    if "_" in code:
+        first, second = code.split("_", 1)
+        code = first if qtype == 1 else second
     if code == "fail":
         return 2, []
     if code == "nx":
@@ -101,7 +107,13 @@ def code_answer(code, qtype):
 
 
 class Mocks:
-    def __init__(self):
+    """`delays` maps a qtype to seconds the real-IP mocks wait before answering it;
+    `fake_v6=False` makes the FakeIP mocks answer AAAA with an empty NOERROR, like a
+    FakeIP server that hands out only IPv4."""
+
+    def __init__(self, delays=None, fake_v6=True):
+        self.delays = delays or {}
+        self.fake_v6 = fake_v6
         self.hits = []
         self.lock = threading.Lock()
         self.socks = {}
@@ -129,7 +141,7 @@ class Mocks:
             if kind in ("fake", "cnfake"):
                 if qtype == 1:
                     answers = [rr(1, "28.0.0.7" if kind == "fake" else "30.0.0.7")]
-                elif qtype == 28:
+                elif qtype == 28 and self.fake_v6:
                     answers = [rr(28, "2001:2::7" if kind == "fake" else "2400::7")]
                 else:
                     answers = []
@@ -137,7 +149,11 @@ class Mocks:
                 continue
             code = labels[0] if kind == "domestic" else labels[1]
             rcode, answers = code_answer(code, qtype)
-            sock.sendto(reply(data, rcode, answers), peer)
+            delay = self.delays.get(qtype, 0)
+            if delay:
+                threading.Timer(delay, sock.sendto, args=(reply(data, rcode, answers), peer)).start()
+            else:
+                sock.sendto(reply(data, rcode, answers), peer)
 
     def take(self):
         with self.lock:
