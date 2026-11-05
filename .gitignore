@@ -47,3 +47,5 @@ demo/
 
 # external UI package build output (webui-log, `npm run build:external`)
 webui-log/dist-external/
+docs/site/.vitepress/dist/
+docs/site/.vitepress/cache/

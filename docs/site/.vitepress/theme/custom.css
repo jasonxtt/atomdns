@@ -1,0 +1,175 @@
+/* 与 WebUI 同一套配色：浅色 Rosé Pine Dawn，深色 Rosé Pine Moon。 */
+:root {
+  --at-base: #faf4ed;
+  --at-surface: #fffaf3;
+  --at-overlay: #f2e9e1;
+  --at-muted: #9893a5;
+  --at-subtle: #797593;
+  --at-text: #464261;
+  --at-pine: #286983;
+  --at-foam: #56949f;
+  --at-gold: #ea9d34;
+  --at-love: #b4637a;
+  --at-iris: #907aa9;
+  --at-hl-med: #dfdad9;
+
+  --vp-font-family-base: 'IBM Plex Sans', 'PingFang SC', 'Source Han Sans SC', 'Segoe UI', sans-serif;
+  --vp-font-family-mono: 'JetBrains Mono', 'SFMono-Regular', Menlo, monospace;
+
+  --vp-c-bg: var(--at-base);
+  --vp-c-bg-alt: var(--at-overlay);
+  --vp-c-bg-elv: var(--at-surface);
+  --vp-c-bg-soft: var(--at-overlay);
+  --vp-c-text-1: var(--at-text);
+  --vp-c-text-2: var(--at-subtle);
+  --vp-c-text-3: var(--at-muted);
+  --vp-c-divider: var(--at-hl-med);
+  --vp-c-gutter: var(--at-hl-med);
+  --vp-c-border: var(--at-hl-med);
+
+  --vp-c-brand-1: var(--at-pine);
+  --vp-c-brand-2: #33809e;
+  --vp-c-brand-3: var(--at-pine);
+  --vp-c-brand-soft: rgba(40, 105, 131, 0.12);
+
+  --vp-c-tip-1: var(--at-pine);
+  --vp-c-tip-soft: rgba(40, 105, 131, 0.1);
+  --vp-c-warning-1: #a8691b;
+  --vp-c-warning-soft: rgba(234, 157, 52, 0.14);
+  --vp-c-danger-1: var(--at-love);
+  --vp-c-danger-soft: rgba(180, 99, 122, 0.12);
+
+  --vp-code-bg: var(--at-overlay);
+  --vp-code-block-bg: var(--at-surface);
+  --vp-code-color: var(--at-love);
+
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(120deg, var(--at-pine) 20%, var(--at-foam) 60%, var(--at-iris));
+  --vp-home-hero-image-background-image: linear-gradient(135deg, rgba(86, 148, 159, 0.35), rgba(144, 122, 169, 0.3));
+  --vp-home-hero-image-filter: blur(56px);
+
+  --vp-button-brand-bg: var(--at-pine);
+  --vp-button-brand-hover-bg: #33809e;
+  --vp-button-brand-active-bg: #1f5669;
+  --vp-button-alt-bg: var(--at-overlay);
+
+  --vp-sidebar-bg-color: var(--at-base);
+  --vp-nav-bg-color: var(--at-base);
+  --vp-local-search-bg: var(--at-base);
+  --vp-local-search-result-bg: var(--at-surface);
+}
+
+.dark {
+  --at-base: #232136;
+  --at-surface: #2a273f;
+  --at-overlay: #393552;
+  --at-muted: #6e6a86;
+  --at-subtle: #908caa;
+  --at-text: #e0def4;
+  --at-pine: #3e8fb0;
+  --at-foam: #9ccfd8;
+  --at-gold: #f6c177;
+  --at-love: #eb6f92;
+  --at-iris: #c4a7e7;
+  --at-hl-med: #44415a;
+
+  --vp-c-bg-alt: #1f1d30;
+  --vp-c-brand-1: var(--at-foam);
+  --vp-c-brand-2: #b4dce3;
+  --vp-c-brand-3: var(--at-pine);
+  --vp-c-brand-soft: rgba(156, 207, 216, 0.14);
+  --vp-c-tip-1: var(--at-foam);
+  --vp-c-warning-1: var(--at-gold);
+  --vp-button-brand-bg: var(--at-pine);
+  --vp-button-brand-hover-bg: #4b9cbd;
+  --vp-button-brand-text: #191724;
+  --vp-code-block-bg: #1f1d30;
+  --vp-home-hero-name-background: linear-gradient(120deg, var(--at-foam) 10%, var(--at-pine) 50%, var(--at-iris));
+}
+
+/* 未写页面的目录项：灰显 */
+.VPSidebarItem.level-1:not(.is-link) .text {
+  color: var(--vp-c-text-3);
+}
+
+/* 首页 logo：圆角卡片 */
+.VPHero .image-src {
+  max-width: 240px;
+  max-height: 240px;
+  border-radius: 48px;
+  box-shadow: 0 12px 32px #2869833d;
+}
+
+/* 首页截图：父容器已与特性卡片同宽，这里不再加左右留白 */
+.home-shot {
+  margin: 24px 0 72px;
+}
+.home-shot img {
+  width: 100%;
+  border-radius: 16px;
+  border: 1px solid var(--vp-c-divider);
+  box-shadow: 0 4px 12px #00000014, 0 2px 6px #0000000a, 0 0 2px #0000001f;
+}
+.home-shot .row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-top: 16px;
+}
+.home-shot figure {
+  margin: 0;
+}
+.home-shot figcaption {
+  margin-top: 8px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--vp-c-text-2);
+}
+@media (max-width: 640px) {
+  .home-shot .row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.VPFeature {
+  background-color: var(--at-surface) !important;
+}
+
+/* 特性卡片：图标与标题同行，收紧留白 */
+.VPFeatures .VPFeature .box {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  column-gap: 12px;
+  padding: 18px 20px;
+}
+.VPFeatures .VPFeature .icon {
+  width: 36px;
+  height: 36px;
+  margin: 0;
+  font-size: 20px;
+  border-radius: 8px;
+}
+.VPFeatures .VPFeature .title {
+  margin: 0;
+  font-size: 16px;
+  line-height: 24px;
+}
+.VPFeatures .VPFeature .details {
+  grid-column: 1 / -1;
+  padding-top: 10px;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+/* 参数表 */
+.vp-doc table {
+  display: table;
+  width: 100%;
+}
+.vp-doc th {
+  background-color: var(--at-overlay);
+}
+.vp-doc tr:nth-child(2n) {
+  background-color: transparent;
+}
