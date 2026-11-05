@@ -1,8 +1,8 @@
 # Bridge network (Docker Desktop, Unraid/NAS with its own network, or when 53 must be mapped).
 # In bridge mode 127.0.0.1 inside the container is the container itself: change upstreams that
-# point at a companion on the host (default configuration: 127.0.0.1:6666 / :1053 / :2222) to the
+# point at a companion on the host (default configuration: 127.0.0.1:6666 / :1053) to the
 # host's address or to a compose service name, or the queries answer SERVFAIL.
-# Every extra listener of the configuration (special groups: 3066, 3077, ...) needs its own mapping.
+# Every extra listener you use (3077/3099/3111 for proxy apps, special-group ports, ...) needs its own mapping.
 services:
   atomdns:
     image: jasonxtt/atomdns:latest

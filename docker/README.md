@@ -1,43 +1,40 @@
-# AtomDNS
+<p align="center"><img src="https://raw.githubusercontent.com/jasonxtt/atomdns/main/docs/assets/atomdns-banner.jpg" alt="AtomDNS" width="520"></p>
 
-**AtomDNS** is a Rust rewrite of [MosDNS](https://github.com/yyysuo/mosdns): a DNS splitter for home networks, side routers and transparent-proxy setups, with a Vue WebUI. It keeps MosDNS's configuration (YAML, `sequence`/plugin semantics), routing results, WebUI/API workflows and persistent formats.
+<p align="center"><b>用 Rust 重写的 MosDNS：带完整 WebUI 的家庭网络 DNS 分流器</b><br>
+A Rust rewrite of MosDNS — a DNS splitter for home networks, with a full WebUI.</p>
 
-**AtomDNS** 是 [MosDNS](https://github.com/yyysuo/mosdns) 的纯 Rust 重写：面向家庭网络、旁路由和透明代理的 DNS 分流程序，带 WebUI。配置（YAML、`sequence`/插件语义）、分流结果、WebUI/API 工作流和持久化格式与 MosDNS 保持一致。
+<p align="center">
+  <a href="https://jasonxtt.github.io/atomdns/">📖 使用文档</a> ·
+  <a href="https://github.com/jasonxtt/atomdns">GitHub</a> ·
+  <a href="https://github.com/jasonxtt/atomdns/releases">更新日志</a>
+</p>
 
-源码与文档 / Source & docs: <https://github.com/jasonxtt/atomdns> · 完整部署说明 / full guide: [docs/rust/docker.md](https://github.com/jasonxtt/atomdns/blob/main/docs/rust/docker.md)
+---
 
-## 标签与平台 / Tags and platforms
+## 特性
 
-| 标签 | 说明 |
-| --- | --- |
-| `latest` | 最新正式版 / latest release |
-| `vX.Y.Z` | 与 GitHub Release 同名的固定版本 / pinned release (e.g. `v0.6.2`) |
+- **精细分流**：国内外分流，FakeIP / RealIP 两种模式，专属分流组把指定域名交给专属上游与独立缓存
+- **路由学习**：自动记住直连、代理、无 IPv4 / IPv6 的域名，按时间过期
+- **在线规则**：订阅 SRS、MRS、dat、Clash、文本规则，保存即生效
+- **查询审计**：每条查询的最终分流、实际上游、耗时一目了然
+- **开箱即用**：首次启动自动写入完整默认配置和 WebUI，无需联网
 
-平台：`linux/amd64`、`linux/arm64`、`linux/arm/v7`（Debian slim，glibc 程序）。
+![概览](https://jasonxtt.github.io/atomdns/screenshots/overview.jpg)
 
-## 快速开始 / Quick start
+## 快速开始
 
 ```bash
-mkdir -p atomdns-data
 docker run -d --name atomdns --restart unless-stopped --network host \
   -e TZ=Asia/Shanghai \
   -v "$PWD/atomdns-data:/cus/atomdns" \
   jasonxtt/atomdns:latest
 ```
 
-WebUI：`http://<主机>:9099/`。
-
-- 配置目录是容器内的 `/cus/atomdns`，挂载到宿主机目录即可持久化（配置、规则、缓存转储、学习数据、查询日志）。
-- **空目录首次启动**会用镜像内置的全新安装包初始化（含 WebUI），不需要联网。目录里有别的文件却没有 `config_custom.yaml` 时拒绝启动，不会覆盖任何文件。
-- 已有配置目录（例如从裸机 `/cus/atomdns` 迁来）直接挂载即可，保留原有数据。
-- 默认配置的上游指向宿主机上的伴生服务（`127.0.0.1:6666`、`:1053`、`:2222`）。host 网络下可直接使用；bridge 网络下容器内的 `127.0.0.1` 是容器自己，要改成宿主机地址或伴生容器的服务名，否则查询返回 SERVFAIL。
-- host 网络下，默认配置的**所有**监听端口（53、2222、3066、3077、3099、3111、3333、4444、7777、8888，以及 API 9099）都要求宿主机上空闲；任何一个被占用，容器会以 `TCP bind failed: Address in use` 退出重启。端口冲突时改用 bridge 网络（只映射 53 和 9099），或在配置里改掉冲突的 `listen`。
+打开 `http://<主机 IP>:9099/` 进入 WebUI，把路由器下发的 DNS 改成这台主机的 IP 即可使用。
 
 ## Docker Compose
 
-### host 网络（Linux 推荐）
-
-容器共享宿主机网络：默认配置的 `127.0.0.1` 伴生服务可直接访问，配置里所有监听端口（`:53`、专属分流组的 `:3066`、`:3077` …）无需逐个映射，查询日志里是真实的客户端地址。宿主机的 53 端口必须空闲。
+### host 网络（推荐）
 
 ```yaml
 services:
@@ -52,9 +49,11 @@ services:
       - ./atomdns-data:/cus/atomdns
 ```
 
+容器共享宿主机网络：配置里的所有端口直接生效，查询日志显示真实的客户端地址，宿主机上的代理软件可以直接用 `127.0.0.1` 访问。
+
 ### bridge 网络
 
-适用于 Docker Desktop、Unraid/NAS 的自定义网络，或必须映射端口的场景。额外监听的端口（专属分流组等）要自己加映射。
+适合 Docker Desktop、NAS 自定义网络等必须映射端口的环境。
 
 ```yaml
 services:
@@ -70,45 +69,78 @@ services:
       - "9099:9099/tcp"
     volumes:
       - ./atomdns-data:/cus/atomdns
-    # 伴生服务在 Docker 宿主机上时 / a companion on the Docker host:
+    # 代理软件运行在宿主机上时：
     # extra_hosts:
     #   - "host.docker.internal:host-gateway"
 ```
 
-## 升级 / Upgrading
+bridge 网络下需要注意：
 
-容器版**关闭了 WebUI 里的在线更新**，升级就是拉新镜像并重建容器：
+- 容器里的 `127.0.0.1` 是容器自己。默认配置中指向代理软件的上游（FakeIP 上游 `127.0.0.1:6666`、国内 FakeIP 上游 `127.0.0.1:1053`）要在 WebUI「上游设置」改成宿主机地址，例如 `host.docker.internal`。
+- 查询日志里的客户端地址是 Docker 网关地址，按客户端分流不可用。
+- 用到的其它端口（见下表）要自己加映射。
+
+## 数据目录
+
+容器内的配置目录是 `/cus/atomdns`，挂载出来即可持久化配置、规则、缓存、学习结果和查询日志。
+
+| 情况 | 行为 |
+| --- | --- |
+| 空目录 | 首次启动写入完整默认配置和 WebUI |
+| 已有配置（含 `config_custom.yaml`） | 直接使用，例如从裸机的 `/cus/atomdns` 迁来 |
+| 有其它文件但没有 `config_custom.yaml` | 拒绝启动，不覆盖任何文件 |
+
+## 端口
+
+| 端口 | 用途 | bridge 下是否需要映射 |
+| --- | --- | --- |
+| 53 | DNS | 需要 |
+| 9099 | WebUI 与管理接口 | 需要 |
+| 3077 / 3099 / 3111 | 给 Stash、ClashMi、sing-box 回家用的 DNS | 用到时 |
+| 7777 / 8888 | 给代理软件解析节点域名、给 sing-box 使用的国内 DNS | 用到时 |
+| 4444 | 带 ECS 的国外查询 | 用到时 |
+| 2222 / 3333 / 3066 | 内部使用（国内查询、国外查询、定时刷新） | 不需要 |
+| 专属分流组的自定义端口 | 只走该组的 DNS | 用到时 |
+
+host 网络下，以上端口在宿主机上都必须空闲，任何一个被占用，容器会报 `Address in use` 并不断重启。
+这时可以停掉占用端口的服务（常见的是 `systemd-resolved` 占用 53），或改用 bridge 网络。
+
+## 升级
+
+容器版不使用 WebUI 里的在线更新，拉取新镜像并重建容器即可：
 
 ```bash
 docker compose pull && docker compose up -d
-# 或 / or
-docker pull jasonxtt/atomdns:latest && docker rm -f atomdns && docker run ...
 ```
 
-镜像带着在线更新原本会带来的全部内容，新容器启动时会让挂载目录跟上镜像：
+新容器启动时会自动让数据目录跟上新版本：
 
-1. 配置 schema 落后时应用内置配置包（只替换托管的 `config_custom.yaml`、`sub_config/*.yaml`，不碰 `webinfo/settings.json` 等用户数据），替换前的旧文件备份在 `backup/container-schema-…/`。
-2. `ui/main/` 版本与镜像不同时整体替换为镜像内置的界面；删掉 `ui/main/` 就是纯后端，镜像不会再创建它。
-3. 规则、缓存、学习数据、`settings.json` 原样保留。
+- 配置结构有变化时，替换配置包管理的 `config_custom.yaml` 与 `sub_config/*.yaml`，旧文件备份到 `backup/` 下；
+- `ui/main/` 替换为新版界面（删除 `ui/main/` 即为纯后端，之后不会再创建）；
+- 规则、缓存、学习结果、WebUI 里的设置都原样保留。
 
-## 常用命令 / Commands
+需要回退时换回旧版本标签即可。配置结构只升不降，跨配置版本回退前请先看发布说明。
+
+## 标签与平台
+
+| 标签 | 说明 |
+| --- | --- |
+| `latest` | 最新正式版 |
+| `vX.Y.Z` | 指定版本，与 GitHub Release 同名 |
+
+平台：`linux/amd64`、`linux/arm64`、`linux/arm/v7`。
+
+## 常用命令
 
 ```bash
-docker run --rm jasonxtt/atomdns version
-docker run --rm -v "$PWD/atomdns-data:/cus/atomdns" jasonxtt/atomdns \
-  check -d /cus/atomdns -c config_custom.yaml        # 只检查配置 / validate only
-docker logs -f atomdns
+docker logs -f atomdns                       # 查看日志
+docker exec atomdns atomdns version          # 查看版本
+docker run --rm -v "$PWD/atomdns-data:/cus/atomdns" jasonxtt/atomdns:latest \
+  check -d /cus/atomdns -c config_custom.yaml   # 只检查配置
 ```
 
-## 端口 / Ports
+## 更多
 
-| 端口 | 用途 |
-| --- | --- |
-| 53/udp, 53/tcp | DNS |
-| 9099/tcp | WebUI 与管理 API / WebUI and management API |
+完整说明见 **[使用文档](https://jasonxtt.github.io/atomdns/)**：WebUI 导览、运行模式、专属分流组、每个插件的参数等。
 
-其余端口由配置决定（专属分流组等）。容器以 root 运行，监听 53 不需要额外能力。
-
-## 许可 / License
-
-GPL-3.0，见 <https://github.com/jasonxtt/atomdns/blob/main/LICENSE>。
+许可证：[GPL-3.0](https://github.com/jasonxtt/atomdns/blob/main/LICENSE)。致谢 [MosDNS](https://github.com/IrineSistiana/mosdns) 与 [yyysuo/mosdns](https://github.com/yyysuo/mosdns)。
