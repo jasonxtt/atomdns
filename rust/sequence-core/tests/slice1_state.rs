@@ -70,6 +70,7 @@ fn state_snapshot_is_typed_owned_and_deterministic() {
         final_upstream_targets: Some("target-a,target-b".to_owned()),
         selected_upstream: Some("selected".to_owned()),
         matched_rule_source: Some("source".to_owned()),
+        proxy_outbound: None,
     };
 
     let snapshot = state.snapshot();

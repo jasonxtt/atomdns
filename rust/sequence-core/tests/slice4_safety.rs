@@ -847,6 +847,7 @@ fn canonical_contract_snapshot_is_typed_and_deterministic() {
         final_upstream_targets: Some("target-a,target-b".to_owned()),
         selected_upstream: Some("selected-upstream".to_owned()),
         matched_rule_source: Some("rule-source".to_owned()),
+        proxy_outbound: None,
     };
     state
         .set_synthesized_response(0x0fff)
@@ -871,6 +872,7 @@ fn canonical_contract_snapshot_is_typed_and_deterministic() {
                 final_upstream_targets: Some("target-a,target-b".to_owned()),
                 selected_upstream: Some("selected-upstream".to_owned()),
                 matched_rule_source: Some("rule-source".to_owned()),
+                proxy_outbound: None,
             },
         }
     );

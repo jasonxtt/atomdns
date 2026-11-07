@@ -49,3 +49,35 @@ export function canSaveList({ truncated, loading, saving, uncertain, dirty }) {
   if (truncated || loading || saving) return false
   return Boolean(dirty || uncertain)
 }
+
+// Appends or replaces an `@<outbound>` suffix on the line at `cursorOffset` (or the last line
+// when `cursorOffset` is omitted), or inserts `@<outbound>` if the target line is empty.
+export function applyOutboundTag(text, outbound, cursorOffset = null) {
+  const tag = String(outbound || '').trim().replace(/^@+/, '')
+  if (!tag) return String(text || '')
+  const raw = String(text || '')
+  if (!raw.trim()) return `@${tag}`
+  const lines = raw.split('\n')
+  let lineIndex = lines.length - 1
+  if (typeof cursorOffset === 'number' && cursorOffset >= 0 && cursorOffset <= raw.length) {
+    let pos = 0
+    for (let i = 0; i < lines.length; i += 1) {
+      const end = pos + lines[i].length
+      if (cursorOffset <= end) {
+        lineIndex = i
+        break
+      }
+      pos = end + 1
+    }
+  }
+  const current = lines[lineIndex]
+  const trimmed = current.trimEnd()
+  if (!trimmed.trim()) {
+    lines[lineIndex] = `@${tag}`
+  } else if (/\s+@[^\s#]+$/.test(trimmed)) {
+    lines[lineIndex] = trimmed.replace(/\s+@[^\s#]+$/, ` @${tag}`)
+  } else {
+    lines[lineIndex] = `${trimmed} @${tag}`
+  }
+  return lines.join('\n')
+}

@@ -75,6 +75,14 @@ impl ExecutionState {
     }
 
     pub fn set_raw_response_with_origin(&mut self, wire: Vec<u8>, origin: Option<ResponseOrigin>) {
+        let origin = origin.map(|mut origin| {
+            if origin.proxy_outbound.is_none() {
+                origin
+                    .proxy_outbound
+                    .clone_from(&self.routing.proxy_outbound);
+            }
+            origin
+        });
         self.set_raw_response(wire);
         self.response_origin = origin;
     }
@@ -157,6 +165,7 @@ pub struct ResponseOrigin {
     pub identity: std::sync::Arc<str>,
     pub peer: Option<std::net::SocketAddr>,
     pub transport: Option<&'static str>,
+    pub proxy_outbound: Option<String>,
 }
 
 /// Trusted listener identity; unknown embedders never acquire a guessed peer.
@@ -220,6 +229,7 @@ pub struct RoutingState {
     pub final_upstream_targets: Option<String>,
     pub selected_upstream: Option<String>,
     pub matched_rule_source: Option<String>,
+    pub proxy_outbound: Option<String>,
 }
 
 /// A mapper's live label prefix and the labels it replaces in a stored result.
@@ -303,6 +313,7 @@ impl RoutingState {
             RoutingField::FinalUpstreamTargets => self.final_upstream_targets = value,
             RoutingField::SelectedUpstream => self.selected_upstream = value,
             RoutingField::MatchedRuleSource => self.matched_rule_source = value,
+            RoutingField::ProxyOutbound => self.proxy_outbound = value,
         }
     }
 }
@@ -318,6 +329,7 @@ pub enum RoutingField {
     FinalUpstreamTargets,
     SelectedUpstream,
     MatchedRuleSource,
+    ProxyOutbound,
 }
 
 /// The complete response state; raw bytes are never replaced by a lossy

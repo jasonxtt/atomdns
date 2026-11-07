@@ -118,6 +118,7 @@ mod slice1_state_tests {
             identity: std::sync::Arc::from("actual"),
             peer: None,
             transport: None,
+            proxy_outbound: None,
         };
         state.set_raw_response_with_origin(wire.clone(), Some(origin.clone()));
         state.rewrite_raw_response(wire.clone());

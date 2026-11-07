@@ -6,7 +6,8 @@ export const OPERATION_IDS = Object.freeze([
   'rules.local.manage', 'groups.read', 'groups.manage', 'groups.upstreams', 'upstreams.read', 'upstreams.manage',
   'rules.diversion', 'rules.adguard', 'capture.logs', 'client.aliases', 'flags.manage',
   'cache.requery', 'lists.remembered', 'system.restart', 'system.webui_port',
-  'system.config_management', 'system.update', 'system.domain_generation', 'system.global_overrides', 'metrics.process'
+  'system.config_management', 'system.update', 'system.domain_generation', 'system.global_overrides', 'metrics.process',
+  'singbox.read', 'singbox.manage'
 ])
 function isObject(value) { return value !== null && typeof value === 'object' && !Array.isArray(value) }
 
@@ -77,6 +78,7 @@ export function requestOperation(url, method = 'GET') {
   if (path === '/api/v1/system/webui-port') return 'system.webui_port'
   if (path.startsWith('/api/v1/domain-generation')) return 'system.domain_generation'
   if (path.startsWith('/api/v1/overrides')) return 'system.global_overrides'
+  if (path.startsWith('/api/v1/singbox/') && path !== '/api/v1/singbox/outbounds') return method === 'GET' ? 'singbox.read' : 'singbox.manage'
   if (path === '/api/v1/flags' || path.startsWith('/api/v1/flags/')) return 'flags.manage'
   if (/^\/plugins\/clientname(?:\/|$)/.test(path)) return 'client.aliases'
   if (/^\/plugins\/adguard\/(rules|update)(?:\/|$)/.test(path)) return 'rules.adguard'

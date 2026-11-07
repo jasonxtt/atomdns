@@ -211,6 +211,87 @@ pub(crate) fn replace_query_ecs(
     Ok(wire)
 }
 
+pub(crate) const EDNS_FAKEIP_OUTBOUND_CODE: u16 = 65001;
+const EDNS_FAKEIP_OUTBOUND_VERSION: u8 = 1;
+const EDNS_FAKEIP_OUTBOUND_OP_SET: u8 = 1;
+const EDNS_FAKEIP_OUTBOUND_OP_CLEAR: u8 = 2;
+
+/// Attaches the private EDNS0 FakeIP outbound option (`65001` / `0xFDE9`) to
+/// a DNS query wire, stripping any client-supplied `65001` option first while
+/// preserving existing OPT flags and ECS options.
+pub(crate) fn attach_edns_outbound(
+    raw: &[u8],
+    outbound: Option<&str>,
+) -> Result<Vec<u8>, ExecutorError> {
+    let opt = query_opt(raw)?;
+    let offset = opt.as_ref().map_or(raw.len(), |o| o.offset);
+    let mut wire = raw[..offset].to_vec();
+    if opt.is_none() {
+        let (_, question) =
+            atomdns_dns_core::parse_query(raw).map_err(|_| error("invalid FakeIP query"))?;
+        wire.truncate(12);
+        wire.extend_from_slice(&question.qname_wire);
+        wire.extend_from_slice(&question.qtype.to_be_bytes());
+        wire.extend_from_slice(&question.qclass.to_be_bytes());
+    }
+    let (fixed, mut options) = opt.map_or_else(
+        || (vec![0, 0, 41, 4, 208, 0, 0, 0, 0], Vec::new()),
+        |o| {
+            let mut filtered = Vec::new();
+            let mut cursor = 0;
+            while cursor + 4 <= o.other.len() {
+                let code = u16::from_be_bytes([o.other[cursor], o.other[cursor + 1]]);
+                let len = usize::from(u16::from_be_bytes([
+                    o.other[cursor + 2],
+                    o.other[cursor + 3],
+                ]));
+                let end = cursor + 4 + len;
+                if end > o.other.len() {
+                    break;
+                }
+                if code != EDNS_FAKEIP_OUTBOUND_CODE {
+                    filtered.extend_from_slice(&o.other[cursor..end]);
+                }
+                cursor = end;
+            }
+            if let Some(ecs) = &o.ecs {
+                filtered.extend_from_slice(&ecs.option());
+            }
+            (o.fixed, filtered)
+        },
+    );
+    let mut payload = Vec::new();
+    payload.push(EDNS_FAKEIP_OUTBOUND_VERSION);
+    match outbound.map(str::trim).filter(|tag| !tag.is_empty()) {
+        Some(tag) => {
+            payload.push(EDNS_FAKEIP_OUTBOUND_OP_SET);
+            payload.extend_from_slice(tag.as_bytes());
+        }
+        None => {
+            payload.push(EDNS_FAKEIP_OUTBOUND_OP_CLEAR);
+        }
+    }
+    options.extend_from_slice(&EDNS_FAKEIP_OUTBOUND_CODE.to_be_bytes());
+    options.extend_from_slice(
+        &u16::try_from(payload.len())
+            .map_err(|_| error("oversized outbound tag"))?
+            .to_be_bytes(),
+    );
+    options.extend_from_slice(&payload);
+    wire[10..12].copy_from_slice(&1u16.to_be_bytes());
+    wire.extend_from_slice(&fixed);
+    wire.extend_from_slice(
+        &u16::try_from(options.len())
+            .map_err(|_| error("oversized OPT"))?
+            .to_be_bytes(),
+    );
+    wire.extend_from_slice(&options);
+    if wire.len() > 65535 {
+        return Err(error("oversized FakeIP query"));
+    }
+    Ok(wire)
+}
+
 /// Consume only the returned supplier's ECS. Temporarily rename ECS option codes
 /// before decoding, preserving offsets while rejecting malformed ECS independently
 /// of the DNS answer. Re-encoding rebuilds every name compression pointer.
@@ -390,5 +471,39 @@ impl Subnet {
                 |v4| format!("{v4}/{}/0", self.source),
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod fakeip_edns_tests {
+    use super::{EDNS_FAKEIP_OUTBOUND_CODE, attach_edns_outbound, query_opt};
+    use hickory_proto::op::{Message, Query};
+    use hickory_proto::rr::{Name, RecordType};
+
+    #[test]
+    fn attach_edns_outbound_encodes_set_and_clear_and_replaces_existing_65001() {
+        let mut msg = Message::new();
+        msg.set_id(42).add_query(Query::query(
+            Name::from_ascii("openai.com.").unwrap(),
+            RecordType::A,
+        ));
+        let raw = msg.to_vec().unwrap();
+
+        let with_set = attach_edns_outbound(&raw, Some("proxy-alt")).unwrap();
+        let opt = query_opt(&with_set).unwrap().expect("OPT added");
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&EDNS_FAKEIP_OUTBOUND_CODE.to_be_bytes());
+        expected.extend_from_slice(&(11u16).to_be_bytes());
+        expected.extend_from_slice(&[1, 1]);
+        expected.extend_from_slice(b"proxy-alt");
+        assert_eq!(opt.other, expected);
+
+        let with_clear = attach_edns_outbound(&with_set, None).unwrap();
+        let opt_clear = query_opt(&with_clear).unwrap().expect("OPT replaced");
+        let mut expected_clear = Vec::new();
+        expected_clear.extend_from_slice(&EDNS_FAKEIP_OUTBOUND_CODE.to_be_bytes());
+        expected_clear.extend_from_slice(&(2u16).to_be_bytes());
+        expected_clear.extend_from_slice(&[1, 2]);
+        assert_eq!(opt_clear.other, expected_clear);
     }
 }

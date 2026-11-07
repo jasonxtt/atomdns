@@ -40,7 +40,7 @@ const active = computed(() => TABS.some(tab => tab.id === route.query.tab) ? rou
     </template>
     <template v-else-if="active === 'lists'">
       <ListEditor tag="whitelist" title="白名单" hint="名单里的域名优先命中白名单，由国内 DNS 解析。支持 full:、domain:、keyword:、regexp: 等写法。" />
-      <ListEditor tag="greylist" title="灰名单" hint="名单里的域名优先命中灰名单，由国外 DNS 解析并返回 FakeIP。写法同白名单。" />
+      <ListEditor tag="greylist" title="灰名单" hint="名单里的域名优先命中灰名单，由国外 DNS 解析并返回 FakeIP。写法同白名单，可在行尾追加可选 @出口名 指定 sing-box 出口（如 domain:openai.com @proxy-alt）。" />
     </template>
     <template v-else-if="active === 'fakeip'">
       <ListEditor tag="realiplist" title="!CN fakeip filter" hint="名单里的域名向国外 DNS 解析并返回真实 IP，不使用 FakeIP。适合必须用真实 IP 连接的域名。" />

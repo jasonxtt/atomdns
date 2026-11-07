@@ -1,6 +1,8 @@
 //! Online update of the native program, its configuration package and its WebUI.
 //!
-//! Releases come from GitHub Releases of `jasonxtt/atomdns`, tags `vX.Y.Z` only. An
+//! Releases come from GitHub Releases of `DefaWong/atomdns` (the build that bundles the
+//! customized sing-box; upstream `jasonxtt/atomdns` releases lack that integration), tags
+//! `vX.Y.Z` only. An
 //! update downloads the program, the WebUI when `<root>/ui/main` exists (`webui.rs`)
 //! and, when the release needs a newer configuration package, that package; verifies every sha256; pre-checks the candidate; and then
 //! hands over to a guard process (`update-guard`, see `guard.rs`) that replaces the
@@ -48,8 +50,8 @@ pub(crate) const RELEASE_BINARY: &str = "atomdns";
 pub(crate) const WEBUI_ASSET: &str = "atomdns-webui.tar.gz";
 /// The release asset naming every artifact's sha256 and the configuration package.
 pub(crate) const MANIFEST_ASSET: &str = "atomdns-update-manifest.json";
-const DEFAULT_API_URL: &str = "https://api.github.com/repos/jasonxtt/atomdns/releases?per_page=100";
-const RELEASE_PAGE: &str = "https://github.com/jasonxtt/atomdns/releases/tag/";
+const DEFAULT_API_URL: &str = "https://api.github.com/repos/DefaWong/atomdns/releases?per_page=100";
+const RELEASE_PAGE: &str = "https://github.com/DefaWong/atomdns/releases/tag/";
 const TAG_PREFIX: &str = "v";
 const CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(20);
@@ -641,7 +643,7 @@ mod tests {
     #[test]
     fn the_update_source_is_the_atomdns_repository() {
         for url in [DEFAULT_API_URL, RELEASE_PAGE] {
-            assert!(url.contains("jasonxtt/atomdns/"), "{url}");
+            assert!(url.contains("DefaWong/atomdns/"), "{url}");
             assert!(!url.contains("jasonxtt/mosdns"), "{url}");
             assert!(!url.contains("jasonxtt/rtdns"), "{url}");
         }

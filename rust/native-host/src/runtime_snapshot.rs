@@ -275,7 +275,13 @@ pub(crate) fn write_durably(path: &std::path::Path, bytes: &[u8]) -> std::io::Re
     name.push(format!(".tmp-{}", std::process::id()));
     let temporary = parent.join(name);
     let written = (|| {
-        let mut file = std::fs::File::create(&temporary)?;
+        // State files can hold credentials (settings.json keeps the sing-box
+        // API secret), so they are readable by the owner only.
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let mut file = options.open(&temporary)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         std::fs::rename(&temporary, path)
@@ -286,6 +292,20 @@ pub(crate) fn write_durably(path: &std::path::Path, bytes: &[u8]) -> std::io::Re
     }
     let _ = std::fs::File::open(parent).and_then(|directory| directory.sync_all());
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod write_durably_tests {
+    #[test]
+    fn durable_state_files_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = std::env::temp_dir().join(format!("durable-mode-{}", std::process::id()));
+        let path = dir.join("webinfo/settings.json");
+        super::write_durably(&path, b"{}").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(mode & 0o777, 0o600);
+    }
 }
 
 #[derive(Debug)]

@@ -35,6 +35,151 @@ pub(crate) struct Addr {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct SingboxApi {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) addr: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) secret: String,
+}
+
+impl SingboxApi {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.addr.is_empty() && self.secret.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SingboxSubscription {
+    pub(crate) name: String,
+    pub(crate) url: String,
+    #[serde(default = "default_subscription_interval")]
+    pub(crate) update_interval_hours: u32,
+    #[serde(default = "default_true")]
+    pub(crate) enabled: bool,
+    #[serde(default = "default_true")]
+    pub(crate) use_proxy: bool,
+}
+
+const fn default_subscription_interval() -> u32 {
+    24
+}
+const fn default_true() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub(crate) struct SingboxNode {
+    pub(crate) tag: String,
+    #[serde(rename = "type", default)]
+    pub(crate) kind: String,
+    #[serde(flatten)]
+    pub(crate) options: serde_json::Map<String, serde_json::Value>,
+    #[serde(default = "default_true")]
+    pub(crate) enabled: bool,
+}
+
+impl SingboxNode {
+    pub(crate) fn outbound(&self) -> serde_json::Value {
+        let mut outbound = self.options.clone();
+        outbound.insert(
+            "type".to_owned(),
+            serde_json::Value::String(self.kind.clone()),
+        );
+        outbound.insert(
+            "tag".to_owned(),
+            serde_json::Value::String(self.tag.clone()),
+        );
+        serde_json::Value::Object(outbound)
+    }
+
+    pub(crate) fn from_outbound(outbound: &serde_json::Value) -> Option<Self> {
+        let object = outbound.as_object()?;
+        let tag = object.get("tag")?.as_str()?.to_owned();
+        let kind = object.get("type")?.as_str()?.to_owned();
+        if tag.is_empty() || tag.contains('/') || kind.is_empty() {
+            return None;
+        }
+        let mut options = object.clone();
+        options.remove("tag");
+        options.remove("type");
+        options.remove("enabled");
+        Some(Self {
+            tag,
+            kind,
+            options,
+            enabled: true,
+        })
+    }
+}
+
+/// The WebUI-owned part of sing-box configuration. Empty flags leave an
+/// existing sing-box JSON configuration and its manual providers untouched.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SingboxManagement {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) group: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) providers_managed: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) subscriptions: Vec<SingboxSubscription>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) nodes_managed: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) nodes: Vec<SingboxNode>,
+}
+
+impl SingboxManagement {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.group.is_empty()
+            && !self.providers_managed
+            && self.subscriptions.is_empty()
+            && !self.nodes_managed
+            && self.nodes.is_empty()
+    }
+}
+
+pub(crate) fn validate_singbox_tag(tag: &str, what: &str) -> Result<(), String> {
+    if tag.is_empty()
+        || tag.len() > 255
+        || tag
+            .bytes()
+            .any(|b| b.is_ascii_control() || b.is_ascii_whitespace() || b == b'/')
+    {
+        return Err(format!(
+            "{what} must be a non-empty tag without whitespace or `/`"
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_singbox_management(management: &SingboxManagement) -> Result<(), String> {
+    if !management.group.is_empty() {
+        validate_singbox_tag(&management.group, "sing-box selector group")?;
+    }
+    for subscription in &management.subscriptions {
+        validate_singbox_tag(&subscription.name, "subscription name")?;
+        let url = url::Url::parse(&subscription.url)
+            .map_err(|_| "subscription URL must be http:// or https://".to_owned())?;
+        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+            return Err("subscription URL must be http:// or https://".to_owned());
+        }
+        if !(1..=8760).contains(&subscription.update_interval_hours) {
+            return Err("subscription update interval must be 1..8760 hours".to_owned());
+        }
+    }
+    for node in &management.nodes {
+        validate_singbox_tag(&node.tag, "node tag")?;
+        if node.kind.is_empty() || !node.outbound().is_object() {
+            return Err("node requires a sing-box outbound type and options".to_owned());
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct PluginSwitch {
     pub(crate) enabled: bool,
 }
@@ -285,6 +430,12 @@ pub(crate) struct Settings {
     /// Tuned `route_learner` numbers; only differences from the YAML.
     #[serde(default, skip_serializing_if = "Learning::is_empty")]
     pub(crate) learning: Learning,
+    /// Optional sing-box Clash API endpoint and secret for dynamic outbound discovery.
+    #[serde(default, skip_serializing_if = "SingboxApi::is_empty")]
+    pub(crate) singbox_api: SingboxApi,
+    /// sing-box subscriptions, manually imported outbounds and selector ownership.
+    #[serde(default, skip_serializing_if = "SingboxManagement::is_empty")]
+    pub(crate) singbox: SingboxManagement,
     /// The `feature_flag` values that differ from the YAML defaults. Unlike the
     /// other sections it is kept when empty: its presence records that the
     /// schema-2 switch files were migrated (see `config::flags`).
@@ -347,6 +498,17 @@ impl Settings {
             for entry in entries {
                 entry.use_proxy = Some(entry.proxy_switch());
                 entry.use_socks_proxy = None;
+            }
+        }
+        // The first sing-box manager stored only {tag, server, server_port}.
+        // Read that shape as a native SOCKS5 outbound; new nodes carry every
+        // protocol option returned by sing-box's share-link parser.
+        for node in &mut settings.singbox.nodes {
+            if node.kind.is_empty() && node.options.contains_key("server") {
+                node.kind = "socks".to_owned();
+                node.options
+                    .entry("version".to_owned())
+                    .or_insert_with(|| serde_json::json!("5"));
             }
         }
         Ok(settings)
@@ -476,6 +638,27 @@ fn validate_proxy_addr(addr: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validates a sing-box Clash API base URL (`http(s)://host:port` or `host:port`).
+pub(crate) fn validate_singbox_addr(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return Ok(String::new());
+    }
+    let candidate = if trimmed.contains("://") {
+        trimmed.to_owned()
+    } else {
+        format!("http://{trimmed}")
+    };
+    let parsed = url::Url::parse(&candidate).map_err(|_| "expected http://host:port".to_owned())?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || parsed.port_or_known_default().is_none()
+    {
+        return Err("expected http://host:port".to_owned());
+    }
+    Ok(candidate.trim_end_matches('/').to_owned())
+}
+
 /// An IP, optionally with `/mask` (the mask is ignored, as in quick `ecs`).
 fn validate_ecs_addr(addr: &str) -> Result<(), String> {
     let first = addr.split_whitespace().next().unwrap_or_default();
@@ -564,6 +747,12 @@ pub(super) fn apply(
     }
 
     validate_tuning(settings, &category_tags)?;
+    if !settings.singbox_api.addr.is_empty() {
+        validate_singbox_addr(&settings.singbox_api.addr)
+            .map_err(|reason| settings_error("singbox_api.addr", reason))?;
+    }
+    validate_singbox_management(&settings.singbox)
+        .map_err(|reason| settings_error("singbox", reason))?;
 
     let mut report = Vec::new();
     let mut upstreams = BTreeMap::new();
@@ -1433,6 +1622,20 @@ fn domain_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn singbox_nodes_read_legacy_socks_and_preserve_generic_protocols() {
+        let legacy = Settings::parse(br#"{"version":1,"singbox":{"nodes_managed":true,"nodes":[{"tag":"old","server":"10.0.0.4","server_port":2000,"enabled":true}]}}"#).unwrap();
+        let old = &legacy.singbox.nodes[0];
+        assert_eq!(old.kind, "socks");
+        assert_eq!(old.outbound()["version"], "5");
+        assert_eq!(old.outbound()["server_port"], 2000);
+        let native = Settings::parse(br#"{"version":1,"singbox":{"nodes_managed":true,"nodes":[{"tag":"vless","type":"vless","server":"192.0.2.1","server_port":443,"uuid":"11111111-1111-1111-1111-111111111111","tls":{"enabled":true,"server_name":"example.com"},"enabled":true}]}}"#).unwrap();
+        let node = &native.singbox.nodes[0];
+        assert_eq!(node.kind, "vless");
+        assert_eq!(node.outbound()["tls"]["server_name"], "example.com");
+        assert_eq!(Settings::parse(&native.to_bytes()).unwrap(), native);
+    }
 
     #[test]
     fn settings_round_trip_and_reject_what_they_do_not_know() {

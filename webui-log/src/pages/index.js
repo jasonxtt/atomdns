@@ -9,6 +9,7 @@ import RulesModePage from './rules/RulesModePage.vue'
 import RulesRoutingPage from './rules/RulesRoutingPage.vue'
 import RulesSpecialGroupsPage from './rules/RulesSpecialGroupsPage.vue'
 import RulesUpstreamPage from './rules/RulesUpstreamPage.vue'
+import SingBoxPage from './SingBoxPage.vue'
 import SystemPage from './system/SystemPage.vue'
 
 // Route name (see navigation.js) → page component.
@@ -24,6 +25,7 @@ const PAGE_COMPONENTS = {
   'rules-cache': RulesCachePage,
   'rules-clients': RulesClientsPage,
   'rules-special-groups': RulesSpecialGroupsPage,
+  'sing-box': SingBoxPage,
   system: SystemPage
 }
 

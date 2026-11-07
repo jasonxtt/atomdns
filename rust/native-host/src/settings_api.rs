@@ -357,6 +357,11 @@ pub(crate) async fn handle(
             },
             _ => not_allowed(),
         },
+        "/api/v1/singbox/outbounds" => match method {
+            "GET" => singbox_outbounds(config, None).await,
+            "POST" => singbox_outbounds(config, Some(body)).await,
+            _ => not_allowed(),
+        },
         _ => return None,
     };
     Some(reply)
@@ -815,7 +820,15 @@ fn overrides_get(config: &CompiledConfig) -> Reply {
     match (value("socks5_proxy"), value("ecs_address")) {
         (Ok(socks5), Ok(ecs)) => json(
             200,
-            &serde_json::json!({ "socks5": socks5, "ecs": ecs, "replacements": [] }),
+            &serde_json::json!({
+                "socks5": socks5,
+                "ecs": ecs,
+                "replacements": [],
+                "singbox_api": {
+                    "addr": config.settings.singbox_api.addr,
+                    "secret": config.settings.singbox_api.secret,
+                }
+            }),
         ),
         (Err(reason), _) | (_, Err(reason)) => text(409, &reason),
     }
@@ -828,6 +841,13 @@ async fn overrides_post(control: &RuntimeControl, body: &[u8]) -> Reply {
         original: String,
     }
     #[derive(Deserialize)]
+    struct SingboxPayload {
+        #[serde(default)]
+        addr: String,
+        #[serde(default)]
+        secret: String,
+    }
+    #[derive(Deserialize)]
     struct Payload {
         #[serde(default)]
         socks5: String,
@@ -835,6 +855,8 @@ async fn overrides_post(control: &RuntimeControl, body: &[u8]) -> Reply {
         ecs: String,
         #[serde(default)]
         replacements: Option<Vec<Replacement>>,
+        #[serde(default)]
+        singbox_api: Option<SingboxPayload>,
     }
     let payload: Payload = match serde_json::from_slice(body) {
         Ok(payload) => payload,
@@ -852,6 +874,16 @@ async fn overrides_post(control: &RuntimeControl, body: &[u8]) -> Reply {
     }
     let current = control.view();
     let mut settings = current.config.settings.clone();
+    if let Some(sb) = payload.singbox_api {
+        let normalized_addr = match crate::config::settings::validate_singbox_addr(&sb.addr) {
+            Ok(addr) => addr,
+            Err(reason) => return text(400, &format!("singbox_api.addr: {reason}")),
+        };
+        settings.singbox_api = crate::config::settings::SingboxApi {
+            addr: normalized_addr,
+            secret: sb.secret.trim().to_owned(),
+        };
+    }
     for (kind, wanted, section) in [
         ("socks5_proxy", payload.socks5.trim(), "proxies"),
         ("ecs_address", payload.ecs.trim(), "ecs"),
@@ -902,6 +934,173 @@ async fn overrides_post(control: &RuntimeControl, body: &[u8]) -> Reply {
     json(
         200,
         &serde_json::json!({ "message": "Global overrides saved and applied." }),
+    )
+}
+
+async fn singbox_outbounds(config: &CompiledConfig, override_body: Option<&[u8]>) -> Reply {
+    #[derive(Deserialize)]
+    struct TestPayload {
+        #[serde(default)]
+        addr: String,
+        #[serde(default)]
+        secret: String,
+    }
+    let (raw_addr, secret) = match override_body {
+        Some(body) if !body.is_empty() => match serde_json::from_slice::<TestPayload>(body) {
+            Ok(payload) => (payload.addr, payload.secret),
+            Err(error) => return text(400, &format!("Invalid request body: {error}")),
+        },
+        _ => (
+            config.settings.singbox_api.addr.clone(),
+            config.settings.singbox_api.secret.clone(),
+        ),
+    };
+    let base = match crate::config::settings::validate_singbox_addr(&raw_addr) {
+        Ok(addr) => addr,
+        Err(reason) => {
+            return json(
+                200,
+                &serde_json::json!({
+                    "configured": true,
+                    "error": reason,
+                    "default_outbound": "",
+                    "outbounds": [],
+                }),
+            );
+        }
+    };
+    if base.is_empty() {
+        return json(
+            200,
+            &serde_json::json!({
+                "configured": false,
+                "default_outbound": "",
+                "outbounds": [],
+            }),
+        );
+    }
+    let url = format!("{base}/proxies");
+    let cancel = atomdns_upstream_core::TransportCancellation::new();
+    let response = crate::rule_download::call(
+        crate::rule_download::Call {
+            method: "GET",
+            url: &url,
+            body: None,
+            bearer_token: (!secret.trim().is_empty()).then_some(secret.trim()),
+            socks5: "",
+            timeout: std::time::Duration::from_secs(3),
+            max_bytes: 4 * 1024 * 1024,
+            roots: None,
+            follow: false,
+            error_body: true,
+        },
+        &cancel,
+    )
+    .await;
+    let (status, bytes) = match response {
+        Ok(pair) => pair,
+        Err(error) => {
+            return json(
+                200,
+                &serde_json::json!({
+                    "configured": true,
+                    "error": error,
+                    "default_outbound": "",
+                    "outbounds": [],
+                }),
+            );
+        }
+    };
+    if status != 200 {
+        return json(
+            200,
+            &serde_json::json!({
+                "configured": true,
+                "error": format!("sing-box API status {status}"),
+                "default_outbound": "",
+                "outbounds": [],
+            }),
+        );
+    }
+    let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return json(
+            200,
+            &serde_json::json!({
+                "configured": true,
+                "error": "invalid JSON from sing-box /proxies",
+                "default_outbound": "",
+                "outbounds": [],
+            }),
+        );
+    };
+    let Some(proxies) = parsed.get("proxies").and_then(serde_json::Value::as_object) else {
+        return json(
+            200,
+            &serde_json::json!({
+                "configured": true,
+                "error": "missing proxies map in sing-box response",
+                "default_outbound": "",
+                "outbounds": [],
+            }),
+        );
+    };
+    let default_outbound = proxies
+        .get("GLOBAL")
+        .and_then(|g| g.get("now"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let mut ordered_names: Vec<String> = proxies
+        .get("GLOBAL")
+        .and_then(|g| g.get("all"))
+        .and_then(serde_json::Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    for key in proxies.keys() {
+        if key != "GLOBAL" && !ordered_names.iter().any(|existing| existing == key) {
+            ordered_names.push(key.clone());
+        }
+    }
+    let mut outbounds = Vec::new();
+    for name in ordered_names {
+        let Some(info) = proxies.get(&name).and_then(serde_json::Value::as_object) else {
+            continue;
+        };
+        let kind = info
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if matches!(
+            kind.to_ascii_lowercase().as_str(),
+            "dns" | "reject" | "block"
+        ) {
+            continue;
+        }
+        let now = info
+            .get("now")
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.is_empty());
+        let is_group = info.get("all").is_some();
+        outbounds.push(serde_json::json!({
+            "name": name,
+            "type": kind,
+            "now": now,
+            "is_group": is_group,
+            "is_default": name == default_outbound,
+        }));
+    }
+    json(
+        200,
+        &serde_json::json!({
+            "configured": true,
+            "default_outbound": default_outbound,
+            "outbounds": outbounds,
+        }),
     )
 }
 
@@ -1070,4 +1269,23 @@ async fn generation_post(control: &RuntimeControl, body: &[u8]) -> Reply {
         200,
         &serde_json::json!({ "settings": after.json(), "flush_targets": flush }),
     )
+}
+
+#[cfg(test)]
+mod singbox_tests {
+    use crate::config::providers::parse_rule_outbound;
+
+    #[test]
+    fn parse_rule_outbound_extracts_optional_suffix_and_rejects_malformed() {
+        assert_eq!(
+            parse_rule_outbound("domain:openai.com @proxy-alt").unwrap(),
+            ("domain:openai.com", Some("proxy-alt"))
+        );
+        assert_eq!(
+            parse_rule_outbound("full:claude.ai").unwrap(),
+            ("full:claude.ai", None)
+        );
+        assert!(parse_rule_outbound(" @proxy-alt").is_err());
+        assert!(parse_rule_outbound("domain:openai.com @").is_err());
+    }
 }

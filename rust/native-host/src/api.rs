@@ -2608,6 +2608,16 @@ async fn dispatch(
             headers: reply.headers,
         };
     }
+    if let Some(reply) =
+        crate::singbox_api::handle(control, config, &request.method, path, &request.body).await
+    {
+        return Response {
+            status: reply.status,
+            content_type: reply.content_type,
+            body: reply.body,
+            headers: reply.headers,
+        };
+    }
     // The `-d` root (where `webinfo/` lives), else the configuration file's directory.
     let webinfo_root = config
         .reload
@@ -3112,6 +3122,12 @@ fn ui_operations(config: &CompiledConfig) -> serde_json::Value {
             id.to_owned(),
             serde_json::json!({"supported": true, "reason": null}),
         );
+    }
+    for (id, supported) in [
+        ("singbox.read", true),
+        ("singbox.manage", config.reload.is_some()),
+    ] {
+        operations.insert(id.to_owned(), serde_json::json!({"supported": supported, "reason": if supported { None } else { Some("sing-box 管理需要文件配置") }}));
     }
     for (id, supported, reason) in [
         (

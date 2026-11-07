@@ -26,12 +26,12 @@ async function routerAt(path) {
   return router
 }
 
-test('the four modules carry the eight rule sub-items; logs has a diagnostic page; system is one page', () => {
-  assert.deepEqual(NAV_MODULES.map((module) => module.label), ['概览', '日志', '规则设置', '系统管理'])
+test('the five modules carry the eight rule sub-items; logs has a diagnostic page; system is one page', () => {
+  assert.deepEqual(NAV_MODULES.map((module) => module.label), ['概览', '日志', '规则设置', 'sing-box', '系统管理'])
   assert.deepEqual(RULE_SECTIONS.map((item) => item.label), ['运行模式', '上游设置', '分流规则', '请求屏蔽', '域名学习', '缓存设置', '客户端', '专属分流组'])
   assert.deepEqual(NAV_MODULES.filter((module) => module.items.length > 0).map((module) => module.id), ['rules'])
   assert.deepEqual(PAGES.filter((page) => /^\/(logs|system)/.test(page.path)).map((page) => page.path), ['/logs', '/logs/diagnostic', '/system'])
-  assert.equal(PAGES.length, 3 + 8 + 1)
+  assert.equal(PAGES.length, 3 + 8 + 1 + 1)
   assert.equal(new Set(PAGES.map((page) => page.path)).size, PAGES.length)
 })
 

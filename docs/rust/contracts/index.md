@@ -24,6 +24,7 @@ These files are short, source-backed rules for MosDNS-T backend and Rust migrati
 
 | [Native aliapi/rewrite/webinfo](native-aliapi-rewrite-webinfo.md) | YAML-only `aliapi` with SOCKS5 for TCP-based upstreams, `rewrite` rules and API, `webinfo` document API (M1-b1); runtime overrides excluded |
 | [Native typed settings](native-settings.md) | `socks5_proxy`/`ecs_address` objects and `$tag` references, `webinfo/settings.json`, effective configuration with sources, hot apply, WebUI settings routes, `aliapi` `show_when` and `/api/v1/upstream/groups` (v0.4.0) |
+| [Native sing-box integration](native-singbox-integration.md) | Single-decision FakeIP outbound binding, private EDNS0 65001, native subscription/node management, configuration reload and recovery; simplified full node ownership, deployed test evidence and remaining acceptance work as of 2026-11-07 |
 | [Native `requery`](native-requery.md) | Scheduled / triggered re-query job, reference state file, shared in-process URL actions, scheduler and API |
 | [Native `domain_output`](native-domain-output.md) | Name statistics (the access ranking), reference file formats, rule publication, `/show` `/save` `/flush` API; mapper injection moved to `route_learner` |
 | [Native `route_learner`](native-route-learner.md) | Learned routing facts (remembered direct/proxy, no-V4/no-V6, special names): per-entry expiry, mapper merge, state file, hot-apply hand-over, `show`/`save`/`flush`/`entries`/`status`, config schema 2 |

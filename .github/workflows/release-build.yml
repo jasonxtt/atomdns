@@ -3,6 +3,9 @@ name: Build atomdns release artifacts
 # Manual only, and build-only: it never tags or publishes. Run it from the Actions tab or
 # `gh workflow run release-build.yml --ref main -f tag=vX.Y.Z`, download the `release-<tag>`
 # artifact, check it, then create the GitHub Release by hand (docs/rust/release.md).
+# The artifact holds every release asset: the AtomDNS programs, WebUI and manifest, and the
+# one-step installer assets (customized sing-box at the commit pinned in
+# scripts/installer-assets.json, config_rust.zip, install.sh, SHA256SUMS).
 on:
   workflow_dispatch:
     inputs:
@@ -20,46 +23,79 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@1.96.0
         with:
-          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,armv7-unknown-linux-musleabihf,aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf
+          targets: x86_64-unknown-linux-musl
       - name: Set up Node
         uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: npm
           cache-dependency-path: webui-log/package-lock.json
-      - name: Install the cross toolchain and qemu
-        # zig is the C cross compiler/linker for the static musl ARM builds (ring has C and asm);
-        # qemu-user-static runs the ARM programs for `atomdns version` and the smoke test below.
+      - name: Install the musl toolchain
+        # zig is the C compiler/linker for the static musl build (ring has C and asm).
+        # DefaWong/atomdns ships x86_64 only.
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq qemu-user-static binutils-multiarch libc6-arm64-cross libc6-armhf-cross
+          sudo apt-get install -y jq
           pip install ziglang cargo-zigbuild
       - name: Build
         env:
           TAG: ${{ inputs.tag }}
         run: |
-          VARIANTS="amd64 amd64-v3 amd64-musl arm64 armv7 arm64-gnu armv7-gnu" scripts/build-rust-release.sh "${TAG}" release/rust
+          VARIANTS="amd64 amd64-v3 amd64-musl" scripts/build-rust-release.sh "${TAG}" release/rust
       - name: Check the artifacts
         working-directory: release/rust
         run: |
           ls -l
           jq '.version, (.artifacts | keys)' atomdns-update-manifest.json
-          for variant in amd64 amd64-v3 amd64-musl arm64 armv7 arm64-gnu armv7-gnu; do
+          for variant in amd64 amd64-v3 amd64-musl; do
             mkdir "verify-${variant}"
             tar -xzf "atomdns-linux-${variant}.tar.gz" -C "verify-${variant}"
             file "verify-${variant}/atomdns"
-            case "${variant}" in amd64|amd64-v3|arm64-gnu|armv7-gnu)
+            case "${variant}" in amd64|amd64-v3)
               # the glibc programs must not need a newer glibc than the Debian 12 baseline (2.36)
               need="$(objdump -T "verify-${variant}/atomdns" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n 1)"
               echo "${variant} needs ${need}"
               [ "$(printf '%s\nGLIBC_2.36\n' "${need}" | sort -V | tail -n 1)" = "GLIBC_2.36" ] ;;
             esac
-            case "${variant}" in arm64-gnu) export QEMU_LD_PREFIX=/usr/aarch64-linux-gnu ;; armv7-gnu) export QEMU_LD_PREFIX=/usr/arm-linux-gnueabihf ;; *) unset QEMU_LD_PREFIX ;; esac
             "./verify-${variant}/atomdns" version
             rm -r "verify-${variant}"
           done
+      - name: Read the installer pins
+        run: |
+          {
+            echo "SINGBOX_REPOSITORY=$(jq -r .singbox.repository scripts/installer-assets.json)"
+            echo "SINGBOX_COMMIT=$(jq -r .singbox.commit scripts/installer-assets.json)"
+            echo "CONFIG_URL=$(jq -r .config_full.url scripts/installer-assets.json)"
+          } >>"$GITHUB_ENV"
+      - name: Check out the customized sing-box
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.SINGBOX_REPOSITORY }}
+          ref: ${{ env.SINGBOX_COMMIT }}
+          path: sing-box-src
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: sing-box-src/go.mod
+          cache: false
+      - name: Package the installer assets
+        run: |
+          curl -fsSL --retry 3 -o release/config_rust.zip "${CONFIG_URL}"
+          ATOMDNS_MUSL_TGZ=release/rust/atomdns-linux-amd64-musl.tar.gz \
+          WEBUI_TGZ=release/rust/atomdns-webui.tar.gz \
+          CONFIG_ZIP=release/config_rust.zip \
+          SINGBOX_SRC=sing-box-src \
+            scripts/package-installer-assets.sh release/installer
+          cp release/rust/atomdns-linux-amd64.tar.gz release/rust/atomdns-linux-amd64-v3.tar.gz \
+            release/rust/atomdns-update-manifest.json release/installer/
+          mkdir verify-sing-box
+          tar -xzf release/installer/sing-box-linux-amd64.tar.gz -C verify-sing-box
+          ./verify-sing-box/sing-box version
+          rm -r verify-sing-box sing-box-src
+          ls -l release/installer
       - uses: actions/upload-artifact@v6
         with:
           name: release-${{ inputs.tag }}
-          path: release/rust/*
+          path: release/installer/*
           if-no-files-found: error
