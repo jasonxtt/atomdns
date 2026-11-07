@@ -7,7 +7,7 @@ import { changeFailure, changeMessage, flagsForPage, optionLabel, pageOfFlag, ru
 import { RULE_SECTIONS } from '../src/navigation.js'
 import { createAppRouter } from '../src/router.js'
 import { aliasMapFromRows, aliasRowsFrom, aliasesChanged, normalizeAliasMap } from '../src/utils/clientAliases.js'
-import { LIST_LINE_CAP, canSaveList, canonicalRules, filterLines, readList, sameRules, showUrl } from '../src/utils/ruleList.js'
+import { LIST_LINE_CAP, applyOutboundTag, canSaveList, canonicalRules, filterLines, readList, sameRules, showUrl } from '../src/utils/ruleList.js'
 import { BASE_SUBSCRIPTIONS, CUSTOM_SUBSCRIPTIONS, ROUTING_SUBSCRIPTIONS, SUBSCRIPTION_FORMATS, canDeleteRule, defaultAddress, disableWarning, emptyCatalogs, inferFromUrl, isDownloaded, needsCategory, needsDisableConfirm, ruleFields, sortRules, withFormat } from '../src/utils/subscription.js'
 import { clearDirty, hasUnsaved, resetUnsaved, setDirty } from '../src/utils/unsaved.js'
 
@@ -330,6 +330,35 @@ test('a subscription counts as downloaded with a rule count or an update time', 
   assert.equal(isDownloaded(undefined), false)
   assert.deepEqual(ruleFields({ name: 'a', __tag: 'x', __label: 'y' }), { name: 'a' }, 'page-only fields are not saved')
   assert.deepEqual(sortRules([{ name: 'b', enabled: false }, { name: 'a', enabled: true }]).map((rule) => rule.name), ['a', 'b'])
+})
+
+test('cusnocn subscriptions preserve non-empty outbound and omit it when empty or on other types', () => {
+  assert.deepEqual(ruleFields({ name: 'a', type: 'cusnocn', outbound: ' proxy-alt ', __tag: 'cusnocn' }), { name: 'a', type: 'cusnocn', outbound: 'proxy-alt' })
+  assert.equal('outbound' in ruleFields({ name: 'a', type: 'cusnocn', outbound: '  ' }), false)
+  assert.equal('outbound' in ruleFields({ name: 'a', type: 'cuscn', outbound: 'proxy-alt' }), false)
+  assert.deepEqual(withFormat({}, { name: 'a', type: 'cusnocn', url: 'https://example.com/a.txt', outbound: 'proxy-main' }, 'auto'), { name: 'a', type: 'cusnocn', url: 'https://example.com/a.txt', outbound: 'proxy-main' })
+  assert.equal('outbound' in withFormat({ outbound: 'proxy-main' }, { name: 'a', type: 'cusnocn', url: 'https://example.com/a.txt', outbound: '' }, 'auto'), false)
+  assert.equal('outbound' in withFormat({ outbound: 'proxy-main' }, { name: 'a', type: 'cuscn', url: 'https://example.com/a.txt', outbound: 'proxy-main' }, 'auto'), false)
+  const subSource = read('../src/components/rules/SubscriptionTable.vue')
+  assert.match(subSource, /props\.catalogs\.some\(\(c\) => c\.type === 'cusnocn'\)/)
+  assert.match(subSource, /getJSON\('\/api\/v1\/singbox\/outbounds'\)/)
+  assert.match(subSource, /rule\.type === 'cusnocn' && rule\.outbound/)
+  assert.match(subSource, /· 出口: \{\{ rule\.outbound \}\}/)
+  assert.match(subSource, /v-if="!adguard && editor\.type === 'cusnocn'"/)
+  assert.match(subSource, /<label>目标出口<\/label>/)
+})
+
+test('greylist hints and toolbar support appending @outbound to rules', () => {
+  assert.equal(applyOutboundTag('domain:openai.com\ndomain:claude.ai', 'proxy-alt', 5), 'domain:openai.com @proxy-alt\ndomain:claude.ai')
+  assert.equal(applyOutboundTag('domain:openai.com @proxy-main', 'proxy-alt'), 'domain:openai.com @proxy-alt')
+  assert.equal(applyOutboundTag('', 'proxy-alt'), '@proxy-alt')
+  const routingSource = read('../src/pages/rules/RulesRoutingPage.vue')
+  assert.match(routingSource, /@出口名/)
+  assert.match(routingSource, /如 domain:openai\.com @proxy-alt/)
+  const listSource = read('../src/components/rules/ListEditor.vue')
+  assert.match(listSource, /props\.tag === 'greylist'/)
+  assert.match(listSource, /getJSON\('\/api\/v1\/singbox\/outbounds'\)/)
+  assert.match(listSource, /data-greylist-outbound-helper/)
 })
 
 test('client aliases: rows list saved aliases and recent clients; empty names are dropped', () => {

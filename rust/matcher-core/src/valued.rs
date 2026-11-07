@@ -16,6 +16,8 @@ pub struct ValuedRule {
     pub ctx_marks: Vec<u32>,
     pub joined_tags: String,
     pub joined_sources: String,
+    pub outbound_priority: u8,
+    pub outbound: Option<String>,
 }
 
 impl ValuedRule {
@@ -39,7 +41,16 @@ impl ValuedRule {
             ctx_marks: ctx_marks.into_iter().collect(),
             joined_tags: joined_tags.into(),
             joined_sources: joined_sources.into(),
+            outbound_priority: 0,
+            outbound: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_outbound(mut self, priority: u8, outbound: impl Into<String>) -> Self {
+        self.outbound_priority = priority;
+        self.outbound = Some(outbound.into());
+        self
     }
 }
 
@@ -52,6 +63,8 @@ pub struct ValuedRuleRef<'a> {
     pub ctx_marks: &'a [u32],
     pub joined_tags: &'a str,
     pub joined_sources: &'a str,
+    pub outbound_priority: u8,
+    pub outbound: &'a str,
 }
 
 impl<'a> From<&'a ValuedRule> for ValuedRuleRef<'a> {
@@ -62,6 +75,8 @@ impl<'a> From<&'a ValuedRule> for ValuedRuleRef<'a> {
             ctx_marks: &rule.ctx_marks,
             joined_tags: &rule.joined_tags,
             joined_sources: &rule.joined_sources,
+            outbound_priority: rule.outbound_priority,
+            outbound: rule.outbound.as_deref().unwrap_or(""),
         }
     }
 }
@@ -73,6 +88,8 @@ pub struct ValuedMatchResult {
     pub ctx_marks: Vec<u32>,
     pub joined_tags: String,
     pub joined_sources: String,
+    pub outbound_priority: u8,
+    pub outbound: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -112,6 +129,7 @@ struct AccumulatedResult {
     ctx_marks: BTreeSet<u32>,
     joined_tags: String,
     joined_sources: String,
+    outbound: Option<(u8, String)>,
 }
 
 impl AccumulatedResult {
@@ -120,6 +138,15 @@ impl AccumulatedResult {
         self.ctx_marks.extend(rule.ctx_marks.iter().copied());
         append_joined_value(&mut self.joined_tags, rule.joined_tags);
         append_joined_value(&mut self.joined_sources, rule.joined_sources);
+        if rule.outbound_priority > 0 && !rule.outbound.is_empty() {
+            match &self.outbound {
+                None => self.outbound = Some((rule.outbound_priority, rule.outbound.to_owned())),
+                Some((prio, _)) if rule.outbound_priority > *prio => {
+                    self.outbound = Some((rule.outbound_priority, rule.outbound.to_owned()));
+                }
+                _ => {}
+            }
+        }
     }
 
     fn merge_result(&mut self, other: &Self) {
@@ -127,14 +154,32 @@ impl AccumulatedResult {
         self.ctx_marks.extend(other.ctx_marks.iter().copied());
         append_joined_value(&mut self.joined_tags, &other.joined_tags);
         append_joined_value(&mut self.joined_sources, &other.joined_sources);
+        if let Some((other_prio, other_out)) = &other.outbound {
+            match &self.outbound {
+                None => self.outbound = Some((*other_prio, other_out.clone())),
+                Some((self_prio, _)) if *other_prio > *self_prio => {
+                    self.outbound = Some((*other_prio, other_out.clone()));
+                }
+                _ => {}
+            }
+        }
     }
 
     fn into_result(self) -> ValuedMatchResult {
+        let (outbound_priority, outbound) = match self.outbound {
+            Some((prio, tag)) if !tag.is_empty() && !tag.eq_ignore_ascii_case("default") => {
+                (prio, Some(tag))
+            }
+            Some((prio, _)) => (prio, None),
+            None => (0, None),
+        };
         ValuedMatchResult {
             fast_marks: self.fast_marks,
             ctx_marks: self.ctx_marks.into_iter().collect(),
             joined_tags: self.joined_tags,
             joined_sources: self.joined_sources,
+            outbound_priority,
+            outbound,
         }
     }
 }
@@ -216,6 +261,9 @@ pub struct ValuedDomainMatcher {
     pooled_result_count: usize,
 }
 
+/// The fields that identify one rule record's accumulated result.
+type RecordKey<'a> = (u64, &'a [u32], &'a str, &'a str, u8, &'a str);
+
 impl ValuedDomainMatcher {
     /// Builds an immutable matcher from one complete ordered rule batch.
     ///
@@ -237,7 +285,7 @@ impl ValuedDomainMatcher {
         // results; `slot` finds a rule string's position.
         let mut accumulated = AccPool::new();
         // A rule record's result id, by its fields: records of one list repeat them.
-        let mut record_ids: HashMap<(u64, &[u32], &str, &str), u32> = HashMap::new();
+        let mut record_ids: HashMap<RecordKey<'_>, u32> = HashMap::new();
         let mut entries: Vec<(&str, u32)> = Vec::with_capacity(rules.len());
         let mut slot: HashMap<&str, usize> = HashMap::with_capacity(rules.len());
         let mut full_own: HashMap<String, u32> = HashMap::new();
@@ -249,6 +297,8 @@ impl ValuedDomainMatcher {
                     rule.ctx_marks,
                     rule.joined_tags,
                     rule.joined_sources,
+                    rule.outbound_priority,
+                    rule.outbound,
                 ))
                 .or_insert_with(|| accumulated.of_rule(rule));
             if kind == RuleKind::Full && pattern.is_ascii() {
@@ -579,18 +629,20 @@ fn merge_results(
     current: Option<ValuedMatchResult>,
     next: &ValuedMatchResult,
 ) -> ValuedMatchResult {
-    let mut merged = current.map_or_else(AccumulatedResult::default, |result| AccumulatedResult {
+    let to_accumulated = |result: ValuedMatchResult| AccumulatedResult {
         fast_marks: result.fast_marks,
         ctx_marks: result.ctx_marks.into_iter().collect(),
         joined_tags: result.joined_tags,
         joined_sources: result.joined_sources,
-    });
-    let next = AccumulatedResult {
-        fast_marks: next.fast_marks,
-        ctx_marks: next.ctx_marks.iter().copied().collect(),
-        joined_tags: next.joined_tags.clone(),
-        joined_sources: next.joined_sources.clone(),
+        outbound: (result.outbound_priority > 0).then(|| {
+            (
+                result.outbound_priority,
+                result.outbound.unwrap_or_else(|| "default".to_owned()),
+            )
+        }),
     };
+    let mut merged = current.map_or_else(AccumulatedResult::default, to_accumulated);
+    let next = to_accumulated(next.clone());
     merged.merge_result(&next);
     merged.into_result()
 }
@@ -1006,5 +1058,64 @@ mod tests {
             "source-0|source-1|source-2|source-3|source-4"
         );
         assert_ne!(result.fast_marks, 0);
+    }
+
+    #[test]
+    fn outbound_merges_by_tier_priority_and_specificity() {
+        let rules = vec![
+            ValuedRule::new("domain:openai.com", 1, [], "代理域名", "cusnocn")
+                .with_outbound(1, "proxy-main"),
+            ValuedRule::new("domain:sub.openai.com", 1, [], "代理域名", "cusnocn")
+                .with_outbound(1, "proxy-sub"),
+            ValuedRule::new("full:api.openai.com", 1, [], "代理域名", "cusnocn")
+                .with_outbound(1, "proxy-api"),
+            ValuedRule::new("domain:openai.com", 2, [], "非中国域名", "geosite_no_cn"),
+            ValuedRule::new("domain:override.openai.com", 4, [], "灰名单", "greylist")
+                .with_outbound(2, "proxy-grey"),
+            ValuedRule::new("domain:reset.openai.com", 4, [], "灰名单", "greylist")
+                .with_outbound(2, "default"),
+        ];
+        let matcher = ValuedDomainMatcher::build(&rules).expect("valid valued rules");
+
+        assert_eq!(
+            matcher
+                .r#match("www.openai.com")
+                .unwrap()
+                .outbound
+                .as_deref(),
+            Some("proxy-main")
+        );
+        assert_eq!(
+            matcher
+                .r#match("x.sub.openai.com")
+                .unwrap()
+                .outbound
+                .as_deref(),
+            Some("proxy-sub")
+        );
+        assert_eq!(
+            matcher
+                .r#match("api.openai.com")
+                .unwrap()
+                .outbound
+                .as_deref(),
+            Some("proxy-api")
+        );
+        assert_eq!(
+            matcher
+                .r#match("a.override.openai.com")
+                .unwrap()
+                .outbound
+                .as_deref(),
+            Some("proxy-grey")
+        );
+        assert_eq!(
+            matcher
+                .r#match("a.reset.openai.com")
+                .unwrap()
+                .outbound
+                .as_deref(),
+            None
+        );
     }
 }

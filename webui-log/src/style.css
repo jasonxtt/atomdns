@@ -2459,6 +2459,24 @@ label.switch-table *,
   max-width: 100%;
 }
 
+.rt-list-outbound-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.rt-list-outbound-label {
+  font-size: 0.8rem;
+}
+
+.rt-list-outbound-select {
+  width: auto;
+  min-width: 160px;
+  max-width: 100%;
+}
+
 .rt-list-text {
   box-sizing: border-box;
   width: 100%;
@@ -3777,4 +3795,22 @@ a.btn {
 @keyframes rt-found-flash {
   0%, 40% { box-shadow: 0 0 0 2px var(--rp-pine); background: var(--rp-selected); }
   100% { box-shadow: 0 0 0 2px transparent; }
+}
+
+/* sing-box subscription and node management */
+.rt-singbox-overview .rt-list-head { align-items: flex-start; gap: 16px; }
+.rt-singbox-overview h2 { margin: 0 0 6px; font-size: 20px; }
+.rt-singbox-summary { display: flex; flex-wrap: wrap; gap: 10px 24px; color: var(--ink-1); font-size: 13px; }
+.rt-singbox-summary strong { color: var(--ink-0); }
+.rt-singbox-group-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
+.rt-singbox-selector { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 0 0 16px; }
+.rt-singbox-selector select { min-width: min(100%, 280px); max-width: 100%; }
+.rt-singbox-selected td { background: var(--surface-active); }
+.rt-singbox-selected .rt-flag-mark { margin-left: 8px; }
+.rt-singbox-page .rt-sub-table td:nth-child(1) { max-width: 360px; overflow-wrap: break-word; }
+@media (max-width: 640px) {
+  .rt-singbox-selector { align-items: stretch; flex-direction: column; }
+  .rt-singbox-selector select { width: 100%; min-width: 0; }
+  .rt-singbox-selector .btn { align-self: flex-start; }
+  .rt-singbox-page .rt-sub-table { min-width: 640px; }
 }

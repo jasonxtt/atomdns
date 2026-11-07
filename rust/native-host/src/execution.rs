@@ -1548,9 +1548,16 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                 // response-owned snapshot, but start the parent with an
                 // empty audit-routing candidate so stale child provenance
                 // cannot become the parent's final decision.
-                machine.state_mut().routing = RoutingState::default();
+                let proxy_outbound = machine.state().routing.proxy_outbound.clone();
+                machine.state_mut().routing = RoutingState {
+                    proxy_outbound: proxy_outbound.clone(),
+                    ..RoutingState::default()
+                };
                 machine.state_mut().domain_set_overlay = None;
-                facts.routing = RoutingState::default();
+                facts.routing = RoutingState {
+                    proxy_outbound,
+                    ..RoutingState::default()
+                };
                 facts.routing_changed_since_response = false;
                 step = match machine.resume_scope_completion(completion.token()) {
                     Ok(step) => step,
@@ -1994,14 +2001,20 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                         facts.set_response_source(ResponseSource::Local);
                         return result_from_state(&machine, &header, &question, facts);
                     };
+                    let expected_outbound = machine.state().routing.proxy_outbound.as_deref();
                     let lookup =
                         store
                             .lookup_entry_counted(raw, true)
                             .ok()
                             .flatten()
                             .filter(|hit| {
-                                hit.state == atomdns_cache_core::LookupState::Fresh
-                                    || options.refresh_environment.is_some()
+                                (hit.state == atomdns_cache_core::LookupState::Fresh
+                                    || options.refresh_environment.is_some())
+                                    && hit
+                                        .origin
+                                        .as_ref()
+                                        .and_then(|o| o.proxy_outbound.as_deref())
+                                        == expected_outbound
                             });
                     if let Some(hit) = lookup {
                         if hit.state == atomdns_cache_core::LookupState::Lazy {
@@ -2095,10 +2108,20 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                 facts.in_flight_executable = Some(dispatch.executable());
                 facts.checkpoint.begin_attempt_ledger();
                 facts.install_root_attempt_trace(dispatch.executable(), question.qtype);
+                let outbound_wire = is_nocnfake_executable(config, dispatch.executable())
+                    .then(|| {
+                        crate::ecs::attach_edns_outbound(
+                            raw,
+                            machine.state().routing.proxy_outbound.as_deref(),
+                        )
+                        .ok()
+                    })
+                    .flatten();
+                let query_wire = outbound_wire.as_deref().unwrap_or(raw);
                 let exchange = executor
                     .exchange_invocation(
                         dispatch.executable(),
-                        raw,
+                        query_wire,
                         request_deadline,
                         request_shutdown.clone(),
                         facts.checkpoint.attempt_ledger_handle(),
@@ -2147,6 +2170,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                                     batch.selected_peer,
                                     &attempt_ledger,
                                     branch_transport(batch.response.transport()),
+                                    machine.state().routing.proxy_outbound.clone(),
                                 );
                                 machine
                                     .state_mut()
@@ -2827,13 +2851,19 @@ async fn drive_branch_inner<'a, E: ExchangeExecutor + ?Sized>(
                             )),
                         );
                     };
+                    let expected_outbound = machine.state().routing.proxy_outbound.as_deref();
                     if let Some(hit) = store
                         .lookup_entry_counted(context.raw(), context.refresh_environment.is_some())
                         .ok()
                         .flatten()
                         .filter(|hit| {
-                            hit.state == atomdns_cache_core::LookupState::Fresh
-                                || context.refresh_environment.is_some()
+                            (hit.state == atomdns_cache_core::LookupState::Fresh
+                                || context.refresh_environment.is_some())
+                                && hit
+                                    .origin
+                                    .as_ref()
+                                    .and_then(|o| o.proxy_outbound.as_deref())
+                                    == expected_outbound
                         })
                     {
                         if hit.state == atomdns_cache_core::LookupState::Lazy {
@@ -2896,11 +2926,21 @@ async fn drive_branch_inner<'a, E: ExchangeExecutor + ?Sized>(
                 let ledger = new_branch_ledger(&context, dispatch.executable());
                 let mut ledger_guard =
                     BranchLedgerGuard::new(&context, dispatch.executable(), ledger.clone(), None);
+                let outbound_wire = is_nocnfake_executable(context.config, dispatch.executable())
+                    .then(|| {
+                        crate::ecs::attach_edns_outbound(
+                            context.raw(),
+                            machine.state().routing.proxy_outbound.as_deref(),
+                        )
+                        .ok()
+                    })
+                    .flatten();
+                let query_wire = outbound_wire.as_deref().unwrap_or_else(|| context.raw());
                 let exchange = context
                     .executor
                     .exchange_invocation(
                         dispatch.executable(),
-                        context.raw(),
+                        query_wire,
                         context.deadline,
                         branch_cancellation,
                         ledger.clone(),
@@ -2922,6 +2962,7 @@ async fn drive_branch_inner<'a, E: ExchangeExecutor + ?Sized>(
                         batch.selected_peer,
                         &ledger.borrow(),
                         branch_transport(batch.response.transport()),
+                        machine.state().routing.proxy_outbound.clone(),
                     )
                 });
                 let response = match &exchange {
@@ -3223,13 +3264,19 @@ fn run_target<'a, E: ExchangeExecutor + ?Sized>(
                             )),
                         );
                     };
+                    let expected_outbound = successor.state().routing.proxy_outbound.as_deref();
                     if let Some(hit) = store
                         .lookup_entry_counted(context.raw(), context.refresh_environment.is_some())
                         .ok()
                         .flatten()
                         .filter(|hit| {
-                            hit.state == atomdns_cache_core::LookupState::Fresh
-                                || context.refresh_environment.is_some()
+                            (hit.state == atomdns_cache_core::LookupState::Fresh
+                                || context.refresh_environment.is_some())
+                                && hit
+                                    .origin
+                                    .as_ref()
+                                    .and_then(|o| o.proxy_outbound.as_deref())
+                                    == expected_outbound
                         })
                     {
                         if hit.state == atomdns_cache_core::LookupState::Lazy {
@@ -3276,11 +3323,21 @@ fn run_target<'a, E: ExchangeExecutor + ?Sized>(
                 let ledger = new_branch_ledger(&context, executable);
                 let mut ledger_guard =
                     BranchLedgerGuard::new(&context, executable, ledger.clone(), None);
+                let outbound_wire = is_nocnfake_executable(context.config, executable)
+                    .then(|| {
+                        crate::ecs::attach_edns_outbound(
+                            context.raw(),
+                            successor.state().routing.proxy_outbound.as_deref(),
+                        )
+                        .ok()
+                    })
+                    .flatten();
+                let query_wire = outbound_wire.as_deref().unwrap_or_else(|| context.raw());
                 let exchange = context
                     .executor
                     .exchange_invocation(
                         executable,
-                        context.raw(),
+                        query_wire,
                         context.deadline,
                         cancellation,
                         ledger.clone(),
@@ -3326,6 +3383,7 @@ fn run_target<'a, E: ExchangeExecutor + ?Sized>(
                         batch.selected_peer,
                         &ledger.borrow(),
                         branch_transport(batch.response.transport()),
+                        successor.state().routing.proxy_outbound.clone(),
                     )
                 });
                 let source = exchange
@@ -4174,6 +4232,19 @@ fn invocation_identity(
         .map(|entry| entry.identity.clone())
 }
 
+fn is_nocnfake_executable(config: &CompiledConfig, executable: ExecutableId) -> bool {
+    config
+        .forwards
+        .iter()
+        .any(|forward| forward.executable == executable && forward.tag == "nocnfake")
+        || config
+            .forward_invocations
+            .iter()
+            .find(|invocation| invocation.executable == executable)
+            .and_then(|invocation| config.forward_definitions.get(invocation.definition))
+            .is_some_and(|definition| definition.tag == "nocnfake")
+}
+
 fn invocation_response_origin(
     config: &CompiledConfig,
     executable: ExecutableId,
@@ -4181,6 +4252,7 @@ fn invocation_response_origin(
     peer: Option<SocketAddr>,
     ledger: &UpstreamAttemptLedger,
     fallback_transport: UpstreamTransport,
+    proxy_outbound: Option<String>,
 ) -> Option<atomdns_sequence_core::ResponseOrigin> {
     let identity = selected_entry
         .and_then(|index| {
@@ -4200,6 +4272,7 @@ fn invocation_response_origin(
                 .unwrap_or(fallback_transport)
                 .as_str(),
         ),
+        proxy_outbound,
     })
 }
 
@@ -4626,7 +4699,8 @@ fn overlay_routing(target: &mut RoutingState, before: &RoutingState, after: &Rou
         final_upstream,
         final_upstream_targets,
         selected_upstream,
-        matched_rule_source
+        matched_rule_source,
+        proxy_outbound
     );
 }
 

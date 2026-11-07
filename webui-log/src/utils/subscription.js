@@ -91,13 +91,18 @@ export function needsCategory(format, url) {
 // The record to save: the stored record's fields under the edited ones. `auto` leaves the
 // field out, which also clears a format the record had before. The category is sent only
 // where it is used and not empty, so a stored one goes when the format no longer needs it.
-export function withFormat(base, payload, format, category = '') {
+// Optional `outbound` is kept only on `cusnocn` (`代理域名`) subscriptions when non-empty.
+export function withFormat(base, payload, format, category = '', outbound = undefined) {
   const merged = { ...base, ...payload }
   if (!format || format === 'auto') delete merged.format
   else merged.format = format
   const text = String(category || '').trim()
   if (text && needsCategory(format, merged.url)) merged.category = text
   else delete merged.category
+  const nextOutbound = outbound !== undefined ? outbound : merged.outbound
+  const trimmedOutbound = String(nextOutbound || '').trim()
+  if (merged.type === 'cusnocn' && trimmedOutbound) merged.outbound = trimmedOutbound
+  else delete merged.outbound
   return merged
 }
 
@@ -136,8 +141,13 @@ export function isDownloaded(rule) {
 }
 
 // The fields a rule record keeps when it is saved back (the page's own `__` fields go).
+// Optional `outbound` is kept only when `type === 'cusnocn'` and non-empty.
 export function ruleFields(rule) {
-  return Object.fromEntries(Object.entries(rule || {}).filter(([key]) => !key.startsWith('__')))
+  const result = Object.fromEntries(Object.entries(rule || {}).filter(([key]) => !key.startsWith('__')))
+  const outbound = String(result.outbound || '').trim()
+  if (result.type === 'cusnocn' && outbound) result.outbound = outbound
+  else delete result.outbound
+  return result
 }
 
 export function sortRules(rules) {

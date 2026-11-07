@@ -24,6 +24,8 @@ pub(crate) struct Call<'a> {
     pub(crate) url: &'a str,
     /// Sent with `Content-Type: application/json` when present.
     pub(crate) body: Option<&'a [u8]>,
+    /// Optional Bearer token for authenticated API calls.
+    pub(crate) bearer_token: Option<&'a str>,
     /// `host:port` of a SOCKS5 proxy, or empty for a direct connection.
     pub(crate) socks5: &'a str,
     /// Overall deadline: connect, TLS, redirects and the whole body.
@@ -64,6 +66,7 @@ pub(crate) async fn fetch(
             method: "GET",
             url: fetch.url,
             body: None,
+            bearer_token: None,
             socks5: fetch.socks5,
             timeout: fetch.timeout,
             max_bytes: fetch.max_bytes,
@@ -172,6 +175,9 @@ async fn call_once(url: &url::Url, call: &Call<'_>) -> Result<Reply, String> {
         .header(hyper::header::USER_AGENT, "Go-http-client/1.1");
     if call.body.is_some() {
         request = request.header(hyper::header::CONTENT_TYPE, "application/json");
+    }
+    if let Some(token) = call.bearer_token.map(str::trim).filter(|t| !t.is_empty()) {
+        request = request.header(hyper::header::AUTHORIZATION, format!("Bearer {token}"));
     }
     let request = request
         .body(Full::new(Bytes::copy_from_slice(

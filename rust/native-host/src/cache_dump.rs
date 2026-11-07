@@ -40,6 +40,8 @@ struct DumpOrigin {
     entry: String,
     peer: Option<std::net::SocketAddr>,
     transport: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    proxy_outbound: Option<String>,
 }
 const MAX_ORIGIN: usize = 64 * 1024;
 fn validate_origin(value: &DumpOrigin) -> Result<(), CacheAdapterError> {
@@ -74,6 +76,7 @@ fn decode_origin(bytes: &[u8]) -> Result<atomdns_cache_core::NativeAttachment, C
             identity: std::sync::Arc::from(value.entry),
             peer: value.peer,
             transport,
+            proxy_outbound: value.proxy_outbound,
         },
     ))
 }
@@ -102,6 +105,7 @@ fn encode_entry(entry: &NativeSnapshotEntry) -> Result<Vec<u8>, CacheAdapterErro
             entry: origin.identity.to_string(),
             peer: origin.peer,
             transport: origin.transport.map(str::to_owned),
+            proxy_outbound: origin.proxy_outbound.clone(),
         };
         validate_origin(&value)?;
         let bytes = serde_json::to_vec(&value).map_err(|_| bad())?;
@@ -323,6 +327,7 @@ mod tests {
             identity: std::sync::Arc::from("persisted_supplier"),
             peer: Some("127.0.0.1:25556".parse().unwrap()),
             transport: Some("udp"),
+            proxy_outbound: None,
         };
         let mut item = NativeSnapshotEntry {
             attachment: Some(atomdns_cache_core::NativeAttachment::new(origin.clone())),

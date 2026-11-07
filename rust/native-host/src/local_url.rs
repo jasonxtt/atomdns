@@ -154,6 +154,7 @@ impl LocalApi {
                 method,
                 url: &url,
                 body: json,
+                bearer_token: None,
                 socks5: "",
                 timeout,
                 max_bytes: 1024 * 1024,

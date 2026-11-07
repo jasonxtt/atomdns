@@ -39,6 +39,7 @@ fn answer(config: &CompiledConfig, request: &Value) -> Value {
                 domain_set,
                 matched_rule_source,
                 matched,
+                ..
             } = mapper.evaluate_wire(&wire(request["name"].as_str().unwrap_or_default()));
             let flags: Vec<u32> = (0..64)
                 .filter(|bit| fast_flags & (1u64 << bit) != 0)

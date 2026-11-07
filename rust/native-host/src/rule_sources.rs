@@ -705,14 +705,15 @@ impl RuleSources {
         let mut body = String::new();
         let (mut matched, mut sent) = (0_i64, 0_i64);
         for entry in &rules {
-            if !search.is_empty() && !entry.rule.to_lowercase().contains(&search) {
+            let line = entry.display_line();
+            if !search.is_empty() && !line.to_lowercase().contains(&search) {
                 continue;
             }
             matched += 1;
             if matched <= offset {
                 continue;
             }
-            body.push_str(&entry.rule);
+            body.push_str(line);
             body.push('\n');
             sent += 1;
             if sent >= limit {
@@ -734,8 +735,11 @@ impl RuleSources {
         let result = on_build_thread(move || {
             let rules = providers::load_light(&spec, None).map_err(|e| e.to_string())?;
             let file = spec.writable_file().expect("checked").to_path_buf();
-            write_atomically(&file, &rule_lines(rules.iter().map(|e| e.rule.as_str())))
-                .map_err(|e| e.to_string())
+            write_atomically(
+                &file,
+                &rule_lines(rules.iter().map(RuleEntry::display_line)),
+            )
+            .map_err(|e| e.to_string())
         })
         .await;
         match result {
@@ -845,8 +849,14 @@ impl RuleSources {
         }
         let guard = provider.mutate.lock().await;
         let mut sources = provider.owner().sources.borrow().clone();
+        let mut needs_download = !request.files.trim().is_empty() && !request.url.trim().is_empty();
         let (stored, status) = match sources.iter_mut().find(|e| e.name == name) {
             Some(existing) => {
+                let download_inputs_unchanged = existing.files == request.files
+                    && existing.url == request.url
+                    && existing.format == request.format
+                    && existing.category == request.category
+                    && existing.enable_regexp == request.enable_regexp;
                 existing.kind = request.kind;
                 existing.files = request.files;
                 existing.url = request.url;
@@ -855,9 +865,14 @@ impl RuleSources {
                 existing.enabled = request.enabled;
                 if provider.kind == Kind::Sd {
                     existing.enable_regexp = request.enable_regexp;
+                    existing.outbound = request.outbound;
                 }
                 existing.auto_update = request.auto_update;
                 existing.update_interval_hours = request.update_interval_hours;
+                if download_inputs_unchanged && provider.owner().spec.source_file(existing).exists()
+                {
+                    needs_download = false;
+                }
                 (existing.clone(), 200)
             }
             None => {
@@ -866,6 +881,11 @@ impl RuleSources {
                     rule_count: 0,
                     last_updated: None,
                     enable_regexp: provider.kind == Kind::Sd && request.enable_regexp,
+                    outbound: if provider.kind == Kind::Sd {
+                        request.outbound
+                    } else {
+                        String::new()
+                    },
                     ..request
                 };
                 sources.push(created.clone());
@@ -876,7 +896,8 @@ impl RuleSources {
             return reply;
         }
         drop(guard);
-        let fetch = !stored.files.trim().is_empty() && !stored.url.trim().is_empty();
+        let fetch =
+            needs_download && !stored.files.trim().is_empty() && !stored.url.trim().is_empty();
         let ctx = self.ctx();
         let job_provider = Rc::clone(provider);
         self.spawn(async move {
@@ -1091,6 +1112,8 @@ struct SourceView<'a> {
     format: Format,
     #[serde(skip_serializing_if = "str::is_empty")]
     category: &'a str,
+    #[serde(skip_serializing_if = "str::is_empty")]
+    outbound: &'a str,
     enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     enable_regexp: Option<bool>,
@@ -1108,6 +1131,11 @@ fn source_view(entry: &SourceEntry, kind: Kind) -> SourceView<'_> {
         url: &entry.url,
         format: entry.format,
         category: &entry.category,
+        outbound: if kind == Kind::Sd {
+            &entry.outbound
+        } else {
+            ""
+        },
         enabled: entry.enabled,
         // `omitempty` in `sd_set_light`; `si_set` has no such field.
         enable_regexp: (kind == Kind::Sd && entry.enable_regexp).then_some(true),

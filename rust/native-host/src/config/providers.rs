@@ -39,6 +39,60 @@ pub(crate) struct RuleEntry {
     pub(crate) rule: String,
     /// `None` means "the provider tag" (providers without per-source detail).
     pub(crate) source: Option<Arc<str>>,
+    /// Optional target sing-box outbound tag bound to this rule or subscription.
+    pub(crate) outbound: Option<Arc<str>>,
+    /// Original line when an inline `@<outbound>` suffix was parsed, for `/show` and `/save`.
+    pub(crate) raw: Option<Box<str>>,
+}
+
+impl RuleEntry {
+    #[must_use]
+    pub(crate) fn display_line(&self) -> &str {
+        self.raw.as_deref().unwrap_or(&self.rule)
+    }
+}
+
+/// Parses an optional trailing ` @<outbound>` suffix on a manual greylist rule.
+pub(crate) fn parse_rule_outbound(line: &str) -> Result<(&str, Option<&str>), String> {
+    let trimmed = line.trim();
+    if trimmed.starts_with('@') {
+        return Err("missing domain rule before @outbound".to_owned());
+    }
+    if let Some((head, tail)) = trimmed.rsplit_once(char::is_whitespace)
+        && let Some(tag) = tail.strip_prefix('@')
+    {
+        let head = head.trim();
+        if head.is_empty() {
+            return Err("missing domain rule before @outbound".to_owned());
+        }
+        if tag.is_empty()
+            || tag.len() > 255
+            || tag.chars().any(|c| c.is_control() || c.is_whitespace())
+        {
+            return Err(format!("invalid @outbound tag `{tail}`"));
+        }
+        return Ok((head, Some(tag)));
+    }
+    Ok((trimmed, None))
+}
+
+fn build_rule_entry(tag: &str, line: &str, source: Option<Arc<str>>) -> RuleEntry {
+    if tag == "greylist"
+        && let Ok((rule_part, Some(outbound))) = parse_rule_outbound(line)
+    {
+        return RuleEntry {
+            rule: rule_part.to_owned(),
+            source,
+            outbound: Some(Arc::from(outbound)),
+            raw: Some(format!("{rule_part} @{outbound}").into_boxed_str()),
+        };
+    }
+    RuleEntry {
+        rule: line.to_owned(),
+        source,
+        outbound: None,
+        raw: None,
+    }
 }
 
 pub(crate) type ProviderRules = Rc<Vec<RuleEntry>>;
@@ -146,10 +200,7 @@ pub(crate) fn load_light(
     let mut out: Vec<RuleEntry> = spec
         .exps
         .iter()
-        .map(|rule| RuleEntry {
-            rule: rule.clone(),
-            source: None,
-        })
+        .map(|rule| build_rule_entry(&spec.tag, rule, None))
         .collect();
     for (index, resolved) in &spec.files {
         let bytes = match read_file(resolved, &mut inputs) {
@@ -167,11 +218,12 @@ pub(crate) fn load_light(
             }
         };
         if let Ok(srs) = decode_domain_srs(&bytes, true) {
-            out.extend(
-                srs.rules
-                    .into_iter()
-                    .map(|rule| RuleEntry { rule, source: None }),
-            );
+            out.extend(srs.rules.into_iter().map(|rule| RuleEntry {
+                rule,
+                source: None,
+                outbound: None,
+                raw: None,
+            }));
             continue;
         }
         for line in bytes.split(|byte| *byte == b'\n') {
@@ -189,10 +241,7 @@ pub(crate) fn load_light(
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            out.push(RuleEntry {
-                rule: line.to_owned(),
-                source: None,
-            });
+            out.push(build_rule_entry(&spec.tag, line, None));
         }
     }
     Ok(out)
@@ -216,6 +265,8 @@ pub(crate) struct SourceEntry {
     pub(crate) format: Format,
     /// The category a `.dat` download is read for; empty when not set.
     pub(crate) category: String,
+    /// Target sing-box outbound tag bound to this `sd_set_light` source; empty when unset.
+    pub(crate) outbound: String,
     /// The RFC 3339 text exactly as read (or written); `None` is the zero time.
     pub(crate) last_updated: Option<String>,
 }
@@ -246,7 +297,7 @@ impl Schema {
             | "last_updated" => true,
             "id" => self == Self::Adguard,
             "type" | "files" => self != Self::Adguard,
-            "enable_regexp" => self == Self::Sd,
+            "enable_regexp" | "outbound" => self == Self::Sd,
             _ => false,
         }
     }
@@ -450,6 +501,9 @@ impl<'de> serde::de::DeserializeSeed<'de> for EntrySeed {
                         ("category", Value::String(text)) => {
                             entry.category = text.trim().to_owned()
                         }
+                        ("outbound", Value::String(text)) => {
+                            entry.outbound = text.trim().to_owned()
+                        }
                         ("enabled", Value::Bool(flag)) => entry.enabled = flag,
                         ("enable_regexp", Value::Bool(flag)) => entry.enable_regexp = flag,
                         ("auto_update", Value::Bool(flag)) => entry.auto_update = flag,
@@ -544,6 +598,14 @@ pub(crate) fn parse_source_object(bytes: &[u8], schema: Schema) -> Result<Source
         .map_err(|e| e.to_string())?;
     if entry.format == Format::Dat && entry.category.is_empty() {
         return Err(CATEGORY_REQUIRED.to_owned());
+    }
+    if entry.outbound.len() > 255
+        || entry
+            .outbound
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace())
+    {
+        return Err("invalid outbound tag".to_owned());
     }
     Ok(entry)
 }
@@ -774,9 +836,13 @@ pub(crate) fn load_sd(
         };
         if let Some(rules) = rules {
             counts.push((source.name.clone(), rules.len() as i64));
+            let outbound: Option<Arc<str>> =
+                (!source.outbound.is_empty()).then(|| Arc::from(source.outbound.as_str()));
             out.extend(rules.into_iter().map(|rule| RuleEntry {
                 rule,
                 source: Some(Arc::clone(&name)),
+                outbound: outbound.clone(),
+                raw: None,
             }));
         }
     }
@@ -966,7 +1032,12 @@ pub(crate) fn parse_adguard_list(
             if is_allow {
                 allow.push(rule);
             } else {
-                deny.push(RuleEntry { rule, source: None });
+                deny.push(RuleEntry {
+                    rule,
+                    source: None,
+                    outbound: None,
+                    raw: None,
+                });
             }
         }
     }
@@ -1231,6 +1302,8 @@ pub struct MapperOutcome {
     pub domain_set: Option<String>,
     /// Joined rule sources, when any.
     pub matched_rule_source: Option<String>,
+    /// Target sing-box outbound tag, when bound by a matched proxy rule.
+    pub proxy_outbound: Option<String>,
     pub matched: bool,
 }
 
@@ -1285,6 +1358,7 @@ impl DomainMapperConfig {
                 domain_set: (!result.joined_tags.is_empty()).then_some(result.joined_tags),
                 matched_rule_source: (!result.joined_sources.is_empty())
                     .then_some(result.joined_sources),
+                proxy_outbound: result.outbound,
                 matched: true,
             };
             if let Some(learned) = hot {
@@ -1307,6 +1381,7 @@ impl DomainMapperConfig {
                     ctx_marks: Vec::new(),
                     domain_set: (!learned.tags.is_empty()).then_some(learned.tags),
                     matched_rule_source: (!learned.sources.is_empty()).then_some(learned.sources),
+                    proxy_outbound: None,
                     matched: true,
                 },
                 overlay,
@@ -1326,6 +1401,7 @@ impl DomainMapperConfig {
                 },
                 domain_set: (!self.default_tag.is_empty()).then(|| self.default_tag.clone()),
                 matched_rule_source: None,
+                proxy_outbound: None,
                 matched: false,
             },
             overlay,
@@ -1365,6 +1441,12 @@ impl Executor for MapperExecutor {
             state.apply_mutation(StateMutation::SetRouting {
                 field: RoutingField::MatchedRuleSource,
                 value: Some(sources),
+            });
+        }
+        if let Some(outbound) = outcome.proxy_outbound {
+            state.apply_mutation(StateMutation::SetRouting {
+                field: RoutingField::ProxyOutbound,
+                value: Some(outbound),
             });
         }
         // A no-op mapper must not discard a preceding mapper's live labels.
@@ -1512,12 +1594,18 @@ pub(crate) fn build_mapper_matcher<'a>(
         } else {
             0
         };
+        let tier_priority: u8 = match tag {
+            "greylist" => 2,
+            "cusnocn" => 1,
+            _ => 0,
+        };
         for entry in rules_of(tag).unwrap_or_default() {
             let source = entry
                 .source
                 .as_deref()
                 .filter(|s| !s.is_empty())
                 .unwrap_or(tag);
+            let outbound = entry.outbound.as_deref().unwrap_or("");
             valued.push(ValuedRuleRef {
                 rule: &entry.rule,
                 fast_marks: fast_mask,
@@ -1528,6 +1616,12 @@ pub(crate) fn build_mapper_matcher<'a>(
                 },
                 joined_tags: target_tag,
                 joined_sources: source,
+                outbound_priority: if !outbound.is_empty() {
+                    tier_priority
+                } else {
+                    0
+                },
+                outbound,
             });
         }
     }
@@ -1574,6 +1668,14 @@ fn unicode_lowercase_refusal(tag: &str, rule: &str) -> Option<String> {
 /// regexp outside the gate, or a Unicode-lowercase rule), if it would. Used
 /// to keep downloads and posted lists from making the next start fail.
 pub(crate) fn rule_refusal(tag: &str, rule: &str) -> Option<String> {
+    let rule = if tag == "greylist" {
+        match parse_rule_outbound(rule) {
+            Ok((rule_part, _)) => rule_part,
+            Err(reason) => return Some(format!("{tag}: {reason}")),
+        }
+    } else {
+        rule
+    };
     if let Some(pattern) = rule.strip_prefix("regexp:") {
         return match atomdns_matcher_core::check_go_regexp(pattern) {
             Err(error) if !error.is_invalid_in_go() => {

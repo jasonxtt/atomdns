@@ -93,6 +93,25 @@
 
 v0.5.0 起 `config.url` 指向 file 仓库（此前指向 Release 资产）；已发布的 v0.4.x 与 v0.5.0 的清单仍指向各自 Release 里的包，不受影响。
 
+## v0.7.0 升级须知（2026-11-07；DefaWong/atomdns 定制版：sing-box 联动与一键安装）
+
+- **发布来源换成 fork**：从本版起，定制版在 `DefaWong/atomdns` 发布，在线更新也只认这个仓库的 Release（`update/mod.rs`）。上游 `jasonxtt/atomdns` 的 v0.6.4 及更早版本，仍然按上游仓库更新。
+- 配置 schema 仍为 7，**没有新配置包**。Release 带的 `config_rust.zip` 和 v0.6.4 是同一份。
+- **sing-box 联动**：
+  - 灰名单的每行可以在末尾写 ` @出口`，自定义代理订阅可以绑定目标出口。
+  - 发往 `nocnfake` 的查询带私有 EDNS0 选项 65001，定制版 sing-box 据此把 FakeIP 直接交给指定出口。
+  - WebUI 新增 sing-box 页面，用来管理订阅和节点：添加节点时粘贴节点链接，可以切换节点、测速。
+  - 上游设置里配置 sing-box API。
+  - 详见 [native-singbox-integration.md](contracts/native-singbox-integration.md)。
+- **一键安装**：`scripts/install.sh` 支持 x86_64 的 Alpine 和 Debian 系，会一起装好 AtomDNS 与定制版 sing-box，包括 TProxy 接管 FakeIP 流量，见 [installer.md](installer.md)。
+- `webinfo/settings.json` 等状态文件改为 600 权限写入，因为 settings.json 里保存着 sing-box API 密钥。
+- 资产：
+  - 三种程序包，只有 x86_64：`amd64`、`amd64-v3`、`amd64-musl`。fork 不提供 ARM，`release-build.yml` 也只编这三种。
+  - `atomdns-webui.tar.gz`。
+  - 清单。
+  - 全新安装包 `config_rust.zip`。
+  - 一键安装用的 `sing-box-linux-amd64.tar.gz`、`install.sh` 和 `SHA256SUMS`。
+
 ## v0.6.4 升级须知（2026-11-06；配置 schema 7：默认只监听 53 与 API，安全模式不再回退国内）
 
 - **配置 schema 7，有新配置包**：在线更新会一并替换配置包管理的 `config_custom.yaml` 与 `sub_config/*.yaml`，并删除 `sub_config/for_singbox.yaml`；更新失败会自动回滚。改过这些文件的，更新前先在「系统管理」导出一份配置备份（Docker 版会把旧文件备份到 `backup/container-schema-…/`）。

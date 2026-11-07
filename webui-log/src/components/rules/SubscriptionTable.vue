@@ -33,6 +33,8 @@ const allowed = computed(() => supportsOperation(operation.value))
 
 const rules = ref([])
 const loadedTypes = ref([])
+const singboxOutbounds = ref([])
+const singboxDefaultOutbound = ref('')
 const loading = ref(false)
 const loadError = ref('')
 const pendingUpdate = ref(false)
@@ -52,6 +54,7 @@ const editor = reactive({
   files: '',
   format: 'auto',
   category: '',
+  outbound: '',
   enabled: true,
   auto_update: true,
   enable_regexp: false,
@@ -63,6 +66,17 @@ const touched = reactive({ name: false, files: false })
 const tagOf = (type) => props.catalogs.find((item) => item.type === type)?.tag || ''
 const itemPath = (tag, name) => `/plugins/${encodeURIComponent(tag)}/config/${encodeURIComponent(name)}`
 const showCategory = computed(() => needsCategory(editor.format, editor.url))
+const outboundOptions = computed(() => {
+  const list = singboxOutbounds.value.map((item) => ({
+    name: String(item?.name || ''),
+    label: item?.now ? `${item.name} (${item.type} → ${item.now})` : item?.type ? `${item.name} (${item.type})` : String(item?.name || '')
+  })).filter((item) => item.name)
+  const current = String(editor.outbound || '').trim()
+  if (current && !list.some((item) => item.name === current)) {
+    list.unshift({ name: current, label: `${current}（当前配置）` })
+  }
+  return list
+})
 const empty = computed(() => (adguard.value ? '暂无 AdGuard 规则' : '暂无订阅'))
 const colSpan = 6
 const WARNING = '更换地址前请确认新规则集与原来是同一类内容，否则会导致大量域名分流错误。'
@@ -89,6 +103,16 @@ async function load() {
       const data = await getJSON('/plugins/adguard/rules')
       rules.value = (Array.isArray(data) ? data : []).sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
       return
+    }
+    if (props.catalogs.some((c) => c.type === 'cusnocn')) {
+      try {
+        const sb = await getJSON('/api/v1/singbox/outbounds')
+        singboxOutbounds.value = Array.isArray(sb?.outbounds) ? sb.outbounds : []
+        singboxDefaultOutbound.value = String(sb?.default_outbound || '')
+      } catch {
+        singboxOutbounds.value = []
+        singboxDefaultOutbound.value = ''
+      }
     }
     const result = await loadNativeOnlineCatalogs(props.catalogs.map((item) => [item.type, item.tag]), getJSON)
     if (result.failures.length > 0) loadError.value = `部分订阅读取失败: ${result.failures.map(({ tag, error }) => `${tag}: ${error}`).join('；')}`
@@ -130,7 +154,7 @@ function reloadSoon() {
 function resetEditor() {
   Object.assign(editor, {
     open: true, saving: false, editing: false, readOnlyType: false, id: '', oldName: '', type: props.catalogs[0]?.type || '',
-    name: '', url: '', files: '', format: 'auto', category: '', enabled: true, auto_update: true, enable_regexp: false, update_interval_hours: 24
+    name: '', url: '', files: '', format: 'auto', category: '', outbound: '', enabled: true, auto_update: true, enable_regexp: false, update_interval_hours: 24
   })
   touched.name = false
   touched.files = false
@@ -171,6 +195,7 @@ function beginEdit(rule) {
     files: String(rule.files || ''),
     format: String(rule.format || 'auto'),
     category: String(rule.category || ''),
+    outbound: String(rule.outbound || ''),
     enabled: Boolean(rule.enabled),
     auto_update: Boolean(rule.auto_update),
     enable_regexp: Boolean(rule.enable_regexp),
@@ -201,6 +226,7 @@ function diversionPayload() {
   if (!files || !url) throw new Error('本地文件和地址都不能为空')
   return {
     name, type: editor.type, files, url,
+    outbound: editor.type === 'cusnocn' ? String(editor.outbound || '').trim() : '',
     enabled: Boolean(editor.enabled), auto_update: Boolean(editor.auto_update), enable_regexp: Boolean(editor.enable_regexp),
     update_interval_hours: Number(editor.update_interval_hours || 24)
   }
@@ -379,7 +405,7 @@ onBeforeUnmount(() => {
                   <span class="slider"></span>
                 </label>
               </td>
-              <td :title="rule.name">{{ rule.name }}<span v-if="showType" class="muted rt-sub-type"> · {{ rule.__label }}</span><span v-if="base" class="muted rt-sub-type"> · 基础</span></td>
+              <td :title="rule.name">{{ rule.name }}<span v-if="showType" class="muted rt-sub-type"> · {{ rule.__label }}</span><span v-if="rule.type === 'cusnocn' && rule.outbound" class="muted rt-sub-type"> · 出口: {{ rule.outbound }}</span><span v-if="base" class="muted rt-sub-type"> · 基础</span></td>
               <td class="mono" :title="rule.url">{{ rule.url }}</td>
               <td class="text-right">{{ Number(rule.rule_count || 0).toLocaleString() }}</td>
               <td class="mono" :title="formatDateTime(rule.last_updated)">{{ formatDateTime(rule.last_updated) }}</td>
@@ -437,6 +463,13 @@ onBeforeUnmount(() => {
             <template v-if="showCategory">
               <label>分类</label>
               <input v-model="editor.category" placeholder="例如 cn" aria-label="分类" />
+            </template>
+            <template v-if="!adguard && editor.type === 'cusnocn'">
+              <label>目标出口</label>
+              <select v-model="editor.outbound" aria-label="目标出口">
+                <option value="">{{ singboxDefaultOutbound ? `默认出口 (${singboxDefaultOutbound})` : '默认出口' }}</option>
+                <option v-for="item in outboundOptions" :key="item.name" :value="item.name">{{ item.label }}</option>
+              </select>
             </template>
             <label>更新间隔（小时）</label>
             <input v-model.number="editor.update_interval_hours" type="number" min="1" />

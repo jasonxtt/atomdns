@@ -1,9 +1,9 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { getText, postJSON } from '../../api/http'
+import { getJSON, getText, postJSON } from '../../api/http'
 import { operationReason, supportsOperation } from '../../api/runtimeCapabilities'
-import { LIST_LINE_CAP, canSaveList, filterLines, readList, sameRules, showUrl, splitRules } from '../../utils/ruleList'
+import { LIST_LINE_CAP, applyOutboundTag, canSaveList, filterLines, readList, sameRules, showUrl, splitRules } from '../../utils/ruleList'
 import { clearTopNotice, setSuccess } from '../../utils/notice'
 import { clearDirty, setDirty } from '../../utils/unsaved'
 import { flashSelector, queryText } from '../../utils/deepLink'
@@ -37,8 +37,12 @@ const saving = ref(false)
 const error = ref('')
 const notice = ref('')
 const search = ref('')
+const singboxOutbounds = ref([])
+const selectedOutbound = ref('')
+const editorRef = ref(null)
 const route = useRoute()
 
+const isGreylist = computed(() => props.tag === 'greylist')
 const canRead = computed(() => supportsOperation('rules.local.read'))
 const canWrite = computed(() => supportsOperation('rules.local.manage'))
 const dirty = computed(() => !sameRules(content.value, original.value))
@@ -48,6 +52,24 @@ const searching = computed(() => search.value.trim() !== '')
 const saveEnabled = computed(() => canWrite.value && loaded.value && !missing.value && canSaveList({ truncated: truncated.value, loading: loading.value, saving: saving.value, uncertain: uncertain.value, dirty: dirty.value }))
 
 watch([dirty, uncertain], () => setDirty(uid, dirty.value || uncertain.value), { immediate: true })
+
+async function loadSingboxOutbounds() {
+  if (!isGreylist.value) return
+  try {
+    const data = await getJSON('/api/v1/singbox/outbounds')
+    singboxOutbounds.value = Array.isArray(data?.outbounds) ? data.outbounds : []
+  } catch {
+    singboxOutbounds.value = []
+  }
+}
+
+function insertOutbound() {
+  const tag = String(selectedOutbound.value || '').trim()
+  if (!tag || !canWrite.value || !loaded.value || truncated.value) return
+  const el = editorRef.value
+  const offset = el && typeof el.selectionStart === 'number' ? el.selectionStart : null
+  content.value = applyOutboundTag(content.value, tag, offset)
+}
 
 async function fetchCanonical() {
   return readList(await getText(showUrl(props.tag, props.cap)), props.cap)
@@ -146,6 +168,7 @@ watch(() => [route.query.list, route.query.find], showFound)
 onMounted(() => {
   showFound()
   load()
+  loadSingboxOutbounds()
   window.addEventListener('atomdns-log-refresh', refresh)
 })
 onBeforeUnmount(() => {
@@ -176,7 +199,18 @@ onBeforeUnmount(() => {
         <li v-for="(line, index) in matches.slice(0, 300)" :key="index">{{ line }}</li>
         <li v-if="matches.length > 300" class="muted">只显示前 300 条，共匹配 {{ matches.length.toLocaleString() }} 条</li>
       </ul>
+      <div v-if="isGreylist && !searching && canWrite" class="rt-list-outbound-bar" data-greylist-outbound-helper>
+        <span class="muted rt-list-outbound-label">代理出口</span>
+        <select v-model="selectedOutbound" class="rt-setting-input rt-list-outbound-select" aria-label="选择代理出口" :disabled="loading || saving || !loaded || truncated">
+          <option value="">选择出口…</option>
+          <option v-for="item in singboxOutbounds" :key="item.name" :value="item.name">
+            {{ item.now ? `${item.name} (${item.type} → ${item.now})` : item.type ? `${item.name} (${item.type})` : item.name }}
+          </option>
+        </select>
+        <button class="btn tiny secondary" type="button" :disabled="!selectedOutbound || loading || saving || !loaded || truncated" @click="insertOutbound">追加 @{{ selectedOutbound || '出口' }}</button>
+      </div>
       <textarea
+        ref="editorRef"
         v-show="!searching"
         v-model="content"
         class="list-editor rt-list-text"

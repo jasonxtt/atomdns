@@ -1584,3 +1584,154 @@ fn an_empty_proxy_address_means_no_proxy() {
     );
     assert!(compile(&tree).err().unwrap().contains("host:port"));
 }
+
+#[test]
+fn singbox_api_and_greylist_outbound_forward_edns_65001_and_invalidate_cache() {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, UdpSocket};
+    use std::sync::{Arc, Mutex};
+
+    // 1. Mock sing-box Clash API HTTP server
+    let clash_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let clash_port = clash_listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = clash_listener.accept() {
+            let mut buf = [0u8; 2048];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]);
+            let authorized = req
+                .lines()
+                .any(|l| l.eq_ignore_ascii_case("authorization: Bearer test-secret"));
+            let body = if authorized {
+                r#"{"proxies":{"GLOBAL":{"type":"Fallback","name":"GLOBAL","now":"proxy","all":["proxy","proxy-main","proxy-alt"]},"proxy":{"type":"Selector","name":"proxy","now":"proxy-main","all":["proxy-main","proxy-alt"]},"proxy-main":{"type":"SOCKS","name":"proxy-main"},"proxy-alt":{"type":"SOCKS","name":"proxy-alt"}}}"#
+            } else {
+                r#"{"message":"Unauthorized"}"#
+            };
+            let status = if authorized {
+                "200 OK"
+            } else {
+                "401 Unauthorized"
+            };
+            let resp = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(resp.as_bytes());
+        }
+    });
+
+    // 2. Mock sing-box FakeIP UDP server recording EDNS0 65001 payloads
+    let fakeip_sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let fakeip_port = fakeip_sock.local_addr().unwrap().port();
+    let recorded_edns: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorded_clone = Arc::clone(&recorded_edns);
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 2048];
+        while let Ok((len, peer)) = fakeip_sock.recv_from(&mut buf) {
+            let pkt = &buf[..len];
+            let msg = hickory_proto::op::Message::from_vec(pkt).unwrap();
+            let mut found = Vec::new();
+            if let Some(opt) = msg.extensions() {
+                if let Some(hickory_proto::rr::rdata::opt::EdnsOption::Unknown(65001, data)) = opt
+                    .options()
+                    .get(hickory_proto::rr::rdata::opt::EdnsCode::Unknown(65001))
+                {
+                    found = data.clone();
+                }
+            }
+            recorded_clone.lock().unwrap().push(found);
+
+            let mut reply = hickory_proto::op::Message::new();
+            reply
+                .set_id(msg.id())
+                .set_message_type(hickory_proto::op::MessageType::Response)
+                .set_recursion_desired(true)
+                .set_recursion_available(true);
+            let q = msg.queries()[0].clone();
+            reply.add_query(q.clone());
+            reply.add_answer(hickory_proto::rr::Record::from_rdata(
+                q.name().clone(),
+                600,
+                hickory_proto::rr::RData::A(hickory_proto::rr::rdata::A(std::net::Ipv4Addr::new(
+                    198, 18, 0, 2,
+                ))),
+            ));
+            let _ = fakeip_sock.send_to(&reply.to_vec().unwrap(), peer);
+        }
+    });
+
+    let tree = Tree::new("singbox-outbound-e2e");
+    let ports = self::ports();
+    tree.write("rule/greylist.txt", "domain:openai.com @proxy-alt\n");
+    let yaml = format!(
+        "log: {{level: error}}\napi: {{http: \"127.0.0.1:{}\"}}\nplugins:\n  - tag: main_proxy\n    type: socks5_proxy\n    args: {{addr: \"\"}}\n  - tag: client_ecs\n    type: ecs_address\n    args: {{addr: \"192.0.2.1\"}}\n  - tag: greylist\n    type: domain_set_light\n    args: {{files: [rule/greylist.txt]}}\n  - tag: empty_special\n    type: domain_set_light\n    args: {{exps: []}}\n  - tag: unified_matcher1\n    type: domain_mapper\n    args:\n      default_mark: 17\n      default_tag: 未命中\n      rules:\n        - {{tag: greylist, mark: 7, output_tag: 灰名单}}\n  - tag: special_upstream_matcher\n    type: domain_mapper\n    args:\n      default_mark: 0\n      default_tag: \"\"\n      rules:\n        - {{tag: empty_special, mark: 50, output_tag: 专属}}\n  - tag: cache_all\n    type: cache\n    args: {{size: 1000}}\n  - tag: nocnfake\n    type: aliapi\n    args:\n      proxy: $main_proxy\n      upstreams:\n        - {{tag: sing-box, addr: \"udp://127.0.0.1:{}\"}}\n  - tag: entry\n    type: sequence\n    args:\n      - exec: $unified_matcher1\n      - exec: $special_upstream_matcher\n      - exec: $cache_all\n      - exec: $nocnfake\n  - tag: listener\n    type: udp_server\n    args: {{entry: entry, listen: \"127.0.0.1:{}\"}}\n",
+        ports.api, fakeip_port, ports.dns
+    );
+    tree.write("config.yaml", &yaml);
+
+    let host = self::host(&tree);
+    host.block_on(async {
+        let (shutdown, task) = serve(&host).await;
+
+        // Save singbox_api via /api/v1/overrides and query /api/v1/singbox/outbounds
+        let save_body = format!(
+            r#"{{"socks5":"","ecs":"192.0.2.1","replacements":[],"singbox_api":{{"addr":"127.0.0.1:{clash_port}","secret":"test-secret"}}}}"#
+        );
+        let save_reply = api(ports.api, "POST", "/api/v1/overrides", &save_body).await;
+        assert_eq!(save_reply.status, 200, "{}", save_reply.body);
+
+        let sb = json(&api(ports.api, "GET", "/api/v1/singbox/outbounds", "").await.body);
+        assert_eq!(sb["configured"], true, "{sb}");
+        assert_eq!(sb["default_outbound"], "proxy", "{sb}");
+        let names: Vec<&str> = sb["outbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["proxy", "proxy-main", "proxy-alt"]);
+
+        // Query 1: openai.com matches greylist `@proxy-alt` -> sends [1, 1, b"proxy-alt"...]
+        assert_eq!(marker(ports.dns, "www.openai.com").await, Some(2));
+        // Query 2: warm hit from cache_all (same proxy_outbound) -> does not hit FakeIP upstream
+        assert_eq!(marker(ports.dns, "www.openai.com").await, Some(2));
+        {
+            let calls = recorded_edns.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            let mut expected = vec![1, 1];
+            expected.extend_from_slice(b"proxy-alt");
+            assert_eq!(calls[0], expected);
+        }
+
+        // Update greylist to `@proxy-main` via API -> cache_all must miss and send [1, 1, b"proxy-main"...]
+        let post_reply = api(
+            ports.api,
+            "POST",
+            "/plugins/greylist/post",
+            r#"{"values":["domain:openai.com @proxy-main"]}"#,
+        )
+        .await;
+        assert_eq!(post_reply.status, 200, "{}", post_reply.body);
+        let show_reply = api(ports.api, "GET", "/plugins/greylist/show", "").await;
+        assert_eq!(show_reply.body.trim(), "domain:openai.com @proxy-main");
+
+        // Wait briefly for async mapper rebuild
+        for _ in 0..30 {
+            let _ = marker(ports.dns, "www.openai.com").await;
+            if recorded_edns.lock().unwrap().len() >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        {
+            let calls = recorded_edns.lock().unwrap();
+            assert_eq!(calls.len(), 2, "cache_all must invalidate when proxy_outbound changes");
+            let mut expected = vec![1, 1];
+            expected.extend_from_slice(b"proxy-main");
+            assert_eq!(calls[1], expected);
+        }
+
+        shutdown.cancel();
+        task.await.unwrap();
+    });
+}

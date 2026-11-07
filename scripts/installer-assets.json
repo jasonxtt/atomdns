@@ -1,0 +1,16 @@
+{
+  "singbox": {
+    "repository": "DefaWong/sing-box",
+    "commit": "1c29dbce592f70314425affbcf28d58d41cef6f4",
+    "version": "1.14.4-reF1nd"
+  },
+  "mihomo": {
+    "repository": "DefaWong/mihomo",
+    "commit": "ef4f388116188e3ae4821ac72fd885c9d155b5c4",
+    "version": "1.19.33"
+  },
+  "config_full": {
+    "url": "https://github.com/jasonxtt/atomdns/releases/download/v0.6.4/config_rust.zip",
+    "sha256": "0776eb8744af61ccfff167110c63e654cb4ae2d9ae0e709dace7a9169badd424"
+  }
+}
