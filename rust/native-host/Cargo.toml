@@ -13,6 +13,12 @@ path = "src/main.rs"
 name = "atomdns-settings-migrate"
 path = "src/bin/settings_migrate.rs"
 
+[features]
+default = ["mimalloc"]
+# The program's global allocator (main.rs). Without it the program uses the C
+# library's malloc: glibc builds then get the glibc settings in memory.rs.
+mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
+
 [dependencies]
 flate2 = "=1.1.9"
 hickory-proto = { version = "0.25.2", default-features = false }
@@ -40,6 +46,10 @@ url = "2"
 # Pure-Rust zstd decoding for mihomo `.mrs` rule sets (decoder only).
 ruzstd = { version = "=0.9.1", default-features = false, features = ["std"] }
 yaml_serde = "=0.10.7"
+# Bundles mimalloc 3.3 (C source, built with `cc`). `libmimalloc-sys` is the
+# same library's bindings; its `extended` feature exposes `mi_collect` (memory.rs).
+mimalloc = { version = "=0.1.52", default-features = false, optional = true }
+libmimalloc-sys = { version = "=0.1.49", default-features = false, features = ["extended"], optional = true }
 
 [dev-dependencies]
 base64 = "=0.22.1"

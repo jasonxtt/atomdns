@@ -6,8 +6,8 @@
 #   scripts/build-rust-release.sh vX.Y.Z [out-dir]
 # VARIANTS="amd64 amd64-v3 amd64-musl arm64 armv7 arm64-gnu armv7-gnu" builds more program packages (default: amd64).
 # amd64-v3 is the glibc build with -C target-cpu=x86-64-v3; amd64-musl (Alpine), arm64 and armv7 are static musl
-# builds; arm64-gnu and armv7-gnu are glibc builds (baseline glibc 2.35, used by the Docker image because glibc's
-# allocator settings keep memory lower). The ARM variants are made with cargo-zigbuild and need qemu-user binfmt
+# builds; arm64-gnu and armv7-gnu are glibc builds (baseline glibc 2.35, used by the Docker image). Every variant uses
+# the mimalloc allocator built into the program (feature `mimalloc`), whatever the C library. The ARM variants are made with cargo-zigbuild and need qemu-user binfmt
 # (and, for the gnu ones, the ARM glibc sysroot via QEMU_LD_PREFIX) to run `atomdns version`
 # (CI: .github/workflows/release-build.yml).
 # The in-app updater installs amd64 by default, amd64-v3 on request (or when v3 is running) and amd64-musl

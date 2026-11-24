@@ -1,3 +1,9 @@
+// mimalloc keeps per-query allocation cost flat as the heap fills; glibc's
+// free lists slow down with fragmentation (docs/rust/validation-records/11-24-profile-allocator.md).
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() {
     let command = atomdns_native_host::parse_args(std::env::args_os());
     let result = match command {

@@ -209,7 +209,8 @@ v0.5.0 起 `config.url` 指向 file 仓库（此前指向 Release 资产）；�
   | `atomdns-linux-armv7.tar.gz` | armv7 硬浮点，静态 musl | 手动安装 |
 
   非 amd64 平台的在线更新尚未支持（更新器只在 linux x86_64 上可用，清单里多出的包会被忽略）；这些平台升级时下载对应包、替换 `atomdns` 并重启，`ui/main` 用 `atomdns-webui.tar.gz` 手动换。
-  musl 包（含 ARM）的内存分配器与 glibc 不同，没有 glibc 专用的 `mallopt`/`malloc_trim` 调优，常驻内存没有按 glibc 的数据测过。
+  所有包（glibc 与 musl）都把 mimalloc 编进程序作内存分配器（`atomdns-native-host` 的默认 feature `mimalloc`），不再随 C 库不同；
+  `--no-default-features` 构建回到 C 库自带的 malloc（glibc 时带 `mallopt`/`malloc_trim` 调优）。测量见 `validation-records/11-24-mimalloc.md`。
 - **构建**：`VARIANTS="amd64 amd64-v3 amd64-musl arm64 armv7" scripts/build-rust-release.sh vX.Y.Z` 一次出齐；ARM 包需要 `cargo-zigbuild` 与 qemu-user binfmt，
   所以统一用 GitHub Actions 的手动工作流 `release-build.yml`（只构建、不发布，产物在 Actions 的 `release-<tag>` 里下载）。
 
