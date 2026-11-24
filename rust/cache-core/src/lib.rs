@@ -253,7 +253,10 @@ fn lookup_data(
             .saturating_sub(entry.stored_at_unix)
             .clamp(0, i64::from(u32::MAX));
         let elapsed = u32::try_from(elapsed).unwrap_or(u32::MAX);
-        (LookupState::Fresh, wire::age_ttls(entry.response(), elapsed))
+        (
+            LookupState::Fresh,
+            wire::age_ttls(entry.response(), elapsed),
+        )
     } else if cache.state.config.lazy_cache_ttl_secs > 0 {
         (LookupState::Lazy, wire::set_ttls(entry.response(), 5))
     } else {
