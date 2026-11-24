@@ -1491,8 +1491,8 @@ impl QueryObserver {
             // after equal rows, as the former push + stable sort placed it.
             let slowest_first = |left: &RetainedAuditRecord, right: &RetainedAuditRecord| {
                 right
-                    .elapsed
-                    .cmp(&left.elapsed)
+                    .elapsed()
+                    .cmp(&left.elapsed())
                     .then_with(|| right.trace_id.cmp(&left.trace_id))
             };
             let position = state
@@ -1506,13 +1506,13 @@ impl QueryObserver {
                 if let Some(evicted) = state.audit_records.pop_front() {
                     state.audit_elapsed_micros = state
                         .audit_elapsed_micros
-                        .saturating_sub(evicted.elapsed.as_micros());
+                        .saturating_sub(evicted.elapsed().as_micros());
                 }
                 state.evicted_total = state.evicted_total.saturating_add(1);
             }
             state.audit_elapsed_micros = state
                 .audit_elapsed_micros
-                .saturating_add(record.elapsed.as_micros());
+                .saturating_add(record.elapsed().as_micros());
             state.audit_records.push_back(record);
         } else {
             let mut state = self.lock();
@@ -1770,8 +1770,8 @@ impl QueryObserver {
             .audit_records
             .iter()
             .map(|record| AuditTimingSnapshot {
-                timestamp: record.timestamp,
-                elapsed: record.elapsed,
+                timestamp: record.timestamp(),
+                elapsed: record.elapsed(),
             })
             .collect()
     }

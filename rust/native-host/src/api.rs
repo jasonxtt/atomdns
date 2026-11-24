@@ -2158,7 +2158,7 @@ fn audit_record_matches(record: &RetainedAuditRecord, filter: &AuditFilter) -> b
     let query_match = filter.q.as_ref().is_none_or(|query| {
         let exact = filter.exact;
         let ip_query = normalized_ip(query);
-        let client = canonical_ip(record.client_addr.ip()).to_string();
+        let client = canonical_ip(record.client_addr().ip()).to_string();
         let trace_id = record.trace_id.to_string();
         let common = record.common();
         let mut values = [
@@ -2192,7 +2192,7 @@ fn audit_record_matches(record: &RetainedAuditRecord, filter: &AuditFilter) -> b
     let client_match = if filter.client_ips.is_empty() {
         true
     } else {
-        let record_ip = canonical_ip(record.client_addr.ip()).to_string();
+        let record_ip = canonical_ip(record.client_addr().ip()).to_string();
         filter
             .client_ips
             .iter()
@@ -2443,7 +2443,7 @@ fn rank_response(
         AuditReadKind::RankClient => Response::try_json_compact(&take_rank_items(
             rank_items(
                 &records,
-                |record| Some(canonical_ip(record.client_addr.ip())),
+                |record| Some(canonical_ip(record.client_addr().ip())),
                 |ip| ip.to_string(),
                 shutdown,
             )?,
@@ -3847,7 +3847,7 @@ mod tests {
         );
         let clients = super::rank_items(
             &snapshot.records,
-            |r| Some(super::canonical_ip(r.client_addr.ip())),
+            |r| Some(super::canonical_ip(r.client_addr().ip())),
             |ip| ip.to_string(),
             &TransportCancellation::new(),
         )

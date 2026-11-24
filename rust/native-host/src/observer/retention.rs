@@ -3,9 +3,9 @@
 use std::cmp::Ordering;
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hash};
-use std::net::SocketAddr;
+use std::net::{SocketAddr, SocketAddrV6};
 use std::sync::{Arc, Weak};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::{AuditRecord, ResponseDetails};
 
@@ -57,17 +57,20 @@ impl<T: Hash + Eq> SharingCache<T> {
 pub(super) struct AuditRetention {
     templates: SharingCache<AuditRecord>,
     responses: SharingCache<ResponseDetails>,
+    /// The process nonce of native trace ids, shared by every record.
+    native_prefix: Option<Arc<TracePrefix>>,
 }
 
 /// The original record is the shared template, with only its per-row fields
 /// replaced by empty placeholders. Filters/ranks explicitly read common facts
 /// without allocating a full record for every inspected row.
 pub(crate) struct RetainedAuditRecord {
-    pub timestamp: SystemTime,
-    pub client_addr: SocketAddr,
-    pub qname: Box<str>,
+    /// Wall time as signed nanoseconds from the Unix epoch.
+    unix_nanos: i64,
+    elapsed_nanos: u64,
     pub trace_id: RetainedTraceId,
-    pub elapsed: Duration,
+    client: RetainedClient,
+    pub qname: Box<str>,
     pub response_details: Arc<ResponseDetails>,
     template: Arc<AuditRecord>,
 }
@@ -79,16 +82,80 @@ impl RetainedAuditRecord {
         &self.template
     }
 
+    pub(crate) fn timestamp(&self) -> SystemTime {
+        system_time(self.unix_nanos)
+    }
+
+    pub(crate) fn elapsed(&self) -> Duration {
+        Duration::from_nanos(self.elapsed_nanos)
+    }
+
+    pub(crate) fn client_addr(&self) -> SocketAddr {
+        self.client.address()
+    }
+
     pub(crate) fn expand(&self) -> AuditRecord {
         AuditRecord {
-            timestamp: self.timestamp,
-            client_addr: self.client_addr,
+            timestamp: self.timestamp(),
+            client_addr: self.client_addr(),
             qname: self.qname.to_string(),
             trace_id: self.trace_id.to_string(),
-            elapsed: self.elapsed,
+            elapsed: self.elapsed(),
             response_details: self.response_details.as_ref().clone(),
             ..self.template.as_ref().clone()
         }
+    }
+}
+
+/// A client socket address in 24 bytes instead of `SocketAddr`'s 32. IPv6
+/// addresses with a flow label or scope id (link-local clients) keep the full
+/// value out of line, so every address round-trips exactly.
+enum RetainedClient {
+    V4 { ip: [u8; 4], port: u16 },
+    V6 { ip: [u8; 16], port: u16 },
+    Full(Box<SocketAddrV6>),
+}
+
+impl From<SocketAddr> for RetainedClient {
+    fn from(address: SocketAddr) -> Self {
+        match address {
+            SocketAddr::V4(v4) => Self::V4 {
+                ip: v4.ip().octets(),
+                port: v4.port(),
+            },
+            SocketAddr::V6(v6) if v6.flowinfo() == 0 && v6.scope_id() == 0 => Self::V6 {
+                ip: v6.ip().octets(),
+                port: v6.port(),
+            },
+            SocketAddr::V6(v6) => Self::Full(Box::new(v6)),
+        }
+    }
+}
+
+impl RetainedClient {
+    fn address(&self) -> SocketAddr {
+        match self {
+            Self::V4 { ip, port } => SocketAddr::from((*ip, *port)),
+            Self::V6 { ip, port } => SocketAddr::from((*ip, *port)),
+            Self::Full(address) => SocketAddr::V6(**address),
+        }
+    }
+}
+
+fn system_time(unix_nanos: i64) -> SystemTime {
+    let magnitude = Duration::from_nanos(unix_nanos.unsigned_abs());
+    if unix_nanos >= 0 {
+        UNIX_EPOCH + magnitude
+    } else {
+        UNIX_EPOCH - magnitude
+    }
+}
+
+/// Signed nanoseconds from the Unix epoch; exact for 1677–2262, clamped outside.
+fn unix_nanos(time: SystemTime) -> i64 {
+    match time.duration_since(UNIX_EPOCH) {
+        Ok(after) => i64::try_from(after.as_nanos()).unwrap_or(i64::MAX),
+        Err(before) => i64::try_from(before.duration().as_nanos()).map_or(i64::MIN, |n| -n),
     }
 }
 
@@ -96,12 +163,19 @@ impl AuditRetention {
     pub(super) fn retain(&mut self, mut record: AuditRecord) -> RetainedAuditRecord {
         let response =
             std::mem::replace(&mut record.response_details, ResponseDetails::no_response());
+        let elapsed = std::mem::replace(&mut record.elapsed, Duration::ZERO);
         RetainedAuditRecord {
-            timestamp: std::mem::replace(&mut record.timestamp, SystemTime::UNIX_EPOCH),
-            client_addr: std::mem::replace(&mut record.client_addr, ([0, 0, 0, 0], 0).into()),
+            unix_nanos: unix_nanos(std::mem::replace(
+                &mut record.timestamp,
+                SystemTime::UNIX_EPOCH,
+            )),
+            elapsed_nanos: u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX),
+            client: std::mem::replace(&mut record.client_addr, ([0, 0, 0, 0], 0).into()).into(),
             qname: std::mem::take(&mut record.qname).into_boxed_str(),
-            trace_id: RetainedTraceId::from_string(std::mem::take(&mut record.trace_id)),
-            elapsed: std::mem::replace(&mut record.elapsed, Duration::ZERO),
+            trace_id: RetainedTraceId::from_string(
+                std::mem::take(&mut record.trace_id),
+                &mut self.native_prefix,
+            ),
             response_details: self.responses.share(response, |response| {
                 response.answers.shrink_to_fit();
                 for answer in &mut response.answers {
@@ -116,14 +190,23 @@ impl AuditRetention {
     }
 }
 
+/// A trace id in 16 bytes. Native ids (`n-<nonce>-<counter>`) keep only the
+/// counter per record; the nonce is the same for the whole process and is shared.
 #[derive(Eq, PartialEq)]
-pub(crate) enum RetainedTraceId {
-    Native { nonce: u128, counter: u64 },
+pub(crate) struct RetainedTraceId {
+    counter: u64,
+    prefix: Arc<TracePrefix>,
+}
+
+#[derive(Eq, PartialEq)]
+pub(super) enum TracePrefix {
+    Native(u128),
+    /// Any other spelling, kept verbatim (`counter` is then 0).
     Text(Box<str>),
 }
 
 impl RetainedTraceId {
-    fn from_string(value: String) -> Self {
+    fn from_string(value: String, native_prefix: &mut Option<Arc<TracePrefix>>) -> Self {
         let parsed = value.strip_prefix("n-").and_then(|text| {
             let (nonce, counter) = text.split_once('-')?;
             if nonce.len() != 32
@@ -135,37 +218,48 @@ impl RetainedTraceId {
             {
                 return None;
             }
-            Some(Self::Native {
-                nonce: u128::from_str_radix(nonce, 16).ok()?,
-                counter: u64::from_str_radix(counter, 16).ok()?,
-            })
+            Some((
+                u128::from_str_radix(nonce, 16).ok()?,
+                u64::from_str_radix(counter, 16).ok()?,
+            ))
         });
-        parsed.unwrap_or_else(|| Self::Text(value.into_boxed_str()))
+        match parsed {
+            Some((nonce, counter)) => {
+                let prefix = match native_prefix {
+                    Some(shared) if **shared == TracePrefix::Native(nonce) => Arc::clone(shared),
+                    _ => {
+                        let shared = Arc::new(TracePrefix::Native(nonce));
+                        *native_prefix = Some(Arc::clone(&shared));
+                        shared
+                    }
+                };
+                Self { counter, prefix }
+            }
+            None => Self {
+                counter: 0,
+                prefix: Arc::new(TracePrefix::Text(value.into_boxed_str())),
+            },
+        }
     }
 }
 
 impl std::fmt::Display for RetainedTraceId {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Native { nonce, counter } => write!(formatter, "n-{nonce:032x}-{counter:016x}"),
-            Self::Text(value) => formatter.write_str(value),
+        match self.prefix.as_ref() {
+            TracePrefix::Native(nonce) => {
+                write!(formatter, "n-{nonce:032x}-{:016x}", self.counter)
+            }
+            TracePrefix::Text(value) => formatter.write_str(value),
         }
     }
 }
 
 impl Ord for RetainedTraceId {
     fn cmp(&self, other: &Self) -> Ordering {
-        match (self, other) {
-            (
-                Self::Native {
-                    nonce: left,
-                    counter: left_counter,
-                },
-                Self::Native {
-                    nonce: right,
-                    counter: right_counter,
-                },
-            ) => (left, left_counter).cmp(&(right, right_counter)),
+        match (self.prefix.as_ref(), other.prefix.as_ref()) {
+            (TracePrefix::Native(left), TracePrefix::Native(right)) => {
+                (left, self.counter).cmp(&(right, other.counter))
+            }
             _ => self.to_string().cmp(&other.to_string()),
         }
     }
@@ -182,7 +276,50 @@ mod tests {
     use std::hash::Hash;
     use std::sync::Arc;
 
-    use super::{RetainedTraceId, SHARING_SLOTS, SharingCache};
+    use std::net::{SocketAddr, SocketAddrV6};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    use super::{
+        RetainedAuditRecord, RetainedClient, RetainedTraceId, SHARING_SLOTS, SharingCache,
+        system_time, unix_nanos,
+    };
+
+    #[test]
+    fn compact_record_fields_round_trip_exactly() {
+        for address in [
+            "192.0.2.7:53000",
+            "[2001:db8::7]:53000",
+            "[::ffff:192.0.2.7]:1",
+            "0.0.0.0:0",
+        ] {
+            let address: SocketAddr = address.parse().unwrap();
+            assert_eq!(RetainedClient::from(address).address(), address);
+        }
+        let scoped = SocketAddr::V6(SocketAddrV6::new("fe80::7".parse().unwrap(), 53, 9, 3));
+        assert!(matches!(RetainedClient::from(scoped), RetainedClient::Full(_)));
+        assert_eq!(RetainedClient::from(scoped).address(), scoped);
+
+        for time in [
+            UNIX_EPOCH,
+            UNIX_EPOCH + Duration::new(1_795_000_000, 123_456_789),
+            UNIX_EPOCH - Duration::new(86_400, 1),
+            SystemTime::now(),
+        ] {
+            assert_eq!(system_time(unix_nanos(time)), time);
+        }
+        assert!(std::mem::size_of::<RetainedAuditRecord>() <= 88);
+    }
+
+    #[test]
+    fn native_trace_ids_share_one_prefix() {
+        let mut prefix = None;
+        let id = |counter: u32| format!("n-{:032x}-{counter:016x}", 0xabc_u32);
+        let first = RetainedTraceId::from_string(id(1), &mut prefix);
+        let second = RetainedTraceId::from_string(id(2), &mut prefix);
+        assert!(Arc::ptr_eq(&first.prefix, &second.prefix));
+        assert_eq!(second.to_string(), id(2));
+        assert!(first < second);
+    }
 
     #[derive(Eq, PartialEq, Debug)]
     struct Colliding(u64);
@@ -227,10 +364,11 @@ mod tests {
             "legacy trace 零".to_owned(),
             String::new(),
         ];
+        let mut prefix = None;
         let mut compact: Vec<_> = values
             .iter()
             .cloned()
-            .map(RetainedTraceId::from_string)
+            .map(|value| RetainedTraceId::from_string(value, &mut prefix))
             .collect();
         assert_eq!(
             values,
