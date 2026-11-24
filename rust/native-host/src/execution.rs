@@ -1523,7 +1523,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
             MachineStep::Complete(_) => {
                 // Publication is owned by the cache's successor boundary, so a
                 // token still held here is an unpublished miss and must drop.
-                return result_from_state(&machine, &header, &question, facts);
+                return result_from_state(&mut machine, &header, &question, facts);
             }
             MachineStep::ScopeComplete(completion) => {
                 // The cache's enclosing scope completed successfully. This is the
@@ -1558,7 +1558,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                         facts.set_failure_provenance(FailureProvenance::LocalFailure(
                             LocalFailureKind::InternalExecution,
                         ));
-                        return result_from_state(&machine, &header, &question, facts);
+                        return result_from_state(&mut machine, &header, &question, facts);
                     }
                 };
             }
@@ -1576,7 +1576,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                         facts.set_failure_provenance(FailureProvenance::LocalFailure(
                             LocalFailureKind::InternalExecution,
                         ));
-                        return result_from_state(&machine, &header, &question, facts);
+                        return result_from_state(&mut machine, &header, &question, facts);
                     }
                 };
             }
@@ -1596,7 +1596,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                             // provenance is recorded.
                             set_servfail(&mut machine);
                             facts.set_response_source(ResponseSource::Local);
-                            return result_from_state(&machine, &header, &question, facts);
+                            return result_from_state(&mut machine, &header, &question, facts);
                         }
                     }
                     step = match machine
@@ -1607,7 +1607,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                             facts.set_failure_provenance(FailureProvenance::LocalFailure(
                                 LocalFailureKind::InternalExecution,
                             ));
-                            return result_from_state(&machine, &header, &question, facts);
+                            return result_from_state(&mut machine, &header, &question, facts);
                         }
                     };
                     continue;
@@ -1627,7 +1627,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                             facts.set_failure_provenance(FailureProvenance::LocalFailure(
                                 LocalFailureKind::InternalExecution,
                             ));
-                            return result_from_state(&machine, &header, &question, facts);
+                            return result_from_state(&mut machine, &header, &question, facts);
                         }
                     };
                     continue;
@@ -1648,7 +1648,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                             facts.set_failure_provenance(FailureProvenance::LocalFailure(
                                 LocalFailureKind::InternalExecution,
                             ));
-                            return result_from_state(&machine, &header, &question, facts);
+                            return result_from_state(&mut machine, &header, &question, facts);
                         }
                     };
                     continue;
@@ -1692,7 +1692,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                             facts.set_failure_provenance(FailureProvenance::LocalFailure(
                                 LocalFailureKind::InternalExecution,
                             ));
-                            return result_from_state(&machine, &header, &question, facts);
+                            return result_from_state(&mut machine, &header, &question, facts);
                         }
                     };
                     continue;
@@ -1724,7 +1724,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                             Err(_) => {
                                 set_servfail(&mut machine);
                                 facts.set_response_source(ResponseSource::Local);
-                                return result_from_state(&machine, &header, &question, facts);
+                                return result_from_state(&mut machine, &header, &question, facts);
                             }
                         };
                         let source = facts.response_source.clone();
@@ -1749,7 +1749,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                             facts.set_failure_provenance(FailureProvenance::LocalFailure(
                                 LocalFailureKind::InternalExecution,
                             ));
-                            return result_from_state(&machine, &header, &question, facts);
+                            return result_from_state(&mut machine, &header, &question, facts);
                         }
                         if let Some(source) = outcome.source {
                             facts.set_response_source(source);
@@ -1764,7 +1764,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                         step = match machine.resume(dispatch.executable(), Ok(terminal)) {
                             Ok(step) => step,
                             Err(_) => {
-                                return result_from_state(&machine, &header, &question, facts);
+                                return result_from_state(&mut machine, &header, &question, facts);
                             }
                         };
                         continue;
@@ -1790,7 +1790,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                             ));
                             set_servfail(&mut machine);
                             facts.set_response_source(ResponseSource::Local);
-                            return result_from_state(&machine, &header, &question, facts);
+                            return result_from_state(&mut machine, &header, &question, facts);
                         }
                     };
                     continue;
@@ -1825,7 +1825,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                             ));
                             set_servfail(&mut machine);
                             facts.set_response_source(ResponseSource::Local);
-                            return result_from_state(&machine, &header, &question, facts);
+                            return result_from_state(&mut machine, &header, &question, facts);
                         }
                     };
                     let inherited_source = facts.response_source.clone();
@@ -1862,7 +1862,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                                 continue;
                             }
                             Err(_) => {
-                                return result_from_state(&machine, &header, &question, facts);
+                                return result_from_state(&mut machine, &header, &question, facts);
                             }
                         }
                     }
@@ -1885,7 +1885,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                             facts.set_failure_provenance(FailureProvenance::LocalFailure(
                                 LocalFailureKind::InternalExecution,
                             ));
-                            return result_from_state(&machine, &header, &question, facts);
+                            return result_from_state(&mut machine, &header, &question, facts);
                         }
                     };
                     continue;
@@ -1920,7 +1920,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                             ));
                             set_servfail(&mut machine);
                             facts.set_response_source(ResponseSource::Local);
-                            return result_from_state(&machine, &header, &question, facts);
+                            return result_from_state(&mut machine, &header, &question, facts);
                         }
                     };
                     let inherited_source = facts.response_source.clone();
@@ -1956,7 +1956,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                                 continue;
                             }
                             Err(_) => {
-                                return result_from_state(&machine, &header, &question, facts);
+                                return result_from_state(&mut machine, &header, &question, facts);
                             }
                         }
                     }
@@ -1979,7 +1979,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                             facts.set_failure_provenance(FailureProvenance::LocalFailure(
                                 LocalFailureKind::InternalExecution,
                             ));
-                            return result_from_state(&machine, &header, &question, facts);
+                            return result_from_state(&mut machine, &header, &question, facts);
                         }
                     };
                     continue;
@@ -1992,7 +1992,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                         ));
                         set_servfail(&mut machine);
                         facts.set_response_source(ResponseSource::Local);
-                        return result_from_state(&machine, &header, &question, facts);
+                        return result_from_state(&mut machine, &header, &question, facts);
                     };
                     let lookup =
                         store
@@ -2036,7 +2036,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                                 facts.set_failure_provenance(FailureProvenance::LocalFailure(
                                     LocalFailureKind::InternalExecution,
                                 ));
-                                return result_from_state(&machine, &header, &question, facts);
+                                return result_from_state(&mut machine, &header, &question, facts);
                             }
                         };
                         continue;
@@ -2055,7 +2055,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                             ));
                             set_servfail(&mut machine);
                             facts.set_response_source(ResponseSource::Local);
-                            return result_from_state(&machine, &header, &question, facts);
+                            return result_from_state(&mut machine, &header, &question, facts);
                         }
                     };
                     if let Some(store_token) = store.begin_store(raw).ok().flatten() {
@@ -2069,7 +2069,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                             facts.set_failure_provenance(FailureProvenance::LocalFailure(
                                 LocalFailureKind::InternalExecution,
                             ));
-                            return result_from_state(&machine, &header, &question, facts);
+                            return result_from_state(&mut machine, &header, &question, facts);
                         }
                     };
                     continue;
@@ -2088,7 +2088,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                     facts.set_failure_provenance(FailureProvenance::LocalFailure(
                         LocalFailureKind::NoUsableUpstreamResponse,
                     ));
-                    return result_from_state(&machine, &header, &question, facts);
+                    return result_from_state(&mut machine, &header, &question, facts);
                 }
                 publication_deadline = Some(request_deadline);
                 attempted = true;
@@ -2177,7 +2177,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                                 }
                                 set_servfail(&mut machine);
                                 facts.set_response_source(ResponseSource::Local);
-                                return result_from_state(&machine, &header, &question, facts);
+                                return result_from_state(&mut machine, &header, &question, facts);
                             }
                         }
                     }
@@ -2187,7 +2187,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                         ));
                         set_servfail(&mut machine);
                         facts.set_response_source(ResponseSource::Local);
-                        return result_from_state(&machine, &header, &question, facts);
+                        return result_from_state(&mut machine, &header, &question, facts);
                     }
                     Err(error @ ExchangeError::Upstream(_)) => {
                         if !attempt_ledger.slots().is_empty() {
@@ -2219,7 +2219,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                         }
                         set_servfail(&mut machine);
                         facts.set_response_source(ResponseSource::Local);
-                        return result_from_state(&machine, &header, &question, facts);
+                        return result_from_state(&mut machine, &header, &question, facts);
                     }
                 }
                 step = match machine.resume(dispatch.executable(), Ok(ExecutorOutcome::Continue)) {
@@ -2228,7 +2228,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                         facts.set_failure_provenance(FailureProvenance::LocalFailure(
                             LocalFailureKind::InternalExecution,
                         ));
-                        return result_from_state(&machine, &header, &question, facts);
+                        return result_from_state(&mut machine, &header, &question, facts);
                     }
                 };
             }
@@ -4469,8 +4469,11 @@ fn terminal_policy_failure(
     result_from_state(machine, header, question, facts)
 }
 
+/// Builds the final result and consumes the machine's response: a raw wire is
+/// moved out of the state, leaving an empty wire behind, so the machine must
+/// not be read for a response afterwards.
 fn result_from_state(
-    machine: &ExecutionMachine<'_>,
+    machine: &mut ExecutionMachine<'_>,
     header: &QueryHeader,
     question: &QuestionInfo,
     mut facts: ExecutionFacts,
@@ -4947,13 +4950,16 @@ fn policy_failure_for_core(error: &ExecutionError) -> Result<ExecutorError, Exec
     }
 }
 
+/// Returns the final response wire. A raw response is moved out of the machine
+/// state (no copy); the state keeps an empty wire, so call this once, as the
+/// last read of the machine.
 pub(crate) fn response_from_state(
-    machine: &ExecutionMachine<'_>,
+    machine: &mut ExecutionMachine<'_>,
     header: &QueryHeader,
     question: &QuestionInfo,
 ) -> Vec<u8> {
-    match &machine.state().response {
-        MachineResponseState::Raw(wire) => wire.0.clone(),
+    match &mut machine.state_mut().response {
+        MachineResponseState::Raw(wire) => std::mem::take(&mut wire.0),
         MachineResponseState::Synthesized(response) => {
             let rcode = u8::try_from(response.rcode()).unwrap_or(SERVFAIL);
             protocol_error(header, question, rcode)

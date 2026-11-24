@@ -143,6 +143,24 @@ pub fn patch_response_id_ra(packet: &[u8], id: u16) -> Result<Vec<u8>, HeaderErr
     Ok(out)
 }
 
+/// In-place variant of [`patch_response_id_ra`] for a caller that already owns
+/// a private copy of the response: writes the ID over bytes 0-1 (big-endian)
+/// and sets the RA bit, leaving every other byte untouched.
+///
+/// The packet is validated exactly like [`patch_response_id_ra`] and is left
+/// unmodified when an error is returned.
+///
+/// # Errors
+///
+/// Returns [`HeaderError::TooShort`] for a packet shorter than the header and
+/// [`HeaderError::NotResponse`] for a QR-clear packet.
+pub fn patch_response_id_ra_in_place(packet: &mut [u8], id: u16) -> Result<(), HeaderError> {
+    inspect_response_header(packet)?;
+    packet[0..2].copy_from_slice(&id.to_be_bytes());
+    packet[3] |= 0x80;
+    Ok(())
+}
+
 /// Frames a validated response for the transport `mode`, mirroring
 /// `pkg/server_handler/packRawResponse`'s `streamTransport` decision.
 ///
@@ -184,7 +202,7 @@ pub fn frame_response(packet: &[u8], mode: FrameMode) -> Result<Vec<u8>, Framing
 mod tests {
     use super::{
         FrameMode, FramingError, HeaderError, ResponseBuildError, frame_response,
-        patch_response_id_ra, synthesize_response,
+        patch_response_id_ra, patch_response_id_ra_in_place, synthesize_response,
     };
     use crate::{QueryHeader, QuestionInfo};
 
@@ -364,6 +382,51 @@ mod tests {
             u16::from_be_bytes([out[0], out[1]]) != want_id,
             out[0] != 0x11
         );
+    }
+
+    #[test]
+    fn in_place_patch_matches_the_copying_patch_byte_for_byte() {
+        // RA clear and set, truncated (TC), and a response with an OPT record.
+        let plain = resp_wire(&[a(60, &[192, 0, 2, 1])]);
+        let mut ra_clear = resp_wire(&[a(60, &[192, 0, 2, 2])]);
+        ra_clear[3] &= 0x7f;
+        let mut ra_set = resp_wire(&[a(60, &[192, 0, 2, 3])]);
+        ra_set[3] |= 0x80;
+        let mut truncated = resp_wire(&[a(60, &[192, 0, 2, 4])]);
+        truncated[2] |= 0x02;
+        truncated[3] &= 0x7f;
+        let mut with_opt = resp_wire(&[a(60, &[192, 0, 2, 5])]);
+        // Trailing root-name OPT record, UDP size 1232, no options.
+        with_opt.extend_from_slice(&[0, 0, 41, 0x04, 0xd0, 0, 0, 0, 0, 0, 0]);
+        let empty = resp_wire(&[]);
+        for wire in [plain, ra_clear, ra_set, truncated, with_opt, empty] {
+            for id in [0u16, 1, 0x1235, 0xffff] {
+                let want = patch_response_id_ra(&wire, id).unwrap();
+                let mut got = wire.clone();
+                patch_response_id_ra_in_place(&mut got, id).unwrap();
+                assert_eq!(got, want);
+            }
+        }
+    }
+
+    #[test]
+    fn in_place_patch_rejects_bad_input_without_mutation() {
+        for short in [&[0u8; 0][..], &[0x12u8, 0x34, 0x81, 0x80, 0, 0][..]] {
+            let mut buf = short.to_vec();
+            assert_eq!(
+                patch_response_id_ra_in_place(&mut buf, 0xffff),
+                Err(HeaderError::TooShort)
+            );
+            assert_eq!(buf, short);
+        }
+        let mut q = resp_wire(&[]);
+        q[2] &= 0x7f; // clear QR
+        let before = q.clone();
+        assert_eq!(
+            patch_response_id_ra_in_place(&mut q, 1),
+            Err(HeaderError::NotResponse)
+        );
+        assert_eq!(q, before);
     }
 
     #[test]

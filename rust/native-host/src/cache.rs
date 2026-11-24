@@ -11,7 +11,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use atomdns_cache_core::{CacheConfig, CacheError, NativeCache};
 use atomdns_dns_core::{
     QueryError, ResponseError, ResponseMetadata, ResponseQuestion, observe_response_metadata,
-    patch_response_id_ra, validate_response,
+    patch_response_id_ra_in_place, validate_response,
 };
 
 use crate::config::CacheId;
@@ -275,7 +275,10 @@ impl NativeCacheAdapter {
                     .set(self.owner.lazy_hits.get().saturating_add(1));
             }
         }
-        let response = patch_response_id_ra(&lookup.response, request_id)
+        // `lookup.response` is already this caller's private TTL-adjusted copy,
+        // so the ID and RA bit are written in place.
+        let mut response = lookup.response;
+        patch_response_id_ra_in_place(&mut response, request_id)
             .map_err(|_| CacheAdapterError::InvalidQuery)?;
         Ok(Some(CacheHit {
             origin: lookup

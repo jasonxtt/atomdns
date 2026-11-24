@@ -512,7 +512,7 @@ mod tests {
             .expect("resume without a response");
         assert!(matches!(completion, MachineStep::Complete(_)));
 
-        let response = response_from_state(&machine, &header, &question);
+        let response = response_from_state(&mut machine, &header, &question);
         validate_response(&response).expect("REFUSED response must be valid");
         assert_eq!(response[3] & 0x0f, REFUSED);
     }
