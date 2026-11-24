@@ -10,7 +10,9 @@ name = "atomdns_cache_core"
 crate-type = ["rlib"]
 
 [dependencies]
-moka = { version = "=0.12.12", features = ["sync"] }
+# Bounded concurrent store (CLOCK-PRO, MIT). No default features: the bundled
+# foldhash hasher would add a crate, and std SipHash matches the former store.
+quick_cache = { version = "=0.7.0", default-features = false, features = ["parking_lot"] }
 
 [lints]
 workspace = true

@@ -3,7 +3,8 @@
 
 #![allow(clippy::missing_errors_doc)]
 
-use moka::sync::Cache as MokaCache;
+use quick_cache::sync::Cache as QuickCache;
+use std::cell::Cell;
 use std::sync::{Arc, Weak};
 
 mod wire;
@@ -50,12 +51,16 @@ impl std::error::Error for CacheError {}
 
 struct CacheState {
     config: CacheConfig,
-    entries: MokaCache<Box<[u8]>, Arc<CacheEntry>>,
+    /// A sharded CLOCK-PRO store (`quick_cache`): about 70-90 B of bookkeeping
+    /// per entry, against about 250 B for the former moka store
+    /// (docs/rust/validation-records/11-24-quick-cache.md). Expiry is ours:
+    /// lookups drop dead entries, the store only bounds the entry count.
+    entries: QuickCache<Box<[u8]>, Arc<CacheEntry>>,
 }
 
 /// An owned, safe cache instance for Rust-native callers.
 ///
-/// This object owns one Moka store and accepts ordinary Rust slices.
+/// This object owns one bounded store and accepts ordinary Rust slices.
 pub struct NativeCache {
     state: CacheState,
 }
@@ -147,10 +152,10 @@ impl CacheEntry {
         &self.data[self.response_len..]
     }
 
-    fn snapshot(&self, key: &[u8]) -> NativeSnapshotEntry {
+    fn snapshot(&self, key: Box<[u8]>) -> NativeSnapshotEntry {
         NativeSnapshotEntry {
             attachment: self.attachment.clone(),
-            key: key.to_vec(),
+            key: key.into_vec(),
             response: self.response().to_vec(),
             domain_set: self.domain_set().to_vec(),
             times: [
@@ -239,8 +244,7 @@ fn lookup_data(
         return Ok(None);
     };
     if now_unix >= entry.cache_expires_at_unix {
-        cache.state.entries.invalidate(key);
-        cache.state.entries.run_pending_tasks();
+        cache.remove_entry(key, &entry);
         return Ok(None);
     }
 
@@ -256,7 +260,7 @@ fn lookup_data(
         return Ok(None);
     };
     let response = response.map_err(|_| {
-        cache.state.entries.invalidate(key);
+        cache.remove_entry(key, &entry);
         CacheError::Internal
     })?;
     Ok(Some(NativeLookup {
@@ -274,12 +278,23 @@ impl NativeCache {
         if config.capacity == 0 {
             return Err(CacheError::InvalidConfig);
         }
+        let capacity = usize::try_from(config.capacity).unwrap_or(usize::MAX);
         Ok(Self {
             state: CacheState {
                 config,
-                entries: MokaCache::builder().max_capacity(config.capacity).build(),
+                entries: QuickCache::new(capacity),
             },
         })
+    }
+
+    /// Drops `key` only while it still holds `entry`, so a concurrent store of
+    /// a fresh answer for the same key is never removed by a stale lookup.
+    fn remove_entry(&self, key: &[u8], entry: &Arc<CacheEntry>) {
+        // The removed value drops here, outside the shard lock.
+        let _removed = self
+            .state
+            .entries
+            .remove_if(key, |current| Arc::ptr_eq(current, entry));
     }
 
     pub fn store(
@@ -345,12 +360,11 @@ impl NativeCache {
     /// Captures only entries whose complete retention window is still live.
     #[must_use]
     pub fn snapshot(&self, now: i64) -> Vec<NativeSnapshotEntry> {
-        self.state.entries.run_pending_tasks();
         self.state
             .entries
             .iter()
             .filter_map(|(key, entry)| {
-                (entry.cache_expires_at_unix > now).then(|| entry.snapshot(&key))
+                (entry.cache_expires_at_unix > now).then(|| entry.snapshot(key))
             })
             .collect()
     }
@@ -362,10 +376,9 @@ impl NativeCache {
         max_entries: usize,
         max_bytes: usize,
     ) -> Result<Vec<NativeSnapshotEntry>, CacheError> {
-        self.state.entries.run_pending_tasks();
         let mut snapshot = Vec::new();
         let mut bytes = 0_usize;
-        for (key, entry) in &self.state.entries {
+        for (key, entry) in self.state.entries.iter() {
             if entry.cache_expires_at_unix <= now {
                 continue;
             }
@@ -376,7 +389,7 @@ impl NativeCache {
             if snapshot.len() >= max_entries || bytes > max_bytes {
                 return Err(CacheError::InvalidConfig);
             }
-            snapshot.push(entry.snapshot(&key));
+            snapshot.push(entry.snapshot(key));
         }
         Ok(snapshot)
     }
@@ -390,8 +403,7 @@ impl NativeCache {
 
     #[must_use]
     pub fn len(&self) -> u64 {
-        self.state.entries.run_pending_tasks();
-        self.state.entries.entry_count()
+        u64::try_from(self.state.entries.len()).unwrap_or(u64::MAX)
     }
 
     #[must_use]
@@ -399,19 +411,24 @@ impl NativeCache {
         self.len() == 0
     }
 
+    /// Counts entries whose retention window is still live, dropping the
+    /// dead ones on the way: they can never be served again, and counting in
+    /// place avoids copying every key.
     #[must_use]
     pub fn live_len(&self, now: i64) -> usize {
-        self.state.entries.run_pending_tasks();
-        self.state
-            .entries
-            .iter()
-            .filter(|(_, entry)| entry.cache_expires_at_unix > now)
-            .count()
+        let live = Cell::new(0_usize);
+        self.state.entries.retain(|_, entry| {
+            let alive = entry.cache_expires_at_unix > now;
+            if alive {
+                live.set(live.get() + 1);
+            }
+            alive
+        });
+        live.get()
     }
 
     pub fn flush(&self) {
-        self.state.entries.invalidate_all();
-        self.state.entries.run_pending_tasks();
+        self.state.entries.clear();
     }
 }
 
@@ -594,6 +611,39 @@ mod tests {
                 .expect("cache expiry boundary")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn stale_removal_keeps_a_newer_answer_for_the_same_key() {
+        let cache = NativeCache::new(CONFIG).expect("cache");
+        cache
+            .store(b"key", &response(60, [192, 0, 2, 1]), &[], 100, 160, 200)
+            .expect("first store");
+        let stale = cache.state.entries.get(&b"key"[..]).expect("stored");
+        cache
+            .store(b"key", &response(60, [192, 0, 2, 2]), &[], 100, 160, 300)
+            .expect("replacement");
+        cache.remove_entry(b"key", &stale);
+        let hit = cache.lookup(b"key", 150).expect("lookup").expect("kept");
+        assert_eq!(hit.response[41..45], [192, 0, 2, 2]);
+
+        let current = cache.state.entries.get(&b"key"[..]).expect("stored");
+        cache.remove_entry(b"key", &current);
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn live_len_counts_live_entries_and_drops_dead_ones() {
+        let cache = NativeCache::new(CONFIG).expect("cache");
+        let packet = response(60, [192, 0, 2, 1]);
+        cache.store(b"dead", &packet, &[], 100, 160, 200).unwrap();
+        cache.store(b"live", &packet, &[], 100, 160, 300).unwrap();
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.live_len(199), 2);
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.live_len(200), 1);
+        assert_eq!(cache.len(), 1, "the expired entry is gone");
+        assert!(cache.lookup(b"live", 150).unwrap().is_some());
     }
 
     #[test]
