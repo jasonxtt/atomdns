@@ -26,16 +26,26 @@ impl<V> Node<V> {
 /// Go's `ReverseDomainScanner`: trims one more trailing dot, then yields the
 /// labels from the right. Empty labels between or after dots are kept, but a
 /// leading empty label (the text starts with `.`) is never yielded.
+#[cfg(test)]
 pub(crate) fn reverse_labels(s: &str) -> Vec<&str> {
+    reverse_label_iter(s).collect()
+}
+
+/// The labels of `s` from the last to the first, after one trailing dot is
+/// dropped. A leading dot adds no empty label; inner empty labels are kept.
+/// An iterator, so the per-query lookups allocate no label list.
+pub(crate) fn reverse_label_iter(s: &str) -> impl Iterator<Item = &str> {
     let s = s.strip_suffix('.').unwrap_or(s);
-    let mut labels = Vec::new();
     let mut end = s.len();
-    while end > 0 {
+    std::iter::from_fn(move || {
+        if end == 0 {
+            return None;
+        }
         let start = s[..end].rfind('.');
-        labels.push(&s[start.map_or(0, |dot| dot + 1)..end]);
+        let label = &s[start.map_or(0, |dot| dot + 1)..end];
         end = start.unwrap_or(0);
-    }
-    labels
+        Some(label)
+    })
 }
 
 impl<V> DomainSuffixMatcher<V> {
@@ -55,7 +65,7 @@ impl<V> DomainSuffixMatcher<V> {
     /// `MixMatcher` and the mapper normalise once before the scanner).
     pub fn add_normalized(&mut self, domain: &str, value: V) {
         let mut node = 0;
-        for label in reverse_labels(domain) {
+        for label in reverse_label_iter(domain) {
             node = match self.nodes[node].children.get(label) {
                 Some(&child) => child,
                 None => {
@@ -78,7 +88,7 @@ impl<V> DomainSuffixMatcher<V> {
     pub fn match_normalized(&self, domain: &str) -> Option<&V> {
         let mut node = 0;
         let mut last: Option<&V> = self.nodes[0].value.as_ref();
-        for label in reverse_labels(domain) {
+        for label in reverse_label_iter(domain) {
             match self.nodes[node].children.get(label) {
                 Some(&child) => {
                     if self.nodes[child].value.is_some() {

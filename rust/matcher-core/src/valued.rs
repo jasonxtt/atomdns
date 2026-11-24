@@ -427,13 +427,17 @@ impl ValuedDomainMatcher {
         if !name.is_ascii() {
             return None;
         }
-        let normalized = normalize(name);
+        // One buffer for both keys: the `full:` key is always the normalized
+        // name plus one dot (`full_key(name) == normalize(name) + "."`).
+        let mut full = normalize(name);
+        full.push('.');
+        let normalized = &full[..full.len() - 1];
         let mut merged = self
             .full
-            .get(full_key(name).as_bytes())
+            .get(full.as_bytes())
             .map(|id| self.results[id].as_ref().clone());
 
-        if let Some(id) = self.domain.suffix(&suffix_key(&normalized)) {
+        if let Some(id) = self.domain.suffix(&suffix_key(normalized)) {
             merged = Some(merge_results(merged, &self.results[id]));
         }
 
@@ -443,7 +447,7 @@ impl ValuedDomainMatcher {
                 OverlapRule::Keyword { pattern, .. } => {
                     !pattern.is_empty() && normalized.contains(pattern)
                 }
-                OverlapRule::Regexp { matcher, .. } => matcher.is_match(&normalized),
+                OverlapRule::Regexp { matcher, .. } => matcher.is_match(normalized),
             };
             if matches {
                 let result = match overlap {
@@ -618,6 +622,29 @@ fn append_joined_value(joined: &mut String, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::{ValuedBuildError, ValuedDomainMatcher, ValuedRule};
+
+    #[test]
+    fn full_key_is_the_normalized_name_plus_one_dot() {
+        for name in [
+            "",
+            ".",
+            "..",
+            "a",
+            "a.",
+            "a..",
+            ".a",
+            "A.B",
+            "a.B.",
+            "x..y.",
+            "www.Example.COM",
+        ] {
+            assert_eq!(
+                super::full_key(name),
+                format!("{}.", crate::normalize(name)),
+                "{name:?}"
+            );
+        }
+    }
 
     #[test]
     fn overwritten_normalized_aliases_do_not_keep_dead_payloads() {

@@ -93,9 +93,9 @@ pub use observer::{
     AdmissionError, AnswerDetailsStatus, AuditAnswer, AuditClock, AuditRecord, AuditSnapshot,
     AuditTestClock, CacheStatus, DurationHistogramBucket, DurationHistogramSnapshot,
     FailureProvenance, LocalFailureKind, MetricsSnapshot, QueryTerminalOutcome, QueryTransport,
-    ResponseDetails, ResponseFlags, ResponseSource, ResponseState, UpstreamAttemptMetricsSnapshot,
-    UpstreamAttemptOutcome, UpstreamAttemptRecord, UpstreamDiagnosticAttempt,
-    UpstreamDiagnosticSelected, UpstreamDiagnostics, UpstreamTransport,
+    ResponseDetails, ResponseFlags, ResponseSource, ResponseState, TraceId,
+    UpstreamAttemptMetricsSnapshot, UpstreamAttemptOutcome, UpstreamAttemptRecord,
+    UpstreamDiagnosticAttempt, UpstreamDiagnosticSelected, UpstreamDiagnostics, UpstreamTransport,
 };
 pub use process_metrics::mark_image_start;
 pub use restart::{

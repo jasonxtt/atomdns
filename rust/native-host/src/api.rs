@@ -1789,7 +1789,7 @@ fn project_log(record: &AuditRecord) -> AuditLogResponse {
         query_type: query_type_name(record.qtype).to_owned(),
         query_class: query_class_name(record.qclass).to_owned(),
         client_ip: record.client_addr.ip().to_string(),
-        trace_id: record.trace_id.clone(),
+        trace_id: record.trace_id.to_string(),
         duration_ms: record.elapsed.as_secs_f64() * 1_000.0,
         response_code: response_code_name(&record.response, record.response_details.rcode),
         response_flags: AuditResponseFlags {

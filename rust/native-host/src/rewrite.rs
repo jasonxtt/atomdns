@@ -325,9 +325,19 @@ impl Rewrite {
                 if !matches!(qtype, 1 | 28) {
                     skeleton(state, raw)
                 } else {
-                    match self
-                        .resolve(&domain, qtype, raw, deadline, cancellations, sequence)
-                        .await
+                    // Boxed: only a matched domain rewrite resolves, but an inline
+                    // resolve future made every query's state about 2.4 KB larger,
+                    // and the state is moved on every spawn
+                    // (docs/rust/validation-records/11-24-profile-query-cpu.md).
+                    match Box::pin(self.resolve(
+                        &domain,
+                        qtype,
+                        raw,
+                        deadline,
+                        cancellations,
+                        sequence,
+                    ))
+                    .await
                     {
                         Resolved::Answers(answers) => domain_response(raw, &answers),
                         Resolved::Failed => None,

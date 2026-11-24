@@ -1,29 +1,84 @@
 //! Compact, lossless storage for terminal audit records.
 
 use std::cmp::Ordering;
-use std::collections::hash_map::RandomState;
-use std::hash::{BuildHasher, Hash};
+use std::hash::{BuildHasher, BuildHasherDefault, Hash, Hasher};
 use std::net::{SocketAddr, SocketAddrV6};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::{AuditRecord, ResponseDetails};
+use super::{AuditRecord, ResponseDetails, TraceId};
 
 const SHARING_SLOTS: usize = 4096;
+const SHARING_SLOT_BITS: u32 = SHARING_SLOTS.trailing_zeros();
+const _: () = assert!(SHARING_SLOTS.is_power_of_two());
+
+/// A multiply-rotate hash (the FxHash scheme) for picking a sharing slot. The
+/// slot is only a hint: a collision costs one missed share, never a wrong
+/// record, so a keyed hash buys nothing here and SipHash cost about 2% of the
+/// cache-hit path (docs/rust/validation-records/11-24-profile-query-cpu.md).
+#[derive(Default)]
+struct SlotHasher(u64);
+
+impl SlotHasher {
+    const SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
+
+    fn add(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(Self::SEED);
+    }
+}
+
+impl Hasher for SlotHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        let mut chunks = bytes.chunks_exact(8);
+        for chunk in &mut chunks {
+            self.add(u64::from_le_bytes(chunk.try_into().expect("8-byte chunk")));
+        }
+        let rest = chunks.remainder();
+        if !rest.is_empty() {
+            let mut word = [0_u8; 8];
+            word[..rest.len()].copy_from_slice(rest);
+            self.add(u64::from_le_bytes(word));
+        }
+    }
+
+    fn write_u8(&mut self, value: u8) {
+        self.add(u64::from(value));
+    }
+
+    fn write_u16(&mut self, value: u16) {
+        self.add(u64::from(value));
+    }
+
+    fn write_u32(&mut self, value: u32) {
+        self.add(u64::from(value));
+    }
+
+    fn write_u64(&mut self, value: u64) {
+        self.add(value);
+    }
+
+    fn write_usize(&mut self, value: usize) {
+        self.add(value as u64);
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
 
 /// A fixed-size weak cache. Collisions replace only the cache hint; existing
 /// records/snapshots keep their own strong references. It never owns strings
 /// after their final record has been released.
 struct SharingCache<T> {
     slots: Vec<Option<Weak<T>>>,
-    hash: RandomState,
+    hash: BuildHasherDefault<SlotHasher>,
 }
 
 impl<T> Default for SharingCache<T> {
     fn default() -> Self {
         Self {
             slots: Vec::new(),
-            hash: RandomState::new(),
+            hash: BuildHasherDefault::default(),
         }
     }
 }
@@ -39,7 +94,8 @@ impl<T: Hash + Eq> SharingCache<T> {
             }
             self.slots.resize_with(SHARING_SLOTS, || None);
         }
-        let slot = usize::try_from(self.hash.hash_one(&value) % SHARING_SLOTS as u64)
+        // The top bits: the final multiply mixes them best.
+        let slot = usize::try_from(self.hash.hash_one(&value) >> (u64::BITS - SHARING_SLOT_BITS))
             .expect("sharing slot fits usize");
         if let Some(existing) = self.slots[slot].as_ref().and_then(Weak::upgrade) {
             if *existing == value {
@@ -99,7 +155,7 @@ impl RetainedAuditRecord {
             timestamp: self.timestamp(),
             client_addr: self.client_addr(),
             qname: self.qname.to_string(),
-            trace_id: self.trace_id.to_string(),
+            trace_id: self.trace_id.to_trace_id(),
             elapsed: self.elapsed(),
             response_details: self.response_details.as_ref().clone(),
             ..self.template.as_ref().clone()
@@ -172,7 +228,7 @@ impl AuditRetention {
             elapsed_nanos: u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX),
             client: std::mem::replace(&mut record.client_addr, ([0, 0, 0, 0], 0).into()).into(),
             qname: std::mem::take(&mut record.qname).into_boxed_str(),
-            trace_id: RetainedTraceId::from_string(
+            trace_id: RetainedTraceId::new(
                 std::mem::take(&mut record.trace_id),
                 &mut self.native_prefix,
             ),
@@ -206,25 +262,14 @@ pub(super) enum TracePrefix {
 }
 
 impl RetainedTraceId {
+    #[cfg(test)]
     fn from_string(value: String, native_prefix: &mut Option<Arc<TracePrefix>>) -> Self {
-        let parsed = value.strip_prefix("n-").and_then(|text| {
-            let (nonce, counter) = text.split_once('-')?;
-            if nonce.len() != 32
-                || counter.len() != 16
-                || !nonce
-                    .bytes()
-                    .chain(counter.bytes())
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-            {
-                return None;
-            }
-            Some((
-                u128::from_str_radix(nonce, 16).ok()?,
-                u64::from_str_radix(counter, 16).ok()?,
-            ))
-        });
-        match parsed {
-            Some((nonce, counter)) => {
+        Self::new(TraceId::parse(value), native_prefix)
+    }
+
+    fn new(value: TraceId, native_prefix: &mut Option<Arc<TracePrefix>>) -> Self {
+        match value {
+            TraceId::Native { nonce, counter } => {
                 let prefix = match native_prefix {
                     Some(shared) if **shared == TracePrefix::Native(nonce) => Arc::clone(shared),
                     _ => {
@@ -235,10 +280,20 @@ impl RetainedTraceId {
                 };
                 Self { counter, prefix }
             }
-            None => Self {
+            TraceId::Text(value) => Self {
                 counter: 0,
                 prefix: Arc::new(TracePrefix::Text(value.into_boxed_str())),
             },
+        }
+    }
+
+    pub(crate) fn to_trace_id(&self) -> TraceId {
+        match self.prefix.as_ref() {
+            TracePrefix::Native(nonce) => TraceId::Native {
+                nonce: *nonce,
+                counter: self.counter,
+            },
+            TracePrefix::Text(value) => TraceId::Text(value.to_string()),
         }
     }
 }
@@ -296,7 +351,10 @@ mod tests {
             assert_eq!(RetainedClient::from(address).address(), address);
         }
         let scoped = SocketAddr::V6(SocketAddrV6::new("fe80::7".parse().unwrap(), 53, 9, 3));
-        assert!(matches!(RetainedClient::from(scoped), RetainedClient::Full(_)));
+        assert!(matches!(
+            RetainedClient::from(scoped),
+            RetainedClient::Full(_)
+        ));
         assert_eq!(RetainedClient::from(scoped).address(), scoped);
 
         for time in [

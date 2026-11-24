@@ -87,7 +87,7 @@ impl NativeRequestIdAllocator {
         Ok(Self::from_nonce(nonce))
     }
 
-    fn allocate(&self) -> Result<String, AdmissionError> {
+    fn allocate(&self) -> Result<TraceId, AdmissionError> {
         let counter = self
             .next
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
@@ -100,12 +100,106 @@ impl NativeRequestIdAllocator {
                 }
             })
             .map_err(|_| AdmissionError::RequestIdExhausted)?;
-        let mut nonce_hex = String::with_capacity(32);
-        for byte in self.nonce {
-            use std::fmt::Write;
-            let _ = write!(nonce_hex, "{byte:02x}");
+        Ok(TraceId::Native {
+            nonce: u128::from_be_bytes(self.nonce),
+            counter,
+        })
+    }
+}
+
+/// Native admission identifier, independent of the DNS transaction ID.
+///
+/// Its text form is `n-<nonce>-<counter>` (32 and 16 lowercase hex digits).
+/// Admission keeps the two numbers and spells the text only where it is shown
+/// (API rows, diagnostic capture): formatting it on every query was a measurable
+/// share of the cache-hit path (docs/rust/validation-records/11-24-profile-query-cpu.md).
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum TraceId {
+    /// `n-<nonce>-<counter>`.
+    Native { nonce: u128, counter: u64 },
+    /// Any other spelling, kept verbatim.
+    Text(String),
+}
+
+impl TraceId {
+    /// Reads the text form; a native spelling becomes [`TraceId::Native`], so
+    /// equal texts give equal ids.
+    #[must_use]
+    pub fn parse(value: String) -> Self {
+        let parsed = value.strip_prefix("n-").and_then(|text| {
+            let (nonce, counter) = text.split_once('-')?;
+            if nonce.len() != 32
+                || counter.len() != 16
+                || !nonce
+                    .bytes()
+                    .chain(counter.bytes())
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
+                return None;
+            }
+            Some((
+                u128::from_str_radix(nonce, 16).ok()?,
+                u64::from_str_radix(counter, 16).ok()?,
+            ))
+        });
+        match parsed {
+            Some((nonce, counter)) => Self::Native { nonce, counter },
+            None => Self::Text(value),
         }
-        Ok(format!("n-{nonce_hex}-{counter:016x}"))
+    }
+}
+
+impl Default for TraceId {
+    fn default() -> Self {
+        Self::Text(String::new())
+    }
+}
+
+impl From<String> for TraceId {
+    fn from(value: String) -> Self {
+        Self::parse(value)
+    }
+}
+
+impl From<&str> for TraceId {
+    fn from(value: &str) -> Self {
+        Self::parse(value.to_owned())
+    }
+}
+
+impl std::fmt::Display for TraceId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Native { nonce, counter } => write!(formatter, "n-{nonce:032x}-{counter:016x}"),
+            Self::Text(value) => formatter.write_str(value),
+        }
+    }
+}
+
+/// The order of the text forms: fixed-width lowercase hex sorts like the numbers.
+impl Ord for TraceId {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match (self, other) {
+            (
+                Self::Native { nonce, counter },
+                Self::Native {
+                    nonce: other_nonce,
+                    counter: other_counter,
+                },
+            ) => (nonce, counter).cmp(&(other_nonce, other_counter)),
+            // Equal texts of different variants (a hand-built `Text` holding a
+            // native spelling) are unequal, so they get a fixed order too.
+            _ => self
+                .to_string()
+                .cmp(&other.to_string())
+                .then_with(|| matches!(self, Self::Text(_)).cmp(&matches!(other, Self::Text(_)))),
+        }
+    }
+}
+
+impl PartialOrd for TraceId {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -717,7 +811,7 @@ pub struct AuditRecord {
     /// Parsed question class.
     pub qclass: u16,
     /// Native admission identifier, independent of the DNS transaction ID.
-    pub trace_id: String,
+    pub trace_id: TraceId,
     /// Monotonic elapsed time from admission through terminalization.
     pub elapsed: Duration,
     /// Mutually exclusive lifecycle terminal outcome.
@@ -1622,8 +1716,9 @@ impl QueryObserver {
         });
         let mut execution_checkpoint = Box::new(ExecutionCheckpoint::new(enabled || traced));
         if let Some(context) = audit_context.as_ref().filter(|_| traced) {
-            execution_checkpoint.step_trace = Some(Rc::new(QueryTrace::new(&context.trace_id)));
-            execution_checkpoint.capture_trace_id = Some(Rc::from(context.trace_id.as_str()));
+            let trace_id = context.trace_id.to_string();
+            execution_checkpoint.capture_trace_id = Some(Rc::from(trace_id.as_str()));
+            execution_checkpoint.step_trace = Some(Rc::new(QueryTrace { trace_id }));
         }
         self.admit_query();
         Ok(AdmittedQueryGuard {
@@ -1790,7 +1885,7 @@ struct AuditContext {
     qname: String,
     qtype: u16,
     qclass: u16,
-    trace_id: String,
+    trace_id: TraceId,
 }
 
 /// Finalizes one admitted request. Dropping an unfinished request records one
@@ -1913,14 +2008,6 @@ struct QueryTrace {
     trace_id: String,
 }
 
-impl QueryTrace {
-    fn new(trace_id: &str) -> Self {
-        Self {
-            trace_id: trace_id.to_owned(),
-        }
-    }
-}
-
 impl atomdns_sequence_core::StepTrace for QueryTrace {
     fn matcher(
         &self,
@@ -1964,6 +2051,7 @@ impl atomdns_sequence_core::StepTrace for QueryTrace {
 /// the capture buffer only, so the DNS thread does no file I/O for it.
 fn capture_query_line(context: &AuditContext, observation: &TerminalObservation) {
     use crate::capture::Field;
+    let trace_id = context.trace_id.to_string();
     let client = context.client_addr.to_string();
     let transport = format!("{:?}", context.transport).to_lowercase();
     let outcome = format!("{:?}", observation.outcome);
@@ -1977,7 +2065,7 @@ fn capture_query_line(context: &AuditContext, observation: &TerminalObservation)
         .as_deref()
         .or(observation.selected_upstream.as_deref());
     let mut fields = vec![
-        ("trace_id", Field::Str(&context.trace_id)),
+        ("trace_id", Field::Str(&trace_id)),
         ("domain", Field::Str(context.qname.trim_end_matches('.'))),
         ("qtype", Field::Uint(u64::from(context.qtype))),
         ("client", Field::Str(&client)),
@@ -2071,8 +2159,8 @@ mod tests {
         AuditRecord, CacheStatus, FailureProvenance, INITIAL_AUDIT_RECORD_CAPACITY,
         LocalFailureKind, MAX_NATIVE_REQUEST_ID, NativeRequestIdAllocator, QueryObserver,
         QueryTerminalOutcome, QueryTransport, ResponseDetails, ResponseSource, ResponseState,
-        TerminalObservation, UpstreamAttemptList, UpstreamAttemptOutcome, UpstreamAttemptRecord,
-        UpstreamAttemptTracker, UpstreamTransport,
+        TerminalObservation, TraceId, UpstreamAttemptList, UpstreamAttemptOutcome,
+        UpstreamAttemptRecord, UpstreamAttemptTracker, UpstreamTransport,
     };
 
     fn observer(audit_enabled: bool, capacity: usize) -> QueryObserver {
@@ -2185,7 +2273,7 @@ mod tests {
     fn native_request_ids_are_fixed_width_and_fail_closed_at_counter_exhaustion() {
         let allocator = NativeRequestIdAllocator::from_nonce([0xab; 16]);
         assert_eq!(
-            allocator.allocate().expect("first request id"),
+            allocator.allocate().expect("first request id").to_string(),
             "n-abababababababababababababababab-0000000000000001"
         );
         allocator
@@ -2193,6 +2281,55 @@ mod tests {
             .store(MAX_NATIVE_REQUEST_ID, Ordering::SeqCst);
         assert!(allocator.allocate().is_ok());
         assert!(allocator.allocate().is_err());
+    }
+
+    #[test]
+    fn trace_ids_keep_their_text_and_text_order() {
+        let native = "n-00ab0000000000000000000000000001-00000000000000ff";
+        let parsed = TraceId::from(native);
+        assert_eq!(
+            parsed,
+            TraceId::Native {
+                nonce: 0x00ab_0000_0000_0000_0000_0000_0000_0001,
+                counter: 0xff
+            }
+        );
+        assert_eq!(parsed.to_string(), native);
+        for text in [
+            "",
+            "t-1",
+            "n-00ab0000000000000000000000000001-ff",
+            "n-00AB0000000000000000000000000001-00000000000000ff",
+        ] {
+            assert_eq!(TraceId::from(text), TraceId::Text(text.to_owned()));
+            assert_eq!(TraceId::from(text).to_string(), text);
+        }
+
+        let mut ids: Vec<TraceId> = [
+            "n-00000000000000000000000000000002-0000000000000000",
+            "t-1",
+            "n-00000000000000000000000000000001-0000000000000010",
+            "a",
+            "n-00000000000000000000000000000001-000000000000000f",
+            "n-",
+        ]
+        .into_iter()
+        .map(TraceId::from)
+        .collect();
+        let mut texts: Vec<String> = ids.iter().map(ToString::to_string).collect();
+        ids.sort();
+        texts.sort();
+        assert_eq!(
+            ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            texts
+        );
+        let native = TraceId::Native {
+            nonce: 0,
+            counter: 1,
+        };
+        let text = TraceId::Text(native.to_string());
+        assert_ne!(native, text);
+        assert_ne!(native.cmp(&text), std::cmp::Ordering::Equal);
     }
 
     #[test]
@@ -2683,7 +2820,7 @@ mod tests {
             upstream_attempts: observation.upstream_attempts.into_vec(),
             upstream_diagnostics: observation.upstream_diagnostics,
             failure_provenance: None,
-            trace_id: "n-11111111111111111111111111111111-0000000000000001".to_owned(),
+            trace_id: "n-11111111111111111111111111111111-0000000000000001".into(),
             response_details: ResponseDetails::no_response(),
             domain_set: None,
             effective_tag: None,

@@ -46,24 +46,33 @@ impl CompactIndex {
     }
 
     pub(crate) fn get(&self, key: &[u8]) -> Option<usize> {
+        self.search(key, self.results.len()).ok()
+    }
+
+    /// Binary search in `[0, hi)`: the key's result, or where it would sit.
+    fn search(&self, key: &[u8], mut hi: usize) -> Result<usize, usize> {
         let mut lo = 0;
-        let mut hi = self.results.len();
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
             match self.bytes[self.offsets[mid]..self.offsets[mid + 1]].cmp(key) {
                 std::cmp::Ordering::Less => lo = mid + 1,
                 std::cmp::Ordering::Greater => hi = mid,
-                std::cmp::Ordering::Equal => return Some(self.results[mid]),
+                std::cmp::Ordering::Equal => return Ok(self.results[mid]),
             }
         }
-        None
+        Err(lo)
     }
 
     pub(crate) fn suffix(&self, key: &str) -> Option<usize> {
+        // Each shorter candidate is a proper prefix of the previous one, so it
+        // sorts before it and before every key at or after the place the
+        // previous one would sit: the next search only needs `[0, that place)`.
+        let mut hi = self.results.len();
         let mut end = key.len();
         loop {
-            if let Some(result) = self.get(&key.as_bytes()[..end]) {
-                return Some(result);
+            match self.search(&key.as_bytes()[..end], hi) {
+                Ok(result) => return Some(result),
+                Err(place) => hi = place,
             }
             if end == 0 {
                 return None;
@@ -78,7 +87,7 @@ impl CompactIndex {
 /// single empty label from zero labels (the root rule).
 pub(crate) fn suffix_key(normalized: &str) -> String {
     let mut key = String::with_capacity(normalized.len() + 1);
-    for label in crate::trie::reverse_labels(normalized) {
+    for label in crate::trie::reverse_label_iter(normalized) {
         key.push_str(label);
         key.push('.');
     }

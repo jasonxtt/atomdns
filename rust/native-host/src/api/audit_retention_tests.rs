@@ -41,7 +41,7 @@ fn fixture(index: u32) -> AuditRecord {
             .to_owned(),
         qtype: [1, 28, 65000, 5][index as usize % 4],
         qclass: 1,
-        trace_id: format!("n-11111111111111111111111111111111-{index:016x}"),
+        trace_id: format!("n-11111111111111111111111111111111-{index:016x}").into(),
         elapsed: Duration::from_micros(100 + u64::from(index % 4)),
         terminal_outcome: QueryTerminalOutcome::SendSucceeded,
         response: ResponseState::Dns {
