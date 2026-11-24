@@ -462,3 +462,66 @@ fn sync_execute_remains_an_adapter_over_the_same_machine() {
     );
     assert!(sync_state.marks.contains(&88));
 }
+
+#[test]
+fn a_detached_machine_resumes_the_same_pending_dispatch_after_attach() {
+    let program = external_program();
+    let entry = program.sequence_id("main").expect("main entry");
+    let mut machine =
+        ExecutionMachine::new(&program, entry, state(), ExecutionControl::with_fuel(10))
+            .expect("machine creates");
+    let MachineStep::Dispatch(dispatch) = machine.step().expect("external dispatch") else {
+        panic!("expected external dispatch");
+    };
+    let Ok(detached) = machine.detach() else {
+        panic!("an owned machine detaches");
+    };
+    // Moving the detached machine keeps every frame: the same dispatch is
+    // still pending after it is bound to its program again.
+    let moved = Box::new(detached);
+    let Ok(mut machine) = moved.attach(&program) else {
+        panic!("the same program attaches");
+    };
+    assert!(machine.state().marks.contains(&77));
+    let completion = machine
+        .resume(dispatch.executable(), Ok(ExecutorOutcome::Continue))
+        .expect("resume completes the following accept");
+    assert_eq!(
+        completion,
+        MachineStep::Complete(ExecutionCompletion::Completed)
+    );
+}
+
+#[test]
+fn a_detached_machine_refuses_another_program_and_a_borrowed_machine_stays_attached() {
+    let program = external_program();
+    let other = external_program();
+    let entry = program.sequence_id("main").expect("main entry");
+    let mut machine =
+        ExecutionMachine::new(&program, entry, state(), ExecutionControl::with_fuel(10))
+            .expect("machine creates");
+    let MachineStep::Dispatch(dispatch) = machine.step().expect("external dispatch") else {
+        panic!("expected external dispatch");
+    };
+    let Ok(detached) = machine.detach() else {
+        panic!("an owned machine detaches");
+    };
+    let Err(detached) = detached.attach(&other) else {
+        panic!("another program must be refused");
+    };
+    let Ok(mut machine) = (*detached).attach(&program) else {
+        panic!("the original program attaches");
+    };
+    assert!(
+        machine
+            .resume(dispatch.executable(), Ok(ExecutorOutcome::Continue))
+            .is_ok()
+    );
+
+    let mut borrowed_state = state();
+    let mut borrowed_control = ExecutionControl::with_fuel(10);
+    let borrowed =
+        ExecutionMachine::borrowed(&program, entry, &mut borrowed_state, &mut borrowed_control)
+            .expect("borrowed machine creates");
+    assert!(borrowed.detach().is_err());
+}

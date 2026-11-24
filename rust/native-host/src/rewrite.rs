@@ -167,6 +167,34 @@ pub(crate) enum RewriteEnd {
     Cancelled,
 }
 
+/// How the non-waiting part of one dispatch ended.
+pub(crate) enum RewriteStart {
+    /// No rule matched: the chain continues.
+    NoMatch,
+    /// A response was set: the chain is accepted.
+    Answered,
+    /// A domain target must be resolved; the query is already labelled.
+    Resolve(PendingLookup),
+}
+
+/// The domain target of a matched rule, still to be resolved.
+#[derive(Debug)]
+pub(crate) struct PendingLookup {
+    domain: String,
+    qtype: u16,
+}
+
+/// Sets the answer a rewrite produced; a failed lookup or an unbuildable
+/// answer is SERVFAIL.
+fn set_rewrite_response(state: &mut ExecutionState, response: Option<Vec<u8>>) {
+    match response {
+        Some(wire) => state.set_raw_response(wire),
+        None => {
+            let _ = state.set_synthesized_response(2);
+        }
+    }
+}
+
 /// Runs a sequence of this process over a query and returns the response
 /// wire, `None` when it produced none (the executor owns the nesting guard).
 pub(crate) trait SequenceResolver {
@@ -306,13 +334,28 @@ impl Rewrite {
         cancellations: &[&TransportCancellation],
         sequence: Option<(SequenceId, &dyn SequenceResolver)>,
     ) -> RewriteEnd {
+        match self.start(state, raw) {
+            RewriteStart::NoMatch => RewriteEnd::NoMatch,
+            RewriteStart::Answered => RewriteEnd::Answered,
+            RewriteStart::Resolve(lookup) => {
+                self.finish_resolve(state, raw, lookup, deadline, cancellations, sequence)
+                    .await
+            }
+        }
+    }
+
+    /// The part of [`Rewrite::run`] that never waits: it looks the rule up
+    /// once, labels the query and answers an IP or non-address target. A domain
+    /// target for A/AAAA is returned for [`Rewrite::finish_resolve`], which
+    /// continues from here without looking the rule up again.
+    pub(crate) fn start(&self, state: &mut ExecutionState, raw: &[u8]) -> RewriteStart {
         let question = &state.query.question;
         let Some(name) = crate::matchers::wire_name_to_ascii_domain(&question.qname_wire) else {
-            return RewriteEnd::NoMatch;
+            return RewriteStart::NoMatch;
         };
         let rules = self.current();
         let Some(target) = rules.lookup(&name).cloned() else {
-            return RewriteEnd::NoMatch;
+            return RewriteStart::NoMatch;
         };
         state.apply_mutation(StateMutation::SetRouting {
             field: RoutingField::DomainSet,
@@ -325,34 +368,44 @@ impl Rewrite {
                 if !matches!(qtype, 1 | 28) {
                     skeleton(state, raw)
                 } else {
-                    // Boxed: only a matched domain rewrite resolves, but an inline
-                    // resolve future made every query's state about 2.4 KB larger,
-                    // and the state is moved on every spawn
-                    // (docs/rust/validation-records/11-24-profile-query-cpu.md).
-                    match Box::pin(self.resolve(
-                        &domain,
-                        qtype,
-                        raw,
-                        deadline,
-                        cancellations,
-                        sequence,
-                    ))
-                    .await
-                    {
-                        Resolved::Answers(answers) => domain_response(raw, &answers),
-                        Resolved::Failed => None,
-                        Resolved::Cancelled => return RewriteEnd::Cancelled,
-                    }
+                    return RewriteStart::Resolve(PendingLookup { domain, qtype });
                 }
             }
         };
-        match response {
-            Some(wire) => state.set_raw_response(wire),
-            None => {
-                // A failed lookup or an unbuildable answer is SERVFAIL.
-                let _ = state.set_synthesized_response(2);
-            }
-        }
+        set_rewrite_response(state, response);
+        RewriteStart::Answered
+    }
+
+    /// Resolves the domain target [`Rewrite::start`] returned and answers the
+    /// query with it.
+    pub(crate) async fn finish_resolve(
+        &self,
+        state: &mut ExecutionState,
+        raw: &[u8],
+        lookup: PendingLookup,
+        deadline: Instant,
+        cancellations: &[&TransportCancellation],
+        sequence: Option<(SequenceId, &dyn SequenceResolver)>,
+    ) -> RewriteEnd {
+        // Boxed: only a matched domain rewrite resolves, but an inline
+        // resolve future made every query's state about 2.4 KB larger,
+        // and the state is moved on every spawn
+        // (docs/rust/validation-records/11-24-profile-query-cpu.md).
+        let response = match Box::pin(self.resolve(
+            &lookup.domain,
+            lookup.qtype,
+            raw,
+            deadline,
+            cancellations,
+            sequence,
+        ))
+        .await
+        {
+            Resolved::Answers(answers) => domain_response(raw, &answers),
+            Resolved::Failed => None,
+            Resolved::Cancelled => return RewriteEnd::Cancelled,
+        };
+        set_rewrite_response(state, response);
         RewriteEnd::Answered
     }
 

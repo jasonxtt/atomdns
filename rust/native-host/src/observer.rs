@@ -1908,6 +1908,12 @@ impl AdmittedQueryGuard {
         &mut self.execution_checkpoint
     }
 
+    /// Makes `cancellation` the token that decides whether this query ended
+    /// canceled, for a query that moves on with a token of its own.
+    pub(crate) fn replace_cancellation(&mut self, cancellation: TransportCancellation) {
+        self.cancellation = cancellation;
+    }
+
     pub(crate) fn capture_execution(&mut self, observation: TerminalObservation) {
         self.execution_checkpoint.completed_observation = Some(observation);
     }

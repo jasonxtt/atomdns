@@ -5,9 +5,9 @@ mod program;
 mod state;
 
 pub use engine::{
-    CancellationState, CancellationToken, ExecutionCompletion, ExecutionControl, ExecutionError,
-    ExecutionMachine, ExternalDispatch, MachineStep, RootFuelHandle, ScopeCompletion, StepTrace,
-    SuccessorRecipe, WatchToken, execute,
+    CancellationState, CancellationToken, DetachedMachine, ExecutionCompletion, ExecutionControl,
+    ExecutionError, ExecutionMachine, ExternalDispatch, MachineStep, RootFuelHandle,
+    ScopeCompletion, StepTrace, SuccessorRecipe, WatchToken, execute,
 };
 pub use program::{
     DispatchMetadata, ExecutableId, ExecutableSpec, ExecutableTarget, ExecutableTargetSpec,

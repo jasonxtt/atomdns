@@ -1190,6 +1190,13 @@ impl RuntimeControl {
         self.0.current.borrow().clone()
     }
 
+    /// Requests holding the current snapshot (what a retiring generation
+    /// waits for).
+    #[cfg(test)]
+    pub(crate) fn admitted_requests(&self) -> usize {
+        self.0.current.borrow().active.get()
+    }
+
     pub(crate) fn capture(
         &self,
         tag: &str,

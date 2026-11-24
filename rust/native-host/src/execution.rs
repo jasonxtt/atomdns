@@ -14,8 +14,9 @@ use atomdns_dns_core::{
 };
 use atomdns_sequence_core::{
     CancellationToken, ExecutableId, ExecutionCompletion, ExecutionControl, ExecutionError,
-    ExecutionMachine, ExecutionState, ExecutorError, ExecutorOutcome, MachineStep,
-    ResponseState as MachineResponseState, RootFuelHandle, RoutingState, SequenceId, WatchToken,
+    ExecutionMachine, ExecutionState, ExecutorError, ExecutorOutcome, ExternalDispatch,
+    MachineStep, ResponseState as MachineResponseState, RootFuelHandle, RoutingState, SequenceId,
+    WatchToken,
 };
 use atomdns_upstream_core::{ExchangeResponse, TransportCancellation, UpstreamError};
 
@@ -31,7 +32,7 @@ use crate::observer::{
     UpstreamDiagnosticBranch, UpstreamDiagnosticSelected, UpstreamDiagnostics,
     UpstreamMetricAttempt, UpstreamTransport,
 };
-use crate::rewrite::{RewriteEnd, SequenceResolver};
+use crate::rewrite::{RewriteEnd, RewriteStart, SequenceResolver};
 
 // E2E-1's real 3099 cold route exceeds 64 dispatches. User decision 2026-10-09:
 // front requests get 256; detached refresh retains its independent 64 limit.
@@ -862,7 +863,31 @@ pub(crate) struct ExecutionResult {
     pub failure_provenance: Option<FailureProvenance>,
 }
 
+/// The request's execution facts together with the two borrows they are
+/// reported through. The facts themselves are [`FactsState`]; a request that
+/// moves to another task carries only that part across.
 struct ExecutionFacts<'a> {
+    state: FactsState,
+    config: &'a CompiledConfig,
+    checkpoint: &'a mut ExecutionCheckpoint,
+}
+
+impl std::ops::Deref for ExecutionFacts<'_> {
+    type Target = FactsState;
+
+    fn deref(&self) -> &FactsState {
+        &self.state
+    }
+}
+
+impl std::ops::DerefMut for ExecutionFacts<'_> {
+    fn deref_mut(&mut self) -> &mut FactsState {
+        &mut self.state
+    }
+}
+
+/// Everything one root execution has observed so far.
+struct FactsState {
     capture_audit_details: bool,
     cache_status: CacheStatus,
     response_source: Option<ResponseSource>,
@@ -887,14 +912,12 @@ struct ExecutionFacts<'a> {
     routing_changed_since_response: bool,
     current_origin: Option<SequenceId>,
     routing_origin: Option<SequenceId>,
-    config: &'a CompiledConfig,
-    checkpoint: &'a mut ExecutionCheckpoint,
     cancellation: TransportCancellation,
     in_flight_executable: Option<ExecutableId>,
     completed: bool,
 }
 
-impl ExecutionFacts<'_> {
+impl FactsState {
     fn enable_policy_trace(&mut self, qtype: u16) -> Option<Rc<RefCell<BranchTrace>>> {
         if !self.capture_audit_details {
             return None;
@@ -914,13 +937,19 @@ impl ExecutionFacts<'_> {
         self.policy_trace.clone()
     }
 
-    fn install_root_attempt_trace(&mut self, executable: ExecutableId, qtype: u16) {
+    fn install_root_attempt_trace(
+        &self,
+        config: &CompiledConfig,
+        checkpoint: &mut ExecutionCheckpoint,
+        executable: ExecutableId,
+        qtype: u16,
+    ) {
         let Some(trace) = &self.policy_trace else {
             return;
         };
         let hook =
-            BranchTrace::registration_hook(trace.clone(), self.config, executable, Some(0), qtype);
-        self.checkpoint
+            BranchTrace::registration_hook(trace.clone(), config, executable, Some(0), qtype);
+        checkpoint
             .attempt_ledger_handle()
             .borrow_mut()
             .set_registration_hook(hook);
@@ -999,12 +1028,12 @@ impl ExecutionFacts<'_> {
 
     /// Records the actual executed named sequence. A synthetic inline scope
     /// never reaches here, so the position is always a real configured name.
-    fn note_origin(&mut self, origin: Option<SequenceId>) {
+    fn note_origin(&mut self, config: &CompiledConfig, origin: Option<SequenceId>) {
         self.current_origin = origin;
         if !self.capture_audit_details {
             return;
         }
-        if let Some(sequence) = origin.and_then(|id| self.config.program.sequence(id)) {
+        if let Some(sequence) = origin.and_then(|id| config.program.sequence(id)) {
             if !sequence.synthetic {
                 self.final_sequence = Some(sequence.name.clone());
             }
@@ -1065,12 +1094,12 @@ impl ExecutionFacts<'_> {
     /// A cache supplies a response with its stored label even when that label
     /// equals an inherited mapper decision from a different sequence. Capture
     /// it explicitly; the ordinary new-response origin check would discard it.
-    fn note_cache_response(&mut self, state: &ExecutionState) {
+    fn note_cache_response(&mut self, config: &CompiledConfig, state: &ExecutionState) {
         let mut routing = state.routing.clone();
         if routing.final_sequence.is_none() {
             routing.final_sequence = self
                 .current_origin
-                .and_then(|id| self.config.program.sequence(id))
+                .and_then(|id| config.program.sequence(id))
                 .filter(|sequence| !sequence.synthetic)
                 .map(|sequence| sequence.name.clone());
         }
@@ -1133,6 +1162,7 @@ impl ExecutionFacts<'_> {
     #[allow(clippy::too_many_arguments)]
     fn record_invocation_attempt(
         &mut self,
+        config: &CompiledConfig,
         executable: ExecutableId,
         entry_index: usize,
         upstream: Option<String>,
@@ -1143,7 +1173,7 @@ impl ExecutionFacts<'_> {
         winner: bool,
     ) {
         self.upstream_attempts.push_metric(UpstreamMetricAttempt {
-            generation: self.config.generation,
+            generation: config.generation,
             executable,
             entry_index,
             outcome,
@@ -1233,8 +1263,110 @@ impl ExecutionFacts<'_> {
     }
 }
 
+impl<'a> ExecutionFacts<'a> {
+    fn note_origin(&mut self, origin: Option<SequenceId>) {
+        let config = self.config;
+        self.state.note_origin(config, origin);
+    }
+
+    fn note_cache_response(&mut self, state: &ExecutionState) {
+        let config = self.config;
+        self.state.note_cache_response(config, state);
+    }
+
+    fn install_root_attempt_trace(&mut self, executable: ExecutableId, qtype: u16) {
+        let config = self.config;
+        self.state
+            .install_root_attempt_trace(config, self.checkpoint, executable, qtype);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_invocation_attempt(
+        &mut self,
+        executable: ExecutableId,
+        entry_index: usize,
+        upstream: Option<String>,
+        peer: Option<SocketAddr>,
+        transport: Option<UpstreamTransport>,
+        outcome: UpstreamAttemptOutcome,
+        elapsed: Option<std::time::Duration>,
+        winner: bool,
+    ) {
+        let config = self.config;
+        self.state.record_invocation_attempt(
+            config,
+            executable,
+            entry_index,
+            upstream,
+            peer,
+            transport,
+            outcome,
+            elapsed,
+            winner,
+        );
+    }
+
+    /// Releases the two borrows and keeps the facts, for a request that
+    /// continues in another task. Nothing is reported for the released value:
+    /// the facts report when they are attached again and later end.
+    fn detach(mut self) -> FactsState {
+        let spent = FactsState::spent(self.state.cancellation.clone());
+        std::mem::replace(&mut self.state, spent)
+    }
+}
+
+impl FactsState {
+    /// A placeholder that reports nothing when dropped.
+    fn spent(cancellation: TransportCancellation) -> Self {
+        Self {
+            capture_audit_details: false,
+            cache_status: CacheStatus::NotApplicable,
+            response_source: None,
+            response_origin: None,
+            upstream_attempts: UpstreamAttemptList::default(),
+            selected_peer: None,
+            upstream_diagnostics: None,
+            policy_trace: None,
+            branch_metrics: Rc::default(),
+            failure_provenance: None,
+            policy_failure: None,
+            final_sequence: None,
+            routing: RoutingState::default(),
+            response_routing: None,
+            last_response_generation: 0,
+            routing_changed_since_response: false,
+            current_origin: None,
+            routing_origin: None,
+            cancellation,
+            in_flight_executable: None,
+            completed: true,
+        }
+    }
+
+    fn attach<'a>(
+        self,
+        config: &'a CompiledConfig,
+        checkpoint: &'a mut ExecutionCheckpoint,
+    ) -> ExecutionFacts<'a> {
+        ExecutionFacts {
+            state: self,
+            config,
+            checkpoint,
+        }
+    }
+}
+
 impl Drop for ExecutionFacts<'_> {
     fn drop(&mut self) {
+        let config = self.config;
+        self.state.capture_dropped(config, self.checkpoint);
+    }
+}
+
+impl FactsState {
+    /// Records what an execution dropped before its result was built observed
+    /// so far: the checkpoint the admitted query reports when it ends.
+    fn capture_dropped(&mut self, config: &CompiledConfig, checkpoint: &mut ExecutionCheckpoint) {
         // Branch entry work may still be live when the root future is dropped.
         // Absorb the shared collector before taking the terminal checkpoint so
         // forced-drop evidence is not lost with the branch driver.
@@ -1245,14 +1377,14 @@ impl Drop for ExecutionFacts<'_> {
         if let Some(trace) = &self.policy_trace {
             trace.borrow_mut().selected = None;
         }
-        let ledger = self.checkpoint.attempt_ledger_snapshot();
+        let ledger = checkpoint.attempt_ledger_snapshot();
         let mut ledger_had_entries = false;
         if let Some(executable) = self.in_flight_executable {
             for slot in ledger.slots() {
                 ledger_had_entries = true;
                 let upstream = self
                     .capture_audit_details
-                    .then(|| invocation_identity(self.config, executable, slot.entry_index))
+                    .then(|| invocation_identity(config, executable, slot.entry_index))
                     .flatten();
                 let outcome = slot.outcome.unwrap_or_else(|| {
                     if self.cancellation.is_cancelled() {
@@ -1262,7 +1394,7 @@ impl Drop for ExecutionFacts<'_> {
                     }
                 });
                 self.upstream_attempts.push_metric(UpstreamMetricAttempt {
-                    generation: self.config.generation,
+                    generation: config.generation,
                     executable,
                     entry_index: slot.entry_index,
                     outcome,
@@ -1327,7 +1459,7 @@ impl Drop for ExecutionFacts<'_> {
             }
         }
         self.finalize_policy_trace();
-        self.checkpoint.capture_partial(
+        checkpoint.capture_partial(
             &TerminalObservation {
                 outcome: QueryTerminalOutcome::NoResponse,
                 // A response observed by an earlier leg is not necessarily
@@ -1357,7 +1489,7 @@ impl Drop for ExecutionFacts<'_> {
             self.in_flight_executable
                 .filter(|_| !ledger_had_entries)
                 .filter(|_| self.capture_audit_details)
-                .and_then(|executable| upstream_identity(self.config, executable)),
+                .and_then(|executable| upstream_identity(config, executable)),
         );
     }
 }
@@ -1409,689 +1541,962 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
     request_shutdown: TransportCancellation,
     checkpoint: &mut ExecutionCheckpoint,
 ) -> ExecutionResult {
-    let ExecutionRequest {
-        client,
-        config,
-        cache,
-        options,
-        raw,
-        header,
-        question,
-    } = request;
-    let capture_audit_details = checkpoint.capture_audit_details();
-    let multi_forward = config.program.externals.len() > config.caches.len() + 1;
-    let mut facts = ExecutionFacts {
-        capture_audit_details,
-        cache_status: if config.caches.is_empty() {
-            CacheStatus::NotApplicable
-        } else {
-            CacheStatus::Undetermined
-        },
-        response_source: None,
-        response_origin: None,
-        upstream_attempts: UpstreamAttemptList::with_capacity_hint(if multi_forward {
-            config.forwards.len()
-        } else {
-            0
-        }),
-        selected_peer: None,
-        upstream_diagnostics: capture_audit_details.then(|| UpstreamDiagnostics {
-            schema_version: 1,
-            branches: Vec::new(),
-            selected: None,
-            attempts: Vec::new(),
-        }),
-        policy_trace: None,
-        branch_metrics: Rc::new(RefCell::new(UpstreamAttemptList::with_capacity_hint(
-            if multi_forward {
-                config.forwards.len()
-            } else {
-                0
-            },
-        ))),
-        failure_provenance: None,
-        policy_failure: None,
-        // No entry-tag backfill: the field carries the real executing position
-        // recorded during execution, or nothing when none was observed.
-        final_sequence: None,
-        routing: RoutingState::default(),
-        response_routing: None,
-        last_response_generation: 0,
-        routing_changed_since_response: false,
-        current_origin: None,
-        routing_origin: None,
-        config,
-        checkpoint,
-        cancellation: request_shutdown.clone(),
-        in_flight_executable: None,
-        completed: false,
+    let env = RootEnv {
+        config: request.config,
+        cache: request.cache,
+        options: request.options,
+        executor,
+        raw: request.raw,
+        request_shutdown: &request_shutdown,
     };
-    let mut state = ExecutionState::new(header, question.clone());
-    state.query.client = client;
-    // Every external leg shares this one request-owned absolute budget.
-    let request_deadline = options
-        .admission_deadline
-        .unwrap_or_else(|| Instant::now() + options.request_deadline);
-    let mut root_control = ExecutionControl::with_shared_budget(
-        RootFuelHandle::new(REQUEST_FUEL),
-        CancellationToken::new(),
-    );
-    // A running diagnostic capture traces this query's steps (set at admission).
-    if let Some(trace) = facts.checkpoint.step_trace() {
-        root_control = root_control.with_step_trace(trace);
+    #[cfg(test)]
+    if SUSPEND_EVERY_AWAIT.with(Cell::get) {
+        return execute_suspending_every_await(request, &env, checkpoint).await;
     }
-    let mut machine = match atomdns_sequence_core::ExecutionMachine::new(
-        &config.program,
-        options.entry_sequence.unwrap_or(config.sequence.sequence),
-        state,
-        root_control,
-    ) {
-        Ok(machine) => machine,
-        Err(_) => {
-            facts.cache_status = CacheStatus::NotApplicable;
-            facts.set_failure_provenance(FailureProvenance::LocalFailure(
-                LocalFailureKind::InternalExecution,
-            ));
-            return result_from_wire(protocol_error(&header, &question, SERVFAIL), facts);
+    let (mut run, step) = match RootRun::start(request, checkpoint, env.request_shutdown) {
+        Ok(started) => started,
+        Err(result) => return result,
+    };
+    run.drive(&env, step).await
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test seam: when set, every root execution on this thread is suspended
+    /// and resumed at each waiting dispatch, as a listener does when it hands
+    /// a request to another task.
+    static SUSPEND_EVERY_AWAIT: Cell<bool> = const { Cell::new(false) };
+    /// How many times the seam suspended an execution on this thread.
+    static SUSPENSIONS: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Runs `test` with every root execution suspended and resumed at each
+/// waiting dispatch, and returns how many suspensions happened.
+#[cfg(test)]
+pub(crate) fn with_every_await_suspended(test: impl FnOnce()) -> usize {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            SUSPEND_EVERY_AWAIT.with(|flag| flag.set(false));
+        }
+    }
+    SUSPENSIONS.with(|count| count.set(0));
+    SUSPEND_EVERY_AWAIT.with(|flag| flag.set(true));
+    let _reset = Reset;
+    test();
+    SUSPENSIONS.with(Cell::get)
+}
+
+#[cfg(test)]
+async fn execute_suspending_every_await<E: ExchangeExecutor + ?Sized>(
+    request: ExecutionRequest<'_>,
+    env: &RootEnv<'_, E>,
+    checkpoint: &mut ExecutionCheckpoint,
+) -> ExecutionResult {
+    let config = env.config;
+    let mut suspended = {
+        let (mut run, step) = match RootRun::start(request, &mut *checkpoint, env.request_shutdown)
+        {
+            Ok(started) => started,
+            Err(result) => return result,
+        };
+        match run.run_sync(env, step) {
+            SyncStop::Done(result) => return result,
+            SyncStop::Await(dispatch, wait) => run.suspend(dispatch, wait),
         }
     };
+    loop {
+        SUSPENSIONS.with(|count| count.set(count.get() + 1));
+        // Moving the paused execution stands for handing it to another task.
+        let moved = Box::new(suspended);
+        let (mut run, dispatch, wait) =
+            match (*moved).resume(config, &mut *checkpoint, env.request_shutdown) {
+                Ok(resumed) => resumed,
+                Err(result) => return result,
+            };
+        let step = match run.run_await(env, dispatch, wait).await {
+            Ok(step) => step,
+            Err(result) => return result,
+        };
+        match run.run_sync(env, step) {
+            SyncStop::Done(result) => return result,
+            SyncStop::Await(dispatch, wait) => suspended = run.suspend(dispatch, wait),
+        }
+    }
+}
 
+/// What one request's root execution reads but never changes.
+pub(crate) struct RootEnv<'a, E: ?Sized> {
+    pub config: &'a CompiledConfig,
+    pub cache: &'a CacheCatalog,
+    pub options: &'a HostOptions,
+    pub executor: &'a E,
+    pub raw: &'a [u8],
+    pub request_shutdown: &'a TransportCancellation,
+}
+
+/// One request's root execution between two steps: the machine, the facts
+/// observed so far and the request's own bookkeeping.
+pub(crate) struct RootRun<'a> {
+    machine: ExecutionMachine<'a>,
+    facts: ExecutionFacts<'a>,
     // One request-owned publication frame per cache dispatch. A request may
     // dispatch several caches, and may dispatch the same cache more than once
     // in different scopes; every frame is consumed exactly once, at its own
     // successor boundary, innermost boundary first.
-    let mut pending_stores: Vec<PendingFrame> = Vec::new();
-    let mut upstream_response = false;
-    let mut attempted = false;
-    let mut publication_deadline = None;
-    let mut step = match machine.step() {
-        Ok(step) => step,
-        Err(_) => {
-            facts.cache_status = CacheStatus::NotApplicable;
-            facts.set_failure_provenance(FailureProvenance::LocalFailure(
+    pending_stores: Vec<PendingFrame>,
+    upstream_response: bool,
+    attempted: bool,
+    publication_deadline: Option<Instant>,
+    // Every external leg shares this one request-owned absolute budget.
+    request_deadline: Instant,
+    header: QueryHeader,
+    question: QuestionInfo,
+}
+
+/// Where [`RootRun::run_sync`] stopped.
+// Returned by value once per step; boxing the result would allocate on every
+// answered query.
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum SyncStop {
+    /// The execution ended.
+    Done(ExecutionResult),
+    /// The machine is paused on `dispatch`, which has not been resumed yet,
+    /// and finishing it has to wait.
+    Await(ExternalDispatch, AwaitStep),
+}
+
+/// A dispatch whose completion has to wait. It names configuration entries by
+/// position and owns everything else, so it can move to another task.
+pub(crate) enum AwaitStep {
+    Sleep(usize),
+    RewriteResolve {
+        index: usize,
+        lookup: crate::rewrite::PendingLookup,
+    },
+    QueryPolicy(ScopedQueryPolicy),
+    Fallback(usize),
+    Preference(usize),
+    Exchange,
+}
+
+/// A root execution paused on a waiting dispatch, without any borrow: the
+/// owner moves it to another task and attaches it again to the same
+/// configuration and checkpoint.
+pub(crate) struct SuspendedRoot {
+    machine: Option<atomdns_sequence_core::DetachedMachine>,
+    facts: FactsState,
+    pending_stores: Vec<PendingFrame>,
+    upstream_response: bool,
+    attempted: bool,
+    publication_deadline: Option<Instant>,
+    request_deadline: Instant,
+    header: QueryHeader,
+    question: QuestionInfo,
+    dispatch: ExternalDispatch,
+    step: AwaitStep,
+}
+
+impl<'a> RootRun<'a> {
+    /// Creates the request's machine and takes its first step.
+    // The error is the request's final result, built once; boxing it would
+    // allocate on the failure path for nothing.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn start(
+        request: ExecutionRequest<'a>,
+        checkpoint: &'a mut ExecutionCheckpoint,
+        request_shutdown: &TransportCancellation,
+    ) -> Result<(Self, MachineStep), ExecutionResult> {
+        let ExecutionRequest {
+            client,
+            config,
+            cache: _,
+            options,
+            raw: _,
+            header,
+            question,
+        } = request;
+        let capture_audit_details = checkpoint.capture_audit_details();
+        let multi_forward = config.program.externals.len() > config.caches.len() + 1;
+        let mut facts = ExecutionFacts {
+            state: FactsState {
+                capture_audit_details,
+                cache_status: if config.caches.is_empty() {
+                    CacheStatus::NotApplicable
+                } else {
+                    CacheStatus::Undetermined
+                },
+                response_source: None,
+                response_origin: None,
+                upstream_attempts: UpstreamAttemptList::with_capacity_hint(if multi_forward {
+                    config.forwards.len()
+                } else {
+                    0
+                }),
+                selected_peer: None,
+                upstream_diagnostics: capture_audit_details.then(|| UpstreamDiagnostics {
+                    schema_version: 1,
+                    branches: Vec::new(),
+                    selected: None,
+                    attempts: Vec::new(),
+                }),
+                policy_trace: None,
+                branch_metrics: Rc::new(RefCell::new(UpstreamAttemptList::with_capacity_hint(
+                    if multi_forward {
+                        config.forwards.len()
+                    } else {
+                        0
+                    },
+                ))),
+                failure_provenance: None,
+                policy_failure: None,
+                // No entry-tag backfill: the field carries the real executing
+                // position recorded during execution, or nothing when none was
+                // observed.
+                final_sequence: None,
+                routing: RoutingState::default(),
+                response_routing: None,
+                last_response_generation: 0,
+                routing_changed_since_response: false,
+                current_origin: None,
+                routing_origin: None,
+                cancellation: request_shutdown.clone(),
+                in_flight_executable: None,
+                completed: false,
+            },
+            config,
+            checkpoint,
+        };
+        let mut state = ExecutionState::new(header, question.clone());
+        state.query.client = client;
+        let request_deadline = options
+            .admission_deadline
+            .unwrap_or_else(|| Instant::now() + options.request_deadline);
+        let mut root_control = ExecutionControl::with_shared_budget(
+            RootFuelHandle::new(REQUEST_FUEL),
+            CancellationToken::new(),
+        );
+        // A running diagnostic capture traces this query's steps (set at admission).
+        if let Some(trace) = facts.checkpoint.step_trace() {
+            root_control = root_control.with_step_trace(trace);
+        }
+        let mut machine = match atomdns_sequence_core::ExecutionMachine::new(
+            &config.program,
+            options.entry_sequence.unwrap_or(config.sequence.sequence),
+            state,
+            root_control,
+        ) {
+            Ok(machine) => machine,
+            Err(_) => {
+                facts.cache_status = CacheStatus::NotApplicable;
+                facts.set_failure_provenance(FailureProvenance::LocalFailure(
+                    LocalFailureKind::InternalExecution,
+                ));
+                return Err(result_from_wire(
+                    protocol_error(&header, &question, SERVFAIL),
+                    &mut facts,
+                ));
+            }
+        };
+        let step = match machine.step() {
+            Ok(step) => step,
+            Err(_) => {
+                facts.cache_status = CacheStatus::NotApplicable;
+                facts.set_failure_provenance(FailureProvenance::LocalFailure(
+                    LocalFailureKind::InternalExecution,
+                ));
+                return Err(result_from_wire(
+                    protocol_error(&header, &question, SERVFAIL),
+                    &mut facts,
+                ));
+            }
+        };
+        Ok((
+            Self {
+                machine,
+                facts,
+                pending_stores: Vec::new(),
+                upstream_response: false,
+                attempted: false,
+                publication_deadline: None,
+                request_deadline,
+                header,
+                question,
+            },
+            step,
+        ))
+    }
+
+    /// Runs the execution to its end, waiting where a dispatch has to.
+    pub(crate) async fn drive<E: ExchangeExecutor + ?Sized>(
+        &mut self,
+        env: &RootEnv<'_, E>,
+        mut step: MachineStep,
+    ) -> ExecutionResult {
+        loop {
+            match self.run_sync(env, step) {
+                SyncStop::Done(result) => return result,
+                SyncStop::Await(dispatch, wait) => {
+                    match self.run_await(env, dispatch, wait).await {
+                        Ok(next) => step = next,
+                        Err(result) => return result,
+                    }
+                }
+            }
+        }
+    }
+
+    /// Like [`RootRun::drive`], for an execution paused on `dispatch`: it
+    /// first finishes that waiting dispatch.
+    pub(crate) async fn drive_from<E: ExchangeExecutor + ?Sized>(
+        &mut self,
+        env: &RootEnv<'_, E>,
+        dispatch: ExternalDispatch,
+        wait: AwaitStep,
+    ) -> ExecutionResult {
+        let mut pending = (dispatch, wait);
+        loop {
+            let step = match self.run_await(env, pending.0, pending.1).await {
+                Ok(step) => step,
+                Err(result) => return result,
+            };
+            match self.run_sync(env, step) {
+                SyncStop::Done(result) => return result,
+                SyncStop::Await(dispatch, wait) => pending = (dispatch, wait),
+            }
+        }
+    }
+
+    fn finish_state(&mut self) -> ExecutionResult {
+        result_from_state(
+            &mut self.machine,
+            &self.header,
+            &self.question,
+            &mut self.facts,
+        )
+    }
+
+    fn internal_failure(&mut self) -> ExecutionResult {
+        self.facts
+            .set_failure_provenance(FailureProvenance::LocalFailure(
                 LocalFailureKind::InternalExecution,
             ));
-            return result_from_wire(protocol_error(&header, &question, SERVFAIL), facts);
-        }
-    };
+        self.finish_state()
+    }
 
-    loop {
-        facts.note_origin(machine.last_origin());
-        facts.note_routing(machine.state());
-        facts.note_response(machine.state());
-        match step {
-            MachineStep::Complete(_) => {
-                // Publication is owned by the cache's successor boundary, so a
-                // token still held here is an unpublished miss and must drop.
-                return result_from_state(&mut machine, &header, &question, facts);
-            }
-            MachineStep::ScopeComplete(completion) => {
-                // The cache's enclosing scope completed successfully. This is the
-                // successor completion point: the response now in state is
-                // what that successor produced, before the caller's remaining
-                // rules can rewrite it.
-                facts.note_response(machine.state());
-                publish_frame(
-                    &mut pending_stores,
-                    completion.token(),
-                    &machine,
-                    facts
-                        .response_routing
-                        .as_ref()
-                        .and_then(RoutingState::response_domain_set)
-                        .unwrap_or(""),
-                    request_shutdown.is_cancelled(),
-                    publication_deadline,
-                );
-                // A parent may replace the child response without adding any
-                // routing fields of its own. Keep the child facts in the
-                // response-owned snapshot, but start the parent with an
-                // empty audit-routing candidate so stale child provenance
-                // cannot become the parent's final decision.
-                machine.state_mut().routing = RoutingState::default();
-                machine.state_mut().domain_set_overlay = None;
-                facts.routing = RoutingState::default();
-                facts.routing_changed_since_response = false;
-                step = match machine.resume_scope_completion(completion.token()) {
-                    Ok(step) => step,
-                    Err(_) => {
-                        facts.set_failure_provenance(FailureProvenance::LocalFailure(
-                            LocalFailureKind::InternalExecution,
-                        ));
-                        return result_from_state(&mut machine, &header, &question, facts);
-                    }
-                };
-            }
-            MachineStep::ScopeAborted(completion) => {
-                // An unpublishable boundary invalidates its own frame; it must not
-                // survive to be consumed by a later, unrelated boundary.
-                // Cancellation, exhausted fuel and terminal executor errors do
-                // not reach this arm: they fail the machine drive, and every
-                // frame held by this request is then dropped without publishing
-                // when this function returns.
-                abandon_frame(&mut pending_stores, completion.token());
-                step = match machine.resume_scope_completion(completion.token()) {
-                    Ok(step) => step,
-                    Err(_) => {
-                        facts.set_failure_provenance(FailureProvenance::LocalFailure(
-                            LocalFailureKind::InternalExecution,
-                        ));
-                        return result_from_state(&mut machine, &header, &question, facts);
-                    }
-                };
-            }
-            MachineStep::Dispatch(dispatch) => {
-                if let Some(sleep) = config
-                    .sleeps
-                    .iter()
-                    .find(|sleep| sleep.executable == dispatch.executable())
-                {
-                    match wait_sleep(sleep.duration, request_deadline, &[&request_shutdown]).await {
-                        SleepEnd::Elapsed => {}
-                        SleepEnd::Cancelled => return canceled_execution(facts),
-                        SleepEnd::DeadlineReached => {
-                            // The request budget ended while it slept: the
-                            // reference entry turns that error into SERVFAIL.
-                            // No upstream was involved, so no upstream failure
-                            // provenance is recorded.
-                            set_servfail(&mut machine);
-                            facts.set_response_source(ResponseSource::Local);
-                            return result_from_state(&mut machine, &header, &question, facts);
-                        }
-                    }
-                    step = match machine
-                        .resume(dispatch.executable(), Ok(ExecutorOutcome::Continue))
+    fn internal_servfail(&mut self) -> ExecutionResult {
+        self.facts
+            .set_failure_provenance(FailureProvenance::LocalFailure(
+                LocalFailureKind::InternalExecution,
+            ));
+        set_servfail(&mut self.machine);
+        self.facts.set_response_source(ResponseSource::Local);
+        self.finish_state()
+    }
+
+    /// Advances the execution until it ends or reaches the first dispatch
+    /// whose completion has to wait. Nothing here awaits.
+    pub(crate) fn run_sync<E: ExchangeExecutor + ?Sized>(
+        &mut self,
+        env: &RootEnv<'_, E>,
+        mut step: MachineStep,
+    ) -> SyncStop {
+        let config = env.config;
+        loop {
+            self.facts.note_origin(self.machine.last_origin());
+            self.facts.note_routing(self.machine.state());
+            self.facts.note_response(self.machine.state());
+            match step {
+                MachineStep::Complete(_) => {
+                    // Publication is owned by the cache's successor boundary, so a
+                    // token still held here is an unpublished miss and must drop.
+                    return SyncStop::Done(self.finish_state());
+                }
+                MachineStep::ScopeComplete(completion) => {
+                    // The cache's enclosing scope completed successfully. This is the
+                    // successor completion point: the response now in state is
+                    // what that successor produced, before the caller's remaining
+                    // rules can rewrite it.
+                    self.facts.note_response(self.machine.state());
+                    publish_frame(
+                        &mut self.pending_stores,
+                        completion.token(),
+                        &self.machine,
+                        self.facts
+                            .response_routing
+                            .as_ref()
+                            .and_then(RoutingState::response_domain_set)
+                            .unwrap_or(""),
+                        env.request_shutdown.is_cancelled(),
+                        self.publication_deadline,
+                    );
+                    // A parent may replace the child response without adding any
+                    // routing fields of its own. Keep the child facts in the
+                    // response-owned snapshot, but start the parent with an
+                    // empty audit-routing candidate so stale child provenance
+                    // cannot become the parent's final decision.
+                    self.machine.state_mut().routing = RoutingState::default();
+                    self.machine.state_mut().domain_set_overlay = None;
+                    self.facts.routing = RoutingState::default();
+                    self.facts.routing_changed_since_response = false;
+                    step = match self.machine.resume_scope_completion(completion.token()) {
+                        Ok(step) => step,
+                        Err(_) => return SyncStop::Done(self.internal_failure()),
+                    };
+                }
+                MachineStep::ScopeAborted(completion) => {
+                    // An unpublishable boundary invalidates its own frame; it must not
+                    // survive to be consumed by a later, unrelated boundary.
+                    // Cancellation, exhausted fuel and terminal executor errors do
+                    // not reach this arm: they fail the machine drive, and every
+                    // frame held by this request is then dropped without publishing
+                    // when the execution ends.
+                    abandon_frame(&mut self.pending_stores, completion.token());
+                    step = match self.machine.resume_scope_completion(completion.token()) {
+                        Ok(step) => step,
+                        Err(_) => return SyncStop::Done(self.internal_failure()),
+                    };
+                }
+                MachineStep::Dispatch(dispatch) => {
+                    let executable = dispatch.executable();
+                    if let Some(index) = config
+                        .sleeps
+                        .iter()
+                        .position(|sleep| sleep.executable == executable)
                     {
-                        Ok(step) => step,
-                        Err(_) => {
-                            facts.set_failure_provenance(FailureProvenance::LocalFailure(
-                                LocalFailureKind::InternalExecution,
-                            ));
-                            return result_from_state(&mut machine, &header, &question, facts);
+                        // A zero sleep elapses at once (`wait_sleep`); any other
+                        // sleep waits for its timer.
+                        if !config.sleeps[index].duration.is_zero() {
+                            return SyncStop::Await(dispatch, AwaitStep::Sleep(index));
                         }
-                    };
-                    continue;
-                }
-                if let Some(output) = config
-                    .local
-                    .domain_outputs
-                    .iter()
-                    .find(|output| output.executable == dispatch.executable())
-                {
-                    output.runtime.record(raw, &machine.state().query.question);
-                    step = match machine
-                        .resume(dispatch.executable(), Ok(ExecutorOutcome::Continue))
-                    {
-                        Ok(step) => step,
-                        Err(_) => {
-                            facts.set_failure_provenance(FailureProvenance::LocalFailure(
-                                LocalFailureKind::InternalExecution,
-                            ));
-                            return result_from_state(&mut machine, &header, &question, facts);
-                        }
-                    };
-                    continue;
-                }
-                if let Some(learn) = config
-                    .local
-                    .learns
-                    .iter()
-                    .find(|learn| learn.executable == dispatch.executable())
-                {
-                    let outcome = learn.runtime.run(machine.state());
-                    step = match machine.resume(
-                        dispatch.executable(),
-                        outcome.map(|()| ExecutorOutcome::Continue),
-                    ) {
-                        Ok(step) => step,
-                        Err(_) => {
-                            facts.set_failure_provenance(FailureProvenance::LocalFailure(
-                                LocalFailureKind::InternalExecution,
-                            ));
-                            return result_from_state(&mut machine, &header, &question, facts);
-                        }
-                    };
-                    continue;
-                }
-                if let Some(rewrite) = config
-                    .local
-                    .rewrites
-                    .iter()
-                    .find(|rewrite| rewrite.executable == dispatch.executable())
-                {
-                    let resolver = EngineResolver {
-                        config,
-                        cache,
-                        executor,
-                        options,
-                        cancellation: request_shutdown.clone(),
-                    };
-                    let outcome = match rewrite
-                        .runtime
-                        .run(
-                            machine.state_mut(),
-                            raw,
-                            request_deadline,
-                            &[&request_shutdown],
-                            rewrite
-                                .sequence
-                                .map(|id| (id, &resolver as &dyn SequenceResolver)),
-                        )
-                        .await
-                    {
-                        RewriteEnd::NoMatch => ExecutorOutcome::Continue,
-                        RewriteEnd::Answered => {
-                            facts.set_response_source(ResponseSource::Local);
-                            ExecutorOutcome::Accept
-                        }
-                        RewriteEnd::Cancelled => return canceled_execution(facts),
-                    };
-                    step = match machine.resume(dispatch.executable(), Ok(outcome)) {
-                        Ok(step) => step,
-                        Err(_) => {
-                            facts.set_failure_provenance(FailureProvenance::LocalFailure(
-                                LocalFailureKind::InternalExecution,
-                            ));
-                            return result_from_state(&mut machine, &header, &question, facts);
-                        }
-                    };
-                    continue;
-                }
-                if let Some(policy) = config
-                    .response_policies
-                    .iter()
-                    .find(|policy| policy.executable == dispatch.executable())
-                {
-                    if let Some(target) = query_policy_target(&policy.policy, machine.state()) {
-                        let context = BranchContext {
-                            config,
-                            cache,
-                            executor,
-                            view: QueryView::new(raw.to_vec(), header, question.clone()),
-                            deadline: request_deadline,
-                            root_cancellation: request_shutdown.clone(),
-                            branch_cancellation: request_shutdown.child_token(),
-                            trace: facts.enable_policy_trace(question.qtype),
-                            branch_metrics: facts.branch_metrics.clone(),
-                            refresh_environment: options.refresh_environment.clone(),
-                            allow_empty_response: true,
-                            branch_id: Some(0),
-                            polls: Rc::default(),
-                            capture_trace_id: facts.checkpoint.capture_trace_id(),
-                        };
-                        let successor = match machine.fork_successor(CancellationToken::new()) {
-                            Ok(successor) => successor,
-                            Err(_) => {
-                                set_servfail(&mut machine);
-                                facts.set_response_source(ResponseSource::Local);
-                                return result_from_state(&mut machine, &header, &question, facts);
-                            }
-                        };
-                        let source = facts.response_source.clone();
-                        let outcome = run_query_policy(successor, context, source, target).await;
-                        *machine.state_mut() = outcome.state;
-                        if let Some(error) = outcome.error {
-                            if matches!(
-                                error,
-                                ExecutionError::Cancelled | ExecutionError::BudgetExceeded
-                            ) {
-                                return terminal_policy_failure(
-                                    error,
-                                    &mut machine,
-                                    raw,
-                                    &header,
-                                    &question,
-                                    facts,
-                                );
-                            }
-                            set_servfail(&mut machine);
-                            facts.set_response_source(ResponseSource::Local);
-                            facts.set_failure_provenance(FailureProvenance::LocalFailure(
-                                LocalFailureKind::InternalExecution,
-                            ));
-                            return result_from_state(&mut machine, &header, &question, facts);
-                        }
-                        if let Some(source) = outcome.source {
-                            facts.set_response_source(source);
-                        } else {
-                            facts.set_response_source(ResponseSource::Local);
-                        }
-                        let terminal = if outcome.completion == Some(ExecutionCompletion::Exited) {
-                            ExecutorOutcome::Exit
-                        } else {
-                            ExecutorOutcome::Accept
-                        };
-                        step = match machine.resume(dispatch.executable(), Ok(terminal)) {
+                        step = match self
+                            .machine
+                            .resume(executable, Ok(ExecutorOutcome::Continue))
+                        {
                             Ok(step) => step,
-                            Err(_) => {
-                                return result_from_state(&mut machine, &header, &question, facts);
-                            }
+                            Err(_) => return SyncStop::Done(self.internal_failure()),
                         };
                         continue;
                     }
-                    let result =
-                        crate::policy::apply_wire_policy(&policy.policy, machine.state_mut(), raw);
-                    if result.is_ok()
-                        && matches!(policy.policy, crate::policy::ResponsePolicy::CnameRemover)
+                    if let Some(output) = config
+                        .local
+                        .domain_outputs
+                        .iter()
+                        .find(|output| output.executable == executable)
                     {
-                        facts.note_cname_normalization(machine.state());
+                        output
+                            .runtime
+                            .record(env.raw, &self.machine.state().query.question);
+                        step = match self
+                            .machine
+                            .resume(executable, Ok(ExecutorOutcome::Continue))
+                        {
+                            Ok(step) => step,
+                            Err(_) => return SyncStop::Done(self.internal_failure()),
+                        };
+                        continue;
                     }
-                    if matches!(result, Ok(true)) {
-                        facts.set_response_source(ResponseSource::Local);
+                    if let Some(learn) = config
+                        .local
+                        .learns
+                        .iter()
+                        .find(|learn| learn.executable == executable)
+                    {
+                        let outcome = learn.runtime.run(self.machine.state());
+                        step = match self
+                            .machine
+                            .resume(executable, outcome.map(|()| ExecutorOutcome::Continue))
+                        {
+                            Ok(step) => step,
+                            Err(_) => return SyncStop::Done(self.internal_failure()),
+                        };
+                        continue;
                     }
-                    step = match machine.resume(
-                        dispatch.executable(),
-                        result.map(|_| ExecutorOutcome::Continue),
-                    ) {
-                        Ok(step) => step,
-                        Err(_) => {
-                            facts.set_failure_provenance(FailureProvenance::LocalFailure(
-                                LocalFailureKind::InternalExecution,
-                            ));
-                            set_servfail(&mut machine);
-                            facts.set_response_source(ResponseSource::Local);
-                            return result_from_state(&mut machine, &header, &question, facts);
-                        }
-                    };
-                    continue;
-                }
-                if let Some(policy) = config
-                    .fallbacks
-                    .iter()
-                    .find(|policy| policy.executable == dispatch.executable())
-                {
-                    let trace = facts.enable_policy_trace(question.qtype);
-                    let context = BranchContext {
-                        config,
-                        cache,
-                        executor,
-                        view: QueryView::new(raw.to_vec(), header, question.clone()),
-                        deadline: request_deadline,
-                        root_cancellation: request_shutdown.clone(),
-                        branch_cancellation: request_shutdown.child_token(),
-                        trace,
-                        branch_metrics: facts.branch_metrics.clone(),
-                        refresh_environment: options.refresh_environment.clone(),
-                        allow_empty_response: false,
-                        branch_id: Some(0),
-                        polls: Rc::default(),
-                        capture_trace_id: facts.checkpoint.capture_trace_id(),
-                    };
-                    let successor = match machine.fork_successor(CancellationToken::new()) {
-                        Ok(successor) => successor,
-                        Err(_) => {
-                            facts.set_failure_provenance(FailureProvenance::LocalFailure(
-                                LocalFailureKind::InternalExecution,
-                            ));
-                            set_servfail(&mut machine);
-                            facts.set_response_source(ResponseSource::Local);
-                            return result_from_state(&mut machine, &header, &question, facts);
-                        }
-                    };
-                    let inherited_source = facts.response_source.clone();
-                    let outcome =
-                        run_fallback(policy.clone(), successor, context.clone(), inherited_source)
-                            .await;
-                    if let Some(error) = outcome.error {
-                        // The captured successor has already been driven by
-                        // the branch. Commit its state, then return the typed
-                        // policy failure through the pending dispatch. The
-                        // sequence core, rather than a synthetic Accept,
-                        // owns the caller/try failure boundary.
-                        *machine.state_mut() = outcome.state;
-                        let core_error = match policy_failure_for_core(&error) {
-                            Ok(core_error) => {
-                                facts.record_policy_failure(error.clone());
-                                core_error
+                    if let Some(index) = config
+                        .local
+                        .rewrites
+                        .iter()
+                        .position(|rewrite| rewrite.executable == executable)
+                    {
+                        let outcome = match config.local.rewrites[index]
+                            .runtime
+                            .start(self.machine.state_mut(), env.raw)
+                        {
+                            RewriteStart::NoMatch => ExecutorOutcome::Continue,
+                            RewriteStart::Answered => {
+                                self.facts.set_response_source(ResponseSource::Local);
+                                ExecutorOutcome::Accept
                             }
-                            Err(terminal) => {
-                                return terminal_policy_failure(
-                                    terminal,
-                                    &mut machine,
-                                    raw,
-                                    &header,
-                                    &question,
-                                    facts,
+                            RewriteStart::Resolve(lookup) => {
+                                return SyncStop::Await(
+                                    dispatch,
+                                    AwaitStep::RewriteResolve { index, lookup },
                                 );
                             }
                         };
-                        match machine.resume(dispatch.executable(), Err(core_error)) {
-                            Ok(next) => {
-                                facts.clear_policy_failure();
-                                step = next;
-                                continue;
-                            }
-                            Err(_) => {
-                                return result_from_state(&mut machine, &header, &question, facts);
-                            }
-                        }
-                    }
-                    if let Some(source) = outcome.source.clone() {
-                        facts.set_response_source(source);
-                    } else {
-                        facts.set_response_source(ResponseSource::Local);
-                    }
-                    *machine.state_mut() = outcome.state;
-                    step = match machine.resume(
-                        dispatch.executable(),
-                        Ok(if outcome.completion == Some(ExecutionCompletion::Exited) {
-                            ExecutorOutcome::Exit
-                        } else {
-                            ExecutorOutcome::Accept
-                        }),
-                    ) {
-                        Ok(step) => step,
-                        Err(_) => {
-                            facts.set_failure_provenance(FailureProvenance::LocalFailure(
-                                LocalFailureKind::InternalExecution,
-                            ));
-                            return result_from_state(&mut machine, &header, &question, facts);
-                        }
-                    };
-                    continue;
-                }
-                if let Some(preference) = config
-                    .preferences
-                    .iter()
-                    .find(|preference| preference.executable == dispatch.executable())
-                {
-                    let trace = facts.enable_policy_trace(question.qtype);
-                    let context = BranchContext {
-                        config,
-                        cache,
-                        executor,
-                        view: QueryView::new(raw.to_vec(), header, question.clone()),
-                        deadline: request_deadline,
-                        root_cancellation: request_shutdown.clone(),
-                        branch_cancellation: request_shutdown.child_token(),
-                        trace,
-                        branch_metrics: facts.branch_metrics.clone(),
-                        refresh_environment: options.refresh_environment.clone(),
-                        allow_empty_response: false,
-                        branch_id: Some(0),
-                        polls: Rc::default(),
-                        capture_trace_id: facts.checkpoint.capture_trace_id(),
-                    };
-                    let successor = match machine.fork_successor(CancellationToken::new()) {
-                        Ok(successor) => successor,
-                        Err(_) => {
-                            facts.set_failure_provenance(FailureProvenance::LocalFailure(
-                                LocalFailureKind::InternalExecution,
-                            ));
-                            set_servfail(&mut machine);
-                            facts.set_response_source(ResponseSource::Local);
-                            return result_from_state(&mut machine, &header, &question, facts);
-                        }
-                    };
-                    let inherited_source = facts.response_source.clone();
-                    let outcome = run_preference(
-                        preference.clone(),
-                        successor,
-                        context.clone(),
-                        inherited_source,
-                    )
-                    .await;
-                    if let Some(error) = outcome.error {
-                        *machine.state_mut() = outcome.state;
-                        let core_error = match policy_failure_for_core(&error) {
-                            Ok(core_error) => {
-                                facts.record_policy_failure(error.clone());
-                                core_error
-                            }
-                            Err(terminal) => {
-                                return terminal_policy_failure(
-                                    terminal,
-                                    &mut machine,
-                                    raw,
-                                    &header,
-                                    &question,
-                                    facts,
-                                );
-                            }
+                        step = match self.machine.resume(executable, Ok(outcome)) {
+                            Ok(step) => step,
+                            Err(_) => return SyncStop::Done(self.internal_failure()),
                         };
-                        match machine.resume(dispatch.executable(), Err(core_error)) {
-                            Ok(next) => {
-                                facts.clear_policy_failure();
-                                step = next;
-                                continue;
-                            }
-                            Err(_) => {
-                                return result_from_state(&mut machine, &header, &question, facts);
-                            }
-                        }
+                        continue;
                     }
-                    if let Some(source) = outcome.source.clone() {
-                        facts.set_response_source(source);
-                    } else {
-                        facts.set_response_source(ResponseSource::Local);
-                    }
-                    *machine.state_mut() = outcome.state;
-                    step = match machine.resume(
-                        dispatch.executable(),
-                        Ok(if outcome.completion == Some(ExecutionCompletion::Exited) {
-                            ExecutorOutcome::Exit
-                        } else {
-                            ExecutorOutcome::Accept
-                        }),
-                    ) {
-                        Ok(step) => step,
-                        Err(_) => {
-                            facts.set_failure_provenance(FailureProvenance::LocalFailure(
-                                LocalFailureKind::InternalExecution,
-                            ));
-                            return result_from_state(&mut machine, &header, &question, facts);
+                    if let Some(index) = config
+                        .response_policies
+                        .iter()
+                        .position(|policy| policy.executable == executable)
+                    {
+                        let policy = &config.response_policies[index];
+                        if let Some(target) =
+                            query_policy_target(&policy.policy, self.machine.state())
+                        {
+                            return SyncStop::Await(dispatch, AwaitStep::QueryPolicy(target));
                         }
-                    };
-                    continue;
-                }
-                if let Some(cache_config) = config.cache_for_executable(dispatch.executable()) {
-                    let cache_id = cache_config.id;
-                    let Some(store) = cache.get(cache_id) else {
-                        facts.set_failure_provenance(FailureProvenance::LocalFailure(
-                            LocalFailureKind::InternalExecution,
-                        ));
-                        set_servfail(&mut machine);
-                        facts.set_response_source(ResponseSource::Local);
-                        return result_from_state(&mut machine, &header, &question, facts);
-                    };
-                    let lookup =
-                        store
-                            .lookup_entry_counted(raw, true)
+                        let result = crate::policy::apply_wire_policy(
+                            &policy.policy,
+                            self.machine.state_mut(),
+                            env.raw,
+                        );
+                        if result.is_ok()
+                            && matches!(policy.policy, crate::policy::ResponsePolicy::CnameRemover)
+                        {
+                            self.facts.note_cname_normalization(self.machine.state());
+                        }
+                        if matches!(result, Ok(true)) {
+                            self.facts.set_response_source(ResponseSource::Local);
+                        }
+                        step = match self
+                            .machine
+                            .resume(executable, result.map(|_| ExecutorOutcome::Continue))
+                        {
+                            Ok(step) => step,
+                            Err(_) => return SyncStop::Done(self.internal_servfail()),
+                        };
+                        continue;
+                    }
+                    if let Some(index) = config
+                        .fallbacks
+                        .iter()
+                        .position(|policy| policy.executable == executable)
+                    {
+                        return SyncStop::Await(dispatch, AwaitStep::Fallback(index));
+                    }
+                    if let Some(index) = config
+                        .preferences
+                        .iter()
+                        .position(|preference| preference.executable == executable)
+                    {
+                        return SyncStop::Await(dispatch, AwaitStep::Preference(index));
+                    }
+                    if let Some(cache_config) = config.cache_for_executable(executable) {
+                        let cache_id = cache_config.id;
+                        let Some(store) = env.cache.get(cache_id) else {
+                            return SyncStop::Done(self.internal_servfail());
+                        };
+                        let lookup = store
+                            .lookup_entry_counted(env.raw, true)
                             .ok()
                             .flatten()
                             .filter(|hit| {
                                 hit.state == atomdns_cache_core::LookupState::Fresh
-                                    || options.refresh_environment.is_some()
+                                    || env.options.refresh_environment.is_some()
                             });
-                    if let Some(hit) = lookup {
-                        if hit.state == atomdns_cache_core::LookupState::Lazy {
-                            if let (Some(environment), Ok(recipe)) =
-                                (&options.refresh_environment, machine.capture_successor())
-                            {
-                                environment.start(
-                                    cache_id,
-                                    recipe,
-                                    QueryView::new(raw.to_vec(), header, question.clone()),
-                                );
+                        if let Some(hit) = lookup {
+                            if hit.state == atomdns_cache_core::LookupState::Lazy {
+                                if let (Some(environment), Ok(recipe)) = (
+                                    &env.options.refresh_environment,
+                                    self.machine.capture_successor(),
+                                ) {
+                                    environment.start(
+                                        cache_id,
+                                        recipe,
+                                        QueryView::new(
+                                            env.raw.to_vec(),
+                                            self.header,
+                                            self.question.clone(),
+                                        ),
+                                    );
+                                }
                             }
+                            self.facts.cache_status = CacheStatus::Hit;
+                            self.facts.set_response_source(ResponseSource::Cache);
+                            self.facts.failure_provenance = None;
+                            self.machine
+                                .state_mut()
+                                .restore_cached_domain_set(hit.domain_set);
+                            self.machine
+                                .state_mut()
+                                .set_raw_response_with_origin(hit.response, hit.origin);
+                            self.facts.note_cache_response(self.machine.state());
+                            // A hit completes the successor chain that contains the
+                            // cache; the caller's later rules still run. A nested
+                            // cache inside that successor therefore never runs.
+                            step = match self
+                                .machine
+                                .resume(executable, Ok(ExecutorOutcome::Accept))
+                            {
+                                Ok(step) => step,
+                                Err(_) => return SyncStop::Done(self.internal_failure()),
+                            };
+                            continue;
                         }
-                        facts.cache_status = CacheStatus::Hit;
-                        facts.set_response_source(ResponseSource::Cache);
-                        facts.failure_provenance = None;
-                        machine
-                            .state_mut()
-                            .restore_cached_domain_set(hit.domain_set);
-                        machine
-                            .state_mut()
-                            .set_raw_response_with_origin(hit.response, hit.origin);
-                        facts.note_cache_response(machine.state());
-                        // A hit completes the successor chain that contains the
-                        // cache; the caller's later rules still run. A nested
-                        // cache inside that successor therefore never runs.
-                        step = match machine
-                            .resume(dispatch.executable(), Ok(ExecutorOutcome::Accept))
+                        self.facts.cache_status = CacheStatus::Miss;
+                        // Arm the boundary and take the publication token before the
+                        // successor runs, so a nested dispatch may arm its own frame
+                        // on top of this one. Duplicate dispatches of the same cache
+                        // are deliberately allowed: each arms its own watch token and
+                        // publishes at its own scope completion, innermost first.
+                        let watch = match self.machine.watch_enclosing_scope(executable) {
+                            Ok(watch) => watch,
+                            Err(_) => return SyncStop::Done(self.internal_servfail()),
+                        };
+                        if let Some(store_token) = store.begin_store(env.raw).ok().flatten() {
+                            self.pending_stores
+                                .push(PendingFrame { watch, store_token });
+                        }
+                        step = match self
+                            .machine
+                            .resume(executable, Ok(ExecutorOutcome::Continue))
                         {
                             Ok(step) => step,
-                            Err(_) => {
-                                facts.set_failure_provenance(FailureProvenance::LocalFailure(
-                                    LocalFailureKind::InternalExecution,
-                                ));
-                                return result_from_state(&mut machine, &header, &question, facts);
-                            }
+                            Err(_) => return SyncStop::Done(self.internal_failure()),
                         };
                         continue;
                     }
-                    facts.cache_status = CacheStatus::Miss;
-                    // Arm the boundary and take the publication token before the
-                    // successor runs, so a nested dispatch may arm its own frame
-                    // on top of this one. Duplicate dispatches of the same cache
-                    // are deliberately allowed: each arms its own watch token and
-                    // publishes at its own scope completion, innermost first.
-                    let watch = match machine.watch_enclosing_scope(dispatch.executable()) {
-                        Ok(watch) => watch,
-                        Err(_) => {
-                            facts.set_failure_provenance(FailureProvenance::LocalFailure(
-                                LocalFailureKind::InternalExecution,
-                            ));
-                            set_servfail(&mut machine);
-                            facts.set_response_source(ResponseSource::Local);
-                            return result_from_state(&mut machine, &header, &question, facts);
-                        }
-                    };
-                    if let Some(store_token) = store.begin_store(raw).ok().flatten() {
-                        pending_stores.push(PendingFrame { watch, store_token });
-                    }
-                    step = match machine
-                        .resume(dispatch.executable(), Ok(ExecutorOutcome::Continue))
-                    {
-                        Ok(step) => step,
-                        Err(_) => {
-                            facts.set_failure_provenance(FailureProvenance::LocalFailure(
-                                LocalFailureKind::InternalExecution,
-                            ));
-                            return result_from_state(&mut machine, &header, &question, facts);
-                        }
-                    };
-                    continue;
+                    return SyncStop::Await(dispatch, AwaitStep::Exchange);
                 }
+            }
+        }
+    }
 
+    /// Finishes one waiting dispatch that [`RootRun::run_sync`] stopped on and
+    /// returns the next step, or the result when the execution ended.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) async fn run_await<E: ExchangeExecutor + ?Sized>(
+        &mut self,
+        env: &RootEnv<'_, E>,
+        dispatch: ExternalDispatch,
+        wait: AwaitStep,
+    ) -> Result<MachineStep, ExecutionResult> {
+        let config = env.config;
+        let cache = env.cache;
+        let executor = env.executor;
+        let options = env.options;
+        let raw = env.raw;
+        let request_shutdown = env.request_shutdown;
+        let request_deadline = self.request_deadline;
+        let header = self.header;
+        let question = &self.question;
+        let machine = &mut self.machine;
+        let facts = &mut self.facts;
+        match wait {
+            AwaitStep::Sleep(index) => {
+                let sleep = &config.sleeps[index];
+                match wait_sleep(sleep.duration, request_deadline, &[request_shutdown]).await {
+                    SleepEnd::Elapsed => {}
+                    SleepEnd::Cancelled => return Err(canceled_execution(facts)),
+                    SleepEnd::DeadlineReached => {
+                        // The request budget ended while it slept: the
+                        // reference entry turns that error into SERVFAIL.
+                        // No upstream was involved, so no upstream failure
+                        // provenance is recorded.
+                        set_servfail(machine);
+                        facts.set_response_source(ResponseSource::Local);
+                        return Err(result_from_state(machine, &header, question, facts));
+                    }
+                }
+                match machine.resume(dispatch.executable(), Ok(ExecutorOutcome::Continue)) {
+                    Ok(step) => Ok(step),
+                    Err(_) => {
+                        facts.set_failure_provenance(FailureProvenance::LocalFailure(
+                            LocalFailureKind::InternalExecution,
+                        ));
+                        Err(result_from_state(machine, &header, question, facts))
+                    }
+                }
+            }
+            AwaitStep::RewriteResolve { index, lookup } => {
+                let rewrite = &config.local.rewrites[index];
+                let resolver = EngineResolver {
+                    config,
+                    cache,
+                    executor,
+                    options,
+                    cancellation: request_shutdown.clone(),
+                };
+                let outcome = match rewrite
+                    .runtime
+                    .finish_resolve(
+                        machine.state_mut(),
+                        raw,
+                        lookup,
+                        request_deadline,
+                        &[request_shutdown],
+                        rewrite
+                            .sequence
+                            .map(|id| (id, &resolver as &dyn SequenceResolver)),
+                    )
+                    .await
+                {
+                    RewriteEnd::NoMatch => ExecutorOutcome::Continue,
+                    RewriteEnd::Answered => {
+                        facts.set_response_source(ResponseSource::Local);
+                        ExecutorOutcome::Accept
+                    }
+                    RewriteEnd::Cancelled => return Err(canceled_execution(facts)),
+                };
+                match machine.resume(dispatch.executable(), Ok(outcome)) {
+                    Ok(step) => Ok(step),
+                    Err(_) => {
+                        facts.set_failure_provenance(FailureProvenance::LocalFailure(
+                            LocalFailureKind::InternalExecution,
+                        ));
+                        Err(result_from_state(machine, &header, question, facts))
+                    }
+                }
+            }
+            AwaitStep::QueryPolicy(target) => {
+                let context = BranchContext {
+                    config,
+                    cache,
+                    executor,
+                    view: QueryView::new(raw.to_vec(), header, question.clone()),
+                    deadline: request_deadline,
+                    root_cancellation: request_shutdown.clone(),
+                    branch_cancellation: request_shutdown.child_token(),
+                    trace: facts.enable_policy_trace(question.qtype),
+                    branch_metrics: facts.branch_metrics.clone(),
+                    refresh_environment: options.refresh_environment.clone(),
+                    allow_empty_response: true,
+                    branch_id: Some(0),
+                    polls: Rc::default(),
+                    capture_trace_id: facts.checkpoint.capture_trace_id(),
+                };
+                let successor = match machine.fork_successor(CancellationToken::new()) {
+                    Ok(successor) => successor,
+                    Err(_) => {
+                        set_servfail(machine);
+                        facts.set_response_source(ResponseSource::Local);
+                        return Err(result_from_state(machine, &header, question, facts));
+                    }
+                };
+                let source = facts.response_source.clone();
+                let outcome = run_query_policy(successor, context, source, target).await;
+                *machine.state_mut() = outcome.state;
+                if let Some(error) = outcome.error {
+                    if matches!(
+                        error,
+                        ExecutionError::Cancelled | ExecutionError::BudgetExceeded
+                    ) {
+                        return Err(terminal_policy_failure(
+                            error, machine, raw, &header, question, facts,
+                        ));
+                    }
+                    set_servfail(machine);
+                    facts.set_response_source(ResponseSource::Local);
+                    facts.set_failure_provenance(FailureProvenance::LocalFailure(
+                        LocalFailureKind::InternalExecution,
+                    ));
+                    return Err(result_from_state(machine, &header, question, facts));
+                }
+                if let Some(source) = outcome.source {
+                    facts.set_response_source(source);
+                } else {
+                    facts.set_response_source(ResponseSource::Local);
+                }
+                let terminal = if outcome.completion == Some(ExecutionCompletion::Exited) {
+                    ExecutorOutcome::Exit
+                } else {
+                    ExecutorOutcome::Accept
+                };
+                match machine.resume(dispatch.executable(), Ok(terminal)) {
+                    Ok(step) => Ok(step),
+                    Err(_) => Err(result_from_state(machine, &header, question, facts)),
+                }
+            }
+            AwaitStep::Fallback(index) => {
+                let policy = &config.fallbacks[index];
+                let trace = facts.enable_policy_trace(question.qtype);
+                let context = BranchContext {
+                    config,
+                    cache,
+                    executor,
+                    view: QueryView::new(raw.to_vec(), header, question.clone()),
+                    deadline: request_deadline,
+                    root_cancellation: request_shutdown.clone(),
+                    branch_cancellation: request_shutdown.child_token(),
+                    trace,
+                    branch_metrics: facts.branch_metrics.clone(),
+                    refresh_environment: options.refresh_environment.clone(),
+                    allow_empty_response: false,
+                    branch_id: Some(0),
+                    polls: Rc::default(),
+                    capture_trace_id: facts.checkpoint.capture_trace_id(),
+                };
+                let successor = match machine.fork_successor(CancellationToken::new()) {
+                    Ok(successor) => successor,
+                    Err(_) => {
+                        facts.set_failure_provenance(FailureProvenance::LocalFailure(
+                            LocalFailureKind::InternalExecution,
+                        ));
+                        set_servfail(machine);
+                        facts.set_response_source(ResponseSource::Local);
+                        return Err(result_from_state(machine, &header, question, facts));
+                    }
+                };
+                let inherited_source = facts.response_source.clone();
+                let outcome =
+                    run_fallback(policy.clone(), successor, context.clone(), inherited_source)
+                        .await;
+                if let Some(error) = outcome.error {
+                    // The captured successor has already been driven by
+                    // the branch. Commit its state, then return the typed
+                    // policy failure through the pending dispatch. The
+                    // sequence core, rather than a synthetic Accept,
+                    // owns the caller/try failure boundary.
+                    *machine.state_mut() = outcome.state;
+                    let core_error = match policy_failure_for_core(&error) {
+                        Ok(core_error) => {
+                            facts.record_policy_failure(error.clone());
+                            core_error
+                        }
+                        Err(terminal) => {
+                            return Err(terminal_policy_failure(
+                                terminal, machine, raw, &header, question, facts,
+                            ));
+                        }
+                    };
+                    return match machine.resume(dispatch.executable(), Err(core_error)) {
+                        Ok(next) => {
+                            facts.clear_policy_failure();
+                            Ok(next)
+                        }
+                        Err(_) => Err(result_from_state(machine, &header, question, facts)),
+                    };
+                }
+                if let Some(source) = outcome.source.clone() {
+                    facts.set_response_source(source);
+                } else {
+                    facts.set_response_source(ResponseSource::Local);
+                }
+                *machine.state_mut() = outcome.state;
+                match machine.resume(
+                    dispatch.executable(),
+                    Ok(if outcome.completion == Some(ExecutionCompletion::Exited) {
+                        ExecutorOutcome::Exit
+                    } else {
+                        ExecutorOutcome::Accept
+                    }),
+                ) {
+                    Ok(step) => Ok(step),
+                    Err(_) => {
+                        facts.set_failure_provenance(FailureProvenance::LocalFailure(
+                            LocalFailureKind::InternalExecution,
+                        ));
+                        Err(result_from_state(machine, &header, question, facts))
+                    }
+                }
+            }
+            AwaitStep::Preference(index) => {
+                let preference = &config.preferences[index];
+                let trace = facts.enable_policy_trace(question.qtype);
+                let context = BranchContext {
+                    config,
+                    cache,
+                    executor,
+                    view: QueryView::new(raw.to_vec(), header, question.clone()),
+                    deadline: request_deadline,
+                    root_cancellation: request_shutdown.clone(),
+                    branch_cancellation: request_shutdown.child_token(),
+                    trace,
+                    branch_metrics: facts.branch_metrics.clone(),
+                    refresh_environment: options.refresh_environment.clone(),
+                    allow_empty_response: false,
+                    branch_id: Some(0),
+                    polls: Rc::default(),
+                    capture_trace_id: facts.checkpoint.capture_trace_id(),
+                };
+                let successor = match machine.fork_successor(CancellationToken::new()) {
+                    Ok(successor) => successor,
+                    Err(_) => {
+                        facts.set_failure_provenance(FailureProvenance::LocalFailure(
+                            LocalFailureKind::InternalExecution,
+                        ));
+                        set_servfail(machine);
+                        facts.set_response_source(ResponseSource::Local);
+                        return Err(result_from_state(machine, &header, question, facts));
+                    }
+                };
+                let inherited_source = facts.response_source.clone();
+                let outcome = run_preference(
+                    preference.clone(),
+                    successor,
+                    context.clone(),
+                    inherited_source,
+                )
+                .await;
+                if let Some(error) = outcome.error {
+                    *machine.state_mut() = outcome.state;
+                    let core_error = match policy_failure_for_core(&error) {
+                        Ok(core_error) => {
+                            facts.record_policy_failure(error.clone());
+                            core_error
+                        }
+                        Err(terminal) => {
+                            return Err(terminal_policy_failure(
+                                terminal, machine, raw, &header, question, facts,
+                            ));
+                        }
+                    };
+                    return match machine.resume(dispatch.executable(), Err(core_error)) {
+                        Ok(next) => {
+                            facts.clear_policy_failure();
+                            Ok(next)
+                        }
+                        Err(_) => Err(result_from_state(machine, &header, question, facts)),
+                    };
+                }
+                if let Some(source) = outcome.source.clone() {
+                    facts.set_response_source(source);
+                } else {
+                    facts.set_response_source(ResponseSource::Local);
+                }
+                *machine.state_mut() = outcome.state;
+                match machine.resume(
+                    dispatch.executable(),
+                    Ok(if outcome.completion == Some(ExecutionCompletion::Exited) {
+                        ExecutorOutcome::Exit
+                    } else {
+                        ExecutorOutcome::Accept
+                    }),
+                ) {
+                    Ok(step) => Ok(step),
+                    Err(_) => {
+                        facts.set_failure_provenance(FailureProvenance::LocalFailure(
+                            LocalFailureKind::InternalExecution,
+                        ));
+                        Err(result_from_state(machine, &header, question, facts))
+                    }
+                }
+            }
+            AwaitStep::Exchange => {
                 if request_shutdown.is_cancelled() {
-                    return canceled_execution(facts);
+                    return Err(canceled_execution(facts));
                 }
                 // A later leg must not start on a budget that has already
                 // expired. The first leg always runs so a single-forward graph
                 // keeps its previous response behavior; from the second leg on,
                 // the shared deadline decides, independent of forward count.
-                if (upstream_response || attempted) && Instant::now() >= request_deadline {
-                    set_servfail(&mut machine);
+                if (self.upstream_response || self.attempted) && Instant::now() >= request_deadline
+                {
+                    set_servfail(machine);
                     facts.set_response_source(ResponseSource::Local);
                     facts.set_failure_provenance(FailureProvenance::LocalFailure(
                         LocalFailureKind::NoUsableUpstreamResponse,
                     ));
-                    return result_from_state(&mut machine, &header, &question, facts);
+                    return Err(result_from_state(machine, &header, question, facts));
                 }
-                publication_deadline = Some(request_deadline);
-                attempted = true;
+                self.publication_deadline = Some(request_deadline);
+                self.attempted = true;
                 facts.in_flight_executable = Some(dispatch.executable());
                 facts.checkpoint.begin_attempt_ledger();
                 facts.install_root_attempt_trace(dispatch.executable(), question.qtype);
@@ -2113,15 +2518,15 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                         &attempt_ledger,
                         None,
                         question.qtype,
-                        &mut facts,
+                        facts,
                     );
-                    return canceled_execution(facts);
+                    return Err(canceled_execution(facts));
                 }
                 // One forward-count-independent policy decides whether a leg's
                 // response is usable and what a rejection means.
                 match exchange {
                     Ok(batch) => {
-                        match qualify_response(batch.response.wire(), header.id, &question) {
+                        match qualify_response(batch.response.wire(), header.id, question) {
                             Some(wire) => {
                                 if let Some(selected_entry) = batch.selected_entry {
                                     facts.selected_peer = batch.selected_peer;
@@ -2131,7 +2536,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                                         &attempt_ledger,
                                         Some(selected_entry),
                                         question.qtype,
-                                        &mut facts,
+                                        facts,
                                     );
                                 } else if let Some(upstream) = in_flight_executable
                                     .and_then(|executable| upstream_identity(config, executable))
@@ -2139,7 +2544,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                                     facts.record_upstream_response(upstream);
                                 }
                                 facts.failure_provenance = None;
-                                upstream_response = true;
+                                self.upstream_response = true;
                                 let origin = invocation_response_origin(
                                     config,
                                     dispatch.executable(),
@@ -2160,7 +2565,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                                         &attempt_ledger,
                                         None,
                                         question.qtype,
-                                        &mut facts,
+                                        facts,
                                     );
                                 } else if let Some(upstream) = in_flight_executable
                                     .and_then(|executable| upstream_identity(config, executable))
@@ -2175,9 +2580,9 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                                         LocalFailureKind::InternalExecution,
                                     ));
                                 }
-                                set_servfail(&mut machine);
+                                set_servfail(machine);
                                 facts.set_response_source(ResponseSource::Local);
-                                return result_from_state(&mut machine, &header, &question, facts);
+                                return Err(result_from_state(machine, &header, question, facts));
                             }
                         }
                     }
@@ -2185,9 +2590,9 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                         facts.set_failure_provenance(FailureProvenance::LocalFailure(
                             LocalFailureKind::InternalExecution,
                         ));
-                        set_servfail(&mut machine);
+                        set_servfail(machine);
                         facts.set_response_source(ResponseSource::Local);
-                        return result_from_state(&mut machine, &header, &question, facts);
+                        return Err(result_from_state(machine, &header, question, facts));
                     }
                     Err(error @ ExchangeError::Upstream(_)) => {
                         if !attempt_ledger.slots().is_empty() {
@@ -2197,7 +2602,7 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                                 &attempt_ledger,
                                 None,
                                 question.qtype,
-                                &mut facts,
+                                facts,
                             );
                         } else if let Some(upstream) = in_flight_executable
                             .and_then(|executable| upstream_identity(config, executable))
@@ -2217,22 +2622,117 @@ pub(crate) async fn execute_request_with_observation<E: ExchangeExecutor + ?Size
                                 LocalFailureKind::InternalExecution,
                             ));
                         }
-                        set_servfail(&mut machine);
+                        set_servfail(machine);
                         facts.set_response_source(ResponseSource::Local);
-                        return result_from_state(&mut machine, &header, &question, facts);
+                        return Err(result_from_state(machine, &header, question, facts));
                     }
                 }
-                step = match machine.resume(dispatch.executable(), Ok(ExecutorOutcome::Continue)) {
-                    Ok(step) => step,
+                match machine.resume(dispatch.executable(), Ok(ExecutorOutcome::Continue)) {
+                    Ok(step) => Ok(step),
                     Err(_) => {
                         facts.set_failure_provenance(FailureProvenance::LocalFailure(
                             LocalFailureKind::InternalExecution,
                         ));
-                        return result_from_state(&mut machine, &header, &question, facts);
+                        Err(result_from_state(machine, &header, question, facts))
                     }
-                };
+                }
             }
         }
+    }
+
+    /// Releases every borrow so the paused execution can move to another task.
+    pub(crate) fn suspend(self, dispatch: ExternalDispatch, step: AwaitStep) -> SuspendedRoot {
+        let Self {
+            machine,
+            facts,
+            pending_stores,
+            upstream_response,
+            attempted,
+            publication_deadline,
+            request_deadline,
+            header,
+            question,
+        } = self;
+        let facts = facts.detach();
+        // A machine built by `ExecutionMachine::new` always owns its state and
+        // control, so it always detaches.
+        let machine = machine.detach().ok();
+        SuspendedRoot {
+            machine,
+            facts,
+            pending_stores,
+            upstream_response,
+            attempted,
+            publication_deadline,
+            request_deadline,
+            header,
+            question,
+            dispatch,
+            step,
+        }
+    }
+}
+
+impl SuspendedRoot {
+    /// Binds the paused execution to the same configuration and checkpoint it
+    /// was suspended from. `request_shutdown` becomes the request's token from
+    /// here on. The returned dispatch is the waiting one, to be finished with
+    /// [`RootRun::run_await`].
+    // The error is the request's final result; see `RootRun::start`.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn resume<'a>(
+        self,
+        config: &'a CompiledConfig,
+        checkpoint: &'a mut ExecutionCheckpoint,
+        request_shutdown: &TransportCancellation,
+    ) -> Result<(RootRun<'a>, ExternalDispatch, AwaitStep), ExecutionResult> {
+        let Self {
+            machine,
+            facts,
+            pending_stores,
+            upstream_response,
+            attempted,
+            publication_deadline,
+            request_deadline,
+            header,
+            question,
+            dispatch,
+            step,
+        } = self;
+        let mut facts = facts.attach(config, checkpoint);
+        facts.cancellation = request_shutdown.clone();
+        let Some(machine) = machine.and_then(|machine| machine.attach(&config.program).ok()) else {
+            // Not reached: the machine was detached from this same program.
+            facts.cache_status = CacheStatus::NotApplicable;
+            facts.set_failure_provenance(FailureProvenance::LocalFailure(
+                LocalFailureKind::InternalExecution,
+            ));
+            return Err(result_from_wire(
+                protocol_error(&header, &question, SERVFAIL),
+                &mut facts,
+            ));
+        };
+        Ok((
+            RootRun {
+                machine,
+                facts,
+                pending_stores,
+                upstream_response,
+                attempted,
+                publication_deadline,
+                request_deadline,
+                header,
+                question,
+            },
+            dispatch,
+            step,
+        ))
+    }
+
+    /// Reports the facts of a suspended execution that ends without being
+    /// resumed, exactly as a dropped execution reports them.
+    pub(crate) fn abandon(self, config: &CompiledConfig, checkpoint: &mut ExecutionCheckpoint) {
+        drop(self.facts.attach(config, checkpoint));
     }
 }
 
@@ -3348,7 +3848,7 @@ fn run_target<'a, E: ExchangeExecutor + ?Sized>(
     })
 }
 
-enum ScopedQueryPolicy {
+pub(crate) enum ScopedQueryPolicy {
     Redirect(String),
     Ecs(crate::ecs::EcsPolicy),
 }
@@ -4417,7 +4917,7 @@ fn record_branch_ledger_data(record: BranchLedgerRecord<'_>) {
     }
 }
 
-fn canceled_execution(mut facts: ExecutionFacts) -> ExecutionResult {
+fn canceled_execution(facts: &mut ExecutionFacts) -> ExecutionResult {
     facts.response_source = None;
     facts.selected_peer = None;
     if let Some(diagnostics) = &mut facts.upstream_diagnostics {
@@ -4435,7 +4935,7 @@ fn terminal_policy_failure(
     raw: &[u8],
     header: &QueryHeader,
     question: &QuestionInfo,
-    mut facts: ExecutionFacts,
+    facts: &mut ExecutionFacts,
 ) -> ExecutionResult {
     debug_assert!(matches!(
         error,
@@ -4476,7 +4976,7 @@ fn result_from_state(
     machine: &mut ExecutionMachine<'_>,
     header: &QueryHeader,
     question: &QuestionInfo,
-    mut facts: ExecutionFacts,
+    facts: &mut ExecutionFacts,
 ) -> ExecutionResult {
     if facts.cache_status == CacheStatus::Undetermined {
         facts.cache_status = CacheStatus::NotApplicable;
@@ -4490,7 +4990,9 @@ fn result_from_state(
     result_from_wire(response, facts)
 }
 
-fn result_from_wire(response_wire: Vec<u8>, mut facts: ExecutionFacts) -> ExecutionResult {
+fn result_from_wire(response_wire: Vec<u8>, facts: &mut ExecutionFacts) -> ExecutionResult {
+    let config = facts.config;
+    let facts = &mut facts.state;
     facts.absorb_branch_metrics();
     facts.finalize_policy_trace();
     if facts.policy_failure.take().is_some() && facts.failure_provenance.is_none() {
@@ -4555,7 +5057,7 @@ fn result_from_wire(response_wire: Vec<u8>, mut facts: ExecutionFacts) -> Execut
                 .or_else(|| {
                     supplying_identity
                         .as_deref()
-                        .and_then(|identity| upstream_endpoint(facts.config, identity))
+                        .and_then(|identity| upstream_endpoint(config, identity))
                         .or_else(|| facts.selected_peer.map(|peer| peer.to_string()))
                 })
         })
@@ -9294,5 +9796,89 @@ plugins:
             .build()
             .expect("runtime")
             .block_on(future)
+    }
+
+    /// Every scenario below also runs with the execution suspended and resumed
+    /// at each waiting dispatch, as the UDP listener hands a request to another
+    /// task: its assertions must hold unchanged.
+    macro_rules! suspended_twins {
+        ($($name:ident,)*) => {
+            mod suspended_twins {
+                $(
+                    #[test]
+                    fn $name() {
+                        let _ = crate::execution::with_every_await_suspended(super::$name);
+                    }
+                )*
+            }
+        };
+    }
+
+    suspended_twins! {
+        cnfake_wrapper_keeps_supplier_wire_and_audit_consistent_in_all_four_cells,
+        exit_publishes_response_labels_to_both_nested_caches,
+        deep_fallback_keeps_primary_priority_without_polling_a_losing_supplier,
+        a_deferred_deep_branch_waiting_for_its_upstream_does_not_spin,
+        a_deep_branch_still_notices_cancellation_without_a_spinning_wake,
+        foreground_cycle_still_exhausts_one_finite_root_without_forwarding,
+        audit_disabled_execution_keeps_metric_facts_without_audit_details,
+        execution_observation_tracks_w1_w2_and_servfail_provenance,
+        dropped_w2_execution_retains_cache_miss_and_interrupted_forward_attempt,
+        dropped_flow_setter_execution_preserves_configured_metadata_precedence,
+        dropped_w3_execution_does_not_publish_intermediate_response_as_final,
+        execution_observation_reports_actual_w3_final_route_and_ordered_legs,
+        canonical_machine_resumes_two_external_legs_with_one_deadline,
+        failed_first_multi_forward_leg_stops_before_the_next_external,
+        mismatched_question_is_terminal_and_never_reaches_the_next_external,
+        malformed_address_rdata_is_terminal_for_multi_forward_w3,
+        failed_second_multi_forward_leg_does_not_republish_first_answer,
+        interleaved_request_cancellation_does_not_cross_request_state,
+        cache_hit_skips_the_exact_forward_dispatch_and_miss_publishes_at_completion,
+        unknown_executable_id_fails_closed_without_selecting_the_only_forward,
+        upstream_servfail_is_cacheable_but_local_servfail_is_not,
+        two_nested_caches_each_store_their_own_successors_result,
+        a_child_cache_keeps_its_successor_result_when_the_parent_overwrites_the_response,
+        reverse_qname_and_parent_replacement_do_not_publish_stale_route_provenance,
+        byte_identical_parent_response_replacement_drops_child_provenance,
+        an_entry_cache_wraps_its_successor_and_caches_that_successor_result,
+        the_representative_chain_blocks_rejects_and_routes_without_a_listener,
+        a_cancelled_query_never_publishes_a_partial_child_result,
+        a_repeated_dynamic_cache_dispatch_builds_its_own_frame_and_answers_normally,
+        a_nested_cache_hit_short_circuits_the_inner_cache,
+        two_calls_to_one_child_dispatch_the_shared_cache_again_after_a_hit,
+        one_cache_dispatched_in_two_scopes_publishes_at_both_boundaries,
+        publication_deadline_drops_the_pending_token_without_changing_w1_output,
+        cached_entry_hints_keep_the_first_effective_route_label_and_no_v_flags,
+        fallback_zero_starts_both_branches_and_reports_schema_two,
+        prefer_ipv4_rewrites_reference_qtype_and_suppresses_original_answer,
+        redirect_error_cancel_and_shared_fuel_restore_without_decoration,
+        sleep_waits_then_the_sequence_continues,
+        a_cancelled_sleep_returns_at_once_and_never_reaches_the_forward,
+        a_sleep_never_outlives_the_request_budget,
+        a_sleeping_fallback_branch_is_released_when_the_other_branch_wins,
+    }
+
+    #[test]
+    fn the_suspension_seam_really_suspends_waiting_dispatches() {
+        assert!(
+            crate::execution::with_every_await_suspended(
+                canonical_machine_resumes_two_external_legs_with_one_deadline
+            ) >= 2,
+            "both external legs suspend"
+        );
+        assert!(
+            crate::execution::with_every_await_suspended(sleep_waits_then_the_sequence_continues)
+                >= 1
+        );
+        assert!(
+            crate::execution::with_every_await_suspended(
+                fallback_zero_starts_both_branches_and_reports_schema_two
+            ) >= 1
+        );
+        assert!(
+            crate::execution::with_every_await_suspended(
+                prefer_ipv4_rewrites_reference_qtype_and_suppresses_original_answer
+            ) >= 1
+        );
     }
 }

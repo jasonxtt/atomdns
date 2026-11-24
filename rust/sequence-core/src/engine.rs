@@ -536,7 +536,106 @@ impl SuccessorRecipe {
     }
 }
 
+/// A machine taken off its program so its owner can move it to another task.
+///
+/// It is the exact machine — scopes, state, control, watches and the pending
+/// dispatch — without the program borrow. [`DetachedMachine::attach`] binds it
+/// back to the same program and execution continues where it stopped.
+pub struct DetachedMachine {
+    program: *const ValidatedProgram,
+    scopes: ScopeStack,
+    state: Box<ExecutionState>,
+    control: ExecutionControl,
+    status: MachineStatus,
+    watches: Vec<ScopeWatch>,
+    pending_scope_completions: Vec<PendingWatchEvent>,
+    next_watch_token: u64,
+    last_origin: Option<SequenceId>,
+    pending_dispatch_executable: Option<ExecutableId>,
+    pending_completion: Option<ExecutionCompletion>,
+}
+
+impl DetachedMachine {
+    /// Binds the machine back to the program it was detached from.
+    ///
+    /// # Errors
+    ///
+    /// Returns the machine unchanged when `program` is not that same program:
+    /// executable and sequence identities are only meaningful in their own
+    /// program.
+    pub fn attach(self, program: &ValidatedProgram) -> Result<ExecutionMachine<'_>, Box<Self>> {
+        if !std::ptr::eq(self.program, program) {
+            return Err(Box::new(self));
+        }
+        Ok(ExecutionMachine {
+            program,
+            scopes: self.scopes,
+            state: StateSlot::Owned(self.state),
+            control: ControlSlot::Owned(self.control),
+            status: self.status,
+            watches: self.watches,
+            pending_scope_completions: self.pending_scope_completions,
+            next_watch_token: self.next_watch_token,
+            last_origin: self.last_origin,
+            pending_dispatch_executable: self.pending_dispatch_executable,
+            pending_completion: self.pending_completion,
+        })
+    }
+}
+
 impl<'a> ExecutionMachine<'a> {
+    /// Takes the machine off its program borrow so it can be moved to another
+    /// task, for example when a step that started synchronously has to wait.
+    ///
+    /// # Errors
+    ///
+    /// Returns the machine unchanged when it borrows its state or control
+    /// (the legacy adapter); only a machine built by [`ExecutionMachine::new`]
+    /// owns both.
+    pub fn detach(self) -> Result<DetachedMachine, Box<Self>> {
+        let Self {
+            program,
+            scopes,
+            state,
+            control,
+            status,
+            watches,
+            pending_scope_completions,
+            next_watch_token,
+            last_origin,
+            pending_dispatch_executable,
+            pending_completion,
+        } = self;
+        match (state, control) {
+            (StateSlot::Owned(state), ControlSlot::Owned(control)) => Ok(DetachedMachine {
+                program: std::ptr::from_ref(program),
+                scopes,
+                state,
+                control,
+                status,
+                watches,
+                pending_scope_completions,
+                next_watch_token,
+                last_origin,
+                pending_dispatch_executable,
+                pending_completion,
+            }),
+            (state, control) => Err(Box::new(Self {
+                program,
+                scopes,
+                state,
+                control,
+                status,
+                watches,
+                pending_scope_completions,
+                next_watch_token,
+                last_origin,
+                pending_dispatch_executable,
+                pending_completion,
+            })),
+        }
+    }
+
     /// The named sequence that most recently executed a rule. Synthetic inline
     /// scopes are never reported; the nearest enclosing configuration-named
     /// sequence owns the position instead. This is the real executed position
