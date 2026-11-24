@@ -37,8 +37,10 @@ struct RoutingCase {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// One query a route fixture received. The UDP upstream sees a fresh DNS ID
+/// per exchange, so events are joined to client queries by question name;
+/// every client query in this file uses a distinct name.
 struct RouteEvent {
-    id: u16,
     route: &'static str,
     qname: Vec<u8>,
 }
@@ -74,14 +76,13 @@ impl RouteFixture {
                     continue;
                 };
                 let query = &packet[..length];
-                let Ok((header, question)) = parse_query(query) else {
+                let Ok((_, question)) = parse_query(query) else {
                     continue;
                 };
                 thread_events
                     .lock()
                     .expect("route event lock")
                     .push(RouteEvent {
-                        id: header.id,
                         route,
                         qname: question.qname_wire.clone(),
                     });
@@ -112,7 +113,8 @@ impl RouteFixture {
 
 fn response_for(route: &'static str, query: &[u8], question: &QuestionInfo) -> Option<Vec<u8>> {
     if route == "b" && question.qname_wire == qname_wire("malformed.test.") {
-        return Some(vec![1, 2, 3]);
+        // Too short to be a response, carrying the ID the upstream received.
+        return Some(vec![query[0], query[1], 3]);
     }
     if route == "b" && question.qname_wire == qname_wire("mismatch.test.") {
         let mut wrong_question = question.clone();
@@ -228,10 +230,11 @@ fn routing_yaml(a: SocketAddr, b: SocketAddr, c: SocketAddr) -> String {
         .replace("udp://127.0.0.1:15458", &format!("udp://{c}"))
 }
 
-fn route_sequence(events: &[RouteEvent], id: u16) -> Vec<&'static str> {
+fn route_sequence(events: &[RouteEvent], qname: &str) -> Vec<&'static str> {
+    let qname = qname_wire(qname);
     events
         .iter()
-        .filter(|event| event.id == id)
+        .filter(|event| event.qname == qname)
         .map(|event| event.route)
         .collect()
 }
@@ -261,12 +264,11 @@ fn assert_frozen_w3_observations(
     let audit = assembly.audit_snapshot();
     assert_eq!(audit.records.len(), cases.len());
     assert_eq!(audit.evicted_total, 0);
-    for (index, case) in cases.iter().enumerate() {
-        let id = 0x7101_u16 + u16::try_from(index).expect("corpus index");
+    for case in cases {
         assert!(
             events
                 .iter()
-                .any(|event| event.id == id && event.qname == qname_wire(&case.qname))
+                .any(|event| event.qname == qname_wire(&case.qname))
         );
         let record = audit
             .records
@@ -358,13 +360,9 @@ fn assert_w3_shutdown_observations(assembly: &HostAssembly, events: &[RouteEvent
     ] {
         let fixture_events = events
             .iter()
-            .filter(|event| event.id == id)
+            .filter(|event| event.qname == qname_wire(qname))
             .collect::<Vec<_>>();
-        assert!(
-            fixture_events
-                .iter()
-                .all(|event| event.qname == qname_wire(qname))
-        );
+        assert!(!fixture_events.is_empty(), "{id:#06x} reached a fixture");
         let record = audit
             .records
             .iter()
@@ -409,9 +407,8 @@ fn assert_w3_shutdown_observations(assembly: &HostAssembly, events: &[RouteEvent
 }
 
 fn verify_route_evidence(cases: &[RoutingCase], events: &[RouteEvent]) -> Result<(), String> {
-    for (index, case) in cases.iter().enumerate() {
-        let id = 0x7101_u16 + u16::try_from(index).map_err(|_| "too many cases".to_owned())?;
-        let actual = route_sequence(events, id);
+    for case in cases {
+        let actual = route_sequence(events, &case.qname);
         let expected = expected_routes(case);
         if actual != expected {
             return Err(format!(
@@ -419,17 +416,16 @@ fn verify_route_evidence(cases: &[RoutingCase], events: &[RouteEvent]) -> Result
                 case.case_id
             ));
         }
-        let expected_qname = qname_wire(&case.qname);
-        if events
-            .iter()
-            .filter(|event| event.id == id)
-            .any(|event| event.qname != expected_qname)
-        {
-            return Err(format!(
-                "route evidence question mismatch for {}",
-                case.case_id
-            ));
-        }
+    }
+    let known = cases
+        .iter()
+        .map(|case| qname_wire(&case.qname))
+        .collect::<Vec<_>>();
+    if let Some(event) = events.iter().find(|event| !known.contains(&event.qname)) {
+        return Err(format!(
+            "route evidence for an unexpected question on route {}",
+            event.route
+        ));
     }
     Ok(())
 }
@@ -485,8 +481,7 @@ fn tampered_route_evidence_fails_even_with_the_expected_final_answers() {
         vec!["192.0.2.11", "192.0.2.11", "192.0.2.12"]
     );
     let mut tampered = Vec::new();
-    for (index, case) in cases.iter().enumerate() {
-        let id = 0x7101_u16 + u16::try_from(index).expect("corpus index");
+    for case in &cases {
         for route in expected_routes(case) {
             let route = if case.case_id == "ip-rule-hit" && *route == "a" {
                 "c"
@@ -494,7 +489,6 @@ fn tampered_route_evidence_fails_even_with_the_expected_final_answers() {
                 *route
             };
             tampered.push(RouteEvent {
-                id,
                 route,
                 qname: qname_wire(&case.qname),
             });
@@ -623,7 +617,7 @@ fn valid_negative_b_answer_falls_through_to_c_without_a() {
     });
     assert_answer(&response, 0x7201, "negative.test.", [192, 0, 2, 12]);
     let snapshot = events.lock().expect("route events").clone();
-    assert_eq!(route_sequence(&snapshot, 0x7201), vec!["b", "c"]);
+    assert_eq!(route_sequence(&snapshot, "negative.test."), vec!["b", "c"]);
     route_a.stop();
     route_b.stop();
     route_c.stop();
@@ -682,11 +676,11 @@ fn w3_malformed_mismatch_and_leg_failures_stop_without_stale_or_extra_routes() {
         assert_servfail(response, *id, name);
     }
     let snapshot = events.lock().expect("route events").clone();
-    assert_eq!(route_sequence(&snapshot, 0x7301), vec!["b"]);
-    assert_eq!(route_sequence(&snapshot, 0x7302), vec!["b"]);
-    assert_eq!(route_sequence(&snapshot, 0x7303), vec!["b"]);
-    assert_eq!(route_sequence(&snapshot, 0x7304), vec!["b", "a"]);
-    assert_eq!(route_sequence(&snapshot, 0x7305), vec!["b", "c"]);
+    assert_eq!(route_sequence(&snapshot, "b-fail.test."), vec!["b"]);
+    assert_eq!(route_sequence(&snapshot, "malformed.test."), vec!["b"]);
+    assert_eq!(route_sequence(&snapshot, "mismatch.test."), vec!["b"]);
+    assert_eq!(route_sequence(&snapshot, "a-fail.test."), vec!["b", "a"]);
+    assert_eq!(route_sequence(&snapshot, "c-fail.test."), vec!["b", "c"]);
     route_a.stop();
     route_b.stop();
     route_c.stop();
@@ -735,7 +729,7 @@ fn w3_shutdown_after_b_is_observed_prevents_late_response_and_rebinds() {
                 .lock()
                 .expect("route events")
                 .iter()
-                .any(|event| event.id == 0x7401 && event.route == "b");
+                .any(|event| event.qname == qname_wire("cancel.test.") && event.route == "b");
             if observed_b {
                 break;
             }
@@ -750,7 +744,7 @@ fn w3_shutdown_after_b_is_observed_prevents_late_response_and_rebinds() {
     assert!(!received, "shutdown must prevent a late W3 response");
     server_result.expect("W3 server shutdown");
     let snapshot = events.lock().expect("route events").clone();
-    assert_eq!(route_sequence(&snapshot, 0x7401), vec!["b"]);
+    assert_eq!(route_sequence(&snapshot, "cancel.test."), vec!["b"]);
     assert!(assembly.audit_snapshot().records.is_empty());
     let metrics = assembly.metrics_snapshot();
     assert_eq!(metrics.admitted_total, 1);
@@ -823,12 +817,12 @@ fn w3_shutdown_cancels_a_and_c_in_flight_without_late_responses() {
             (observed_a, observed_c) = {
                 let snapshot = events.lock().expect("route events");
                 (
-                    snapshot
-                        .iter()
-                        .any(|event| event.id == 0x7501 && event.route == "a"),
-                    snapshot
-                        .iter()
-                        .any(|event| event.id == 0x7502 && event.route == "c"),
+                    snapshot.iter().any(|event| {
+                        event.qname == qname_wire("ip-hit.test.") && event.route == "a"
+                    }),
+                    snapshot.iter().any(|event| {
+                        event.qname == qname_wire("ip-miss.test.") && event.route == "c"
+                    }),
                 )
             };
             if observed_a && observed_c {
@@ -849,8 +843,8 @@ fn w3_shutdown_cancels_a_and_c_in_flight_without_late_responses() {
     );
     result.1.expect("W3 in-flight shutdown");
     let snapshot = events.lock().expect("route events").clone();
-    assert_eq!(route_sequence(&snapshot, 0x7501), vec!["b", "a"]);
-    assert_eq!(route_sequence(&snapshot, 0x7502), vec!["b", "c"]);
+    assert_eq!(route_sequence(&snapshot, "ip-hit.test."), vec!["b", "a"]);
+    assert_eq!(route_sequence(&snapshot, "ip-miss.test."), vec!["b", "c"]);
     assert_w3_shutdown_observations(&assembly, &snapshot);
     let rebound = assembly
         .block_on(UdpServer::bind(&assembly, listener))

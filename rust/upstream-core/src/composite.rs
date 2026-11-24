@@ -16,8 +16,9 @@
 //!    the same original DNS ID, and the same cloned absolute deadline.
 //!
 //! A malformed or undersized UDP error is returned unchanged and is never
-//! reclassified as a fallback trigger. There is no retransmission, retry,
-//! pooling, reuse, pipelining, Go re-entry, or hidden runtime.
+//! reclassified as a fallback trigger. The policy adds no retransmission,
+//! retry, pipelining, Go re-entry, or hidden runtime; UDP socket reuse lives in
+//! the UDP owner, and the TCP leg is a fresh connection.
 
 use std::time::Instant;
 

@@ -296,14 +296,15 @@ fn handler_preserves_other_opt_flags_and_empty_legacy_and_non_in() {
     let wire = run("{preset: '192.0.2.199', mask4: 25}", None, original.clone());
     let (_, question) = atomdns_dns_core::parse_query(&wire).unwrap();
     let offset = 12 + question.qname_wire.len() + 4;
-    assert_eq!(&wire[..offset], &original[..offset]);
+    // The upstream sees a fresh DNS ID; every byte after it is compared.
+    assert_eq!(&wire[2..offset], &original[2..offset]);
     assert_eq!(&wire[offset..offset + 9], &original[offset..offset + 9]);
     assert_eq!(&wire[offset + 11..offset + 17], &[0, 10, 0, 2, 5, 6]);
     assert_eq!(ecs(&wire).unwrap().address, vec![192, 0, 2, 128]);
-    assert_eq!(run("{}", Some("ecs"), original.clone()), original);
+    assert_eq!(run("{}", Some("ecs"), original.clone())[2..], original[2..]);
     let mut non_in = original;
     non_in[offset - 2..offset].copy_from_slice(&3u16.to_be_bytes());
-    assert_eq!(run("{send: true}", None, non_in.clone()), non_in);
+    assert_eq!(run("{send: true}", None, non_in.clone())[2..], non_in[2..]);
 }
 #[test]
 fn malformed_incoming_ecs_fails_locally_without_forwarding() {

@@ -990,16 +990,21 @@ impl<'a> ResponseCommit<'a> {
     }
 }
 
-/// Pure Rust upstream owner. Slice1 performs the reviewed UDP exchange
-/// primitive and Slice2 adds the fresh plain-TCP exchange primitive, both on
+/// Pure Rust upstream owner. The UDP exchange runs over this owner's small
+/// socket pool and the plain-TCP exchange opens one fresh connection, both on
 /// the caller's runtime. This owner is single-transport by design; the TC-to-TCP
-/// composite policy lives in [`UdpTcpPolicy`] and all production wiring remains
-/// outside the current slice.
+/// composite policy lives in [`UdpTcpPolicy`].
+///
+/// A UDP owner should be used from one Tokio runtime: its pooled sockets and
+/// their receive tasks belong to the runtime of the exchange that opened them.
 pub struct Upstream {
     endpoint: Endpoint,
     socks5: Option<std::sync::Arc<socks5::Route>>,
     lifecycle: Lifecycle,
     cancellation: TransportCancellation,
+    /// UDP sockets shared by this owner's exchanges; empty until first use and
+    /// for other transports.
+    udp_pool: udp::Pool,
     #[cfg(test)]
     commit_pause: Mutex<Option<std::sync::Arc<CommitPause>>>,
 }
@@ -1012,6 +1017,7 @@ impl Upstream {
             socks5: None,
             lifecycle: Lifecycle::new(),
             cancellation: TransportCancellation::new(),
+            udp_pool: udp::Pool::new(),
             #[cfg(test)]
             commit_pause: Mutex::new(None),
         }
@@ -1094,9 +1100,10 @@ impl Upstream {
     }
 
     /// Begins close, drains every in-flight exchange on the caller's runtime,
+    /// waits for the UDP pool's receive tasks to end (closing its sockets),
     /// then performs the guarded `Closing -> Closed` transition.
     ///
-    /// No lock is held across the drain await; repeated and concurrent calls
+    /// No lock is held across the awaits; repeated and concurrent calls
     /// converge on the same `Closed` owner without deadlock. No runtime,
     /// executor, task, or blocking wait is created here.
     pub async fn close(&self) -> CloseResult {
@@ -1106,6 +1113,9 @@ impl Upstream {
             CloseTransition::BeganClosing | CloseTransition::AlreadyClosing => {}
         }
         self.lifecycle.drain().await;
+        // Owner close already cancelled the token every receive task selects
+        // on; no exchange is left to open a new socket.
+        self.udp_pool.close().await;
         match self.finish_close() {
             // Another close call may have completed the guarded transition
             // while this call was draining; either way the owner is `Closed`.
@@ -1142,11 +1152,11 @@ impl Upstream {
     /// this future returns or is dropped, covering success, every terminal
     /// error, cancellation/deadline, owner close, and an aborted future.
     ///
-    /// Slice1 implements the reviewed one-exchange/one-socket UDP primitive in
-    /// [`udp::exchange`]. Slice2 adds the reviewed fresh plain-TCP primitive in
-    /// [`tcp::exchange`], which opens one connection per exchange and reads one
-    /// complete framed response. TC-to-TCP fallback, pooling, and retries are
-    /// not part of this entry point.
+    /// UDP runs [`udp::exchange`] over this owner's socket pool with a fresh
+    /// upstream DNS ID per exchange. TCP runs [`tcp::exchange`], which opens
+    /// one connection per exchange and reads one complete framed response
+    /// with the original ID. TC-to-TCP fallback and retries are not part of
+    /// this entry point.
     ///
     /// # Errors
     ///
@@ -1166,7 +1176,7 @@ impl Upstream {
         // and the response return, so close still waits for its drop.
         let commit = self.response_commit();
         match prepared.endpoint().transport() {
-            Transport::Udp => udp::exchange(&prepared, &commit).await,
+            Transport::Udp => udp::exchange(&prepared, &commit, &self.udp_pool).await,
             Transport::Tcp => tcp::exchange(&prepared, &commit).await,
             // Slice 0 placeholder: the QUIC one-shot driver lands in Slice 1.
             // Reporting `Connect` (`NotSent`) is truthful — no QUIC connection

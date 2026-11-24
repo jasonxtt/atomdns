@@ -634,26 +634,41 @@ crate uses `atomdns-dns-core` as its only AtomDNS crate dependency and must not 
   observed before a deadline, caller cancellation, owner close, or receive
   failure, the terminal typed error retains minimal structured diagnostic flags
   without relabeling the primary cause. A later valid response succeeds
-  without diagnostic state.
+  without diagnostic state. On a pooled UDP socket (below) a datagram is
+  attributed by its ID: one carrying a waiting exchange's ID from the wrong
+  peer marks only that exchange; one whose ID was never issued on the socket
+  (or that has no ID) marks every exchange waiting on the socket; one carrying
+  the ID of an exchange that already ended is a late answer and marks none.
 - After the expected-peer and response-ID checks, both valid TC observations
   and fully validated non-TC responses pass one synchronous response-commit
   gate under the same lifecycle lock as registration and `Open -> Closing`.
   Commit-before-close wins; close-before-commit returns `Closed(Sent)`.
 - `dns-core` header inspection reads only the 12-byte header's QR, TXID, and
   TC; complete response/RR/OPT semantics remain in `dns-core` validation.
-- Slice1 UDP binds one fresh ephemeral socket per exchange, sends the borrowed
-  query exactly once, validates the configured peer and response ID, ignores
-  wrong-peer/wrong-ID datagrams, and returns an owned response. It uses the
-  full legal datagram capacity rather than the Go 4095-byte buffer; no shared
-  demux, retransmission, generic retry, pool, reuse, pipeline or production
-  wiring is part of this primitive.
+- UDP (since 2026-11, replacing the Slice1 one-socket-per-exchange
+  primitive) runs over a per-`Upstream` pool of at most 4 unconnected
+  sockets on kernel-chosen ephemeral ports. An exchange leases a random one,
+  draws a random DNS ID never issued on that socket before, sends a copy of
+  the borrowed query carrying that ID exactly once (the caller's bytes are
+  never modified), and returns the owned response with the caller's original
+  ID restored; `request_id` and `response_id` are both the original ID. A
+  socket takes at most 64 exchanges and at most 2 s of new exchanges, then
+  closes after its last exchange ends. Each socket has one receive task held
+  by the pool that delivers a datagram from the configured peer to the
+  waiting exchange with its ID; header, TC and full validation then run as
+  before. Owner close ends the receive tasks and `close().await` waits for
+  them; dropping the owner aborts them; none is detached. It uses the full
+  legal datagram capacity rather than the Go 4095-byte buffer; no
+  retransmission, generic retry, or pipelining is part of this primitive. The
+  question section is still checked by the caller, not here.
 - TCP opens one stream per exchange; `tcp::write_frame` / `read_frame` own
   exact two-byte framing and partial I/O. It validates QR, original ID and the
   complete DNS response, including TCP TC responses, before final commit.
 - `UdpTcpPolicy::new(Endpoint)` expects a UDP endpoint and uses the same
   numeric address/port for TCP. `exchange(ExchangeRequest, ExchangeContext)`
   permits exactly one TCP attempt after a valid UDP TC observation, with the
-  same borrowed query, original ID and absolute deadline. UDP errors never
+  same borrowed query, original ID (TCP never rewrites it) and absolute
+  deadline. UDP errors never
   trigger fallback. Its `close().await` drains both owners.
 - A TCP-leg error retains `UpstreamError::TcpFallback { prior, cause }`;
   prior records the UDP TC observation and overall Sent state. Pre-fallback
@@ -684,7 +699,8 @@ crate uses `atomdns-dns-core` as its only AtomDNS crate dependency and must not 
 
 ### 5. Good/Base/Bad Cases
 
-- Good: validate a borrowed query, retain its original ID, then return an
+- Good: validate a borrowed query, retain its original ID (UDP restores it
+  after sending a fresh upstream ID), then return an
   owned response wire; use the same absolute deadline for every later phase.
 - Base: use `inspect_response_header` for TC routing, then pass only a complete
   non-TC wire to full DNS validation.
@@ -695,7 +711,8 @@ crate uses `atomdns-dns-core` as its only AtomDNS crate dependency and must not 
 ### 6. Tests Required
 
 - Public contract tests reject empty/malformed/unframeable queries before any
-  socket boundary, assert query nonmutation and original ID, and verify owned
+  socket boundary, assert query nonmutation and original ID (on UDP: the
+  upstream sees a fresh ID, the response carries the original), and verify owned
   response bytes.
 - Error tests assert the closed side-effect enum, Connect=`NotSent`, runtime
   state preservation, distinct cancellation/deadline errors, and cancellation

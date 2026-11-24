@@ -259,6 +259,10 @@ fn udp_reply_once(socket: UdpSocket, reply: Vec<u8>) -> std::thread::JoinHandle<
         let Ok((read, peer)) = socket.recv_from(&mut buffer) else {
             return None;
         };
+        // Answer with the DNS ID the upstream actually received: the UDP leg
+        // sends a fresh random ID and restores the caller's on the response.
+        let mut reply = reply;
+        reply[..2].copy_from_slice(&buffer[..2]);
         socket.send_to(&reply, peer).expect("send udp reply");
         Some(buffer[..read].to_vec())
     })
@@ -362,6 +366,10 @@ fn udp_hold_then_reply(
         release_rx
             .recv_timeout(TEST_TIMEOUT)
             .expect("the test must release the held UDP reply");
+        // Answer with the DNS ID the upstream actually received: the UDP leg
+        // sends a fresh random ID and restores the caller's on the response.
+        let mut reply = reply;
+        reply[..2].copy_from_slice(&buffer[..2]);
         socket.send_to(&reply, peer).expect("send udp reply");
         Some(buffer[..read].to_vec())
     });
@@ -468,9 +476,9 @@ fn tc_udp_response_triggers_exactly_one_tcp_fallback_with_original_query() {
 
         let udp_seen = udp_server.join().expect("udp server joined");
         assert_eq!(
-            udp_seen.as_deref(),
-            Some(query.as_slice()),
-            "the UDP leg must carry the caller's unchanged query"
+            udp_seen.as_deref().map(|wire| &wire[2..]),
+            Some(&query[2..]),
+            "the UDP leg must carry the caller's query, with only its DNS ID replaced"
         );
 
         let (tcp_received, second_connection) = tcp_server.join().expect("tcp server joined");
@@ -607,9 +615,9 @@ fn tcp_fallback_failure_preserves_prior_truncated_udp_context() {
 
         let udp_seen = udp_server.join().expect("udp server joined");
         assert_eq!(
-            udp_seen.as_deref(),
-            Some(query.as_slice()),
-            "the UDP leg must have carried the caller's unchanged query"
+            udp_seen.as_deref().map(|wire| &wire[2..]),
+            Some(&query[2..]),
+            "the UDP leg must have carried the caller's query, with only its DNS ID replaced"
         );
         let (tcp_received, second_connection) = tcp_server.join().expect("tcp server joined");
         assert_eq!(
@@ -806,9 +814,13 @@ fn close_drains_in_flight_tcp_fallback_with_nested_closed_sent() {
             "the TCP fallback must have carried the byte-identical original query"
         );
         assert_eq!(
-            udp_server.join().expect("udp server joined").as_deref(),
-            Some(query.as_slice()),
-            "the UDP leg must have carried the caller's unchanged query"
+            udp_server
+                .join()
+                .expect("udp server joined")
+                .as_deref()
+                .map(|wire| &wire[2..]),
+            Some(&query[2..]),
+            "the UDP leg must have carried the caller's query, with only its DNS ID replaced"
         );
     });
 }
@@ -901,9 +913,13 @@ fn cancellation_before_the_udp_tc_observation_prevents_any_tcp_fallback() {
             "cancellation before the TC observation must never open a TCP connection"
         );
         assert_eq!(
-            udp_server.join().expect("udp server joined").as_deref(),
-            Some(query.as_slice()),
-            "the UDP leg must have carried the caller's unchanged query"
+            udp_server
+                .join()
+                .expect("udp server joined")
+                .as_deref()
+                .map(|wire| &wire[2..]),
+            Some(&query[2..]),
+            "the UDP leg must have carried the caller's query, with only its DNS ID replaced"
         );
     });
 }
@@ -1022,9 +1038,9 @@ fn tcp_fallback_honors_the_remaining_original_absolute_deadline() {
             "the TCP fallback must have carried the byte-identical original query"
         );
         assert_eq!(
-            udp_received.as_deref(),
-            Some(query.as_slice()),
-            "the UDP leg must have carried the caller's unchanged query"
+            udp_received.as_deref().map(|wire| &wire[2..]),
+            Some(&query[2..]),
+            "the UDP leg must have carried the caller's query, with only its DNS ID replaced"
         );
 
         match &error {

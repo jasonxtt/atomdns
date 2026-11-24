@@ -1,10 +1,8 @@
-//! Slice 1 RED contract tests for the reviewed one-exchange/one-socket UDP
-//! primitive.
+//! Contract tests for the UDP exchange primitive through `Upstream::exchange`.
 //!
-//! These tests intentionally reference the `Upstream::exchange` entry point
-//! sketched in `design.md` section 3 before Slice 1 implements it. This step
-//! adds tests only: the target is expected to fail to compile (RED) until the
-//! UDP primitive exists. No production UDP/network code is added here.
+//! The exchange sends a fresh random DNS ID to the upstream and restores the
+//! caller's ID on the response, so every mock upstream answers with the ID it
+//! received (`upstream_id`), and wrong-ID datagrams use an ID it never sent.
 //!
 //! The fixtures are deterministic: every exchange runs on an ephemeral IPv4
 //! loopback socket with a bounded current-thread runtime, mock servers use
@@ -136,6 +134,24 @@ fn udp_endpoint(address: SocketAddr) -> Endpoint {
     Endpoint::new(address, Transport::Udp).expect("numeric udp endpoint")
 }
 
+/// The DNS ID the upstream received. The exchange sends a fresh random ID and
+/// restores the caller's ID on the returned response, so a mock upstream must
+/// answer with the ID it actually received.
+fn upstream_id(query: &[u8]) -> u16 {
+    u16::from_be_bytes([query[0], query[1]])
+}
+
+/// `reply` carrying `id` instead of its own ID.
+fn with_id(mut reply: Vec<u8>, id: u16) -> Vec<u8> {
+    reply[..2].copy_from_slice(&id.to_be_bytes());
+    reply
+}
+
+/// An ID the upstream never received, for wrong-ID datagrams.
+fn other_id(query: &[u8]) -> u16 {
+    upstream_id(query) ^ 0x5a5a
+}
+
 fn open_context() -> ExchangeContext {
     ExchangeContext::new(
         Instant::now() + Duration::from_secs(30),
@@ -148,6 +164,7 @@ fn reply_once(socket: UdpSocket, reply: Vec<u8>) -> JoinHandle<()> {
     spawn_blocking(move || {
         let mut buffer = vec![0u8; LEGAL_UDP_PAYLOAD];
         let (_, peer) = socket.recv_from(&mut buffer).expect("receive query");
+        let reply = with_id(reply, upstream_id(&buffer));
         socket.send_to(&reply, peer).expect("send reply");
     })
 }
@@ -213,7 +230,7 @@ fn numeric_ipv6_loopback_exchange_returns_matching_response() {
 }
 
 #[test]
-fn borrowed_query_bytes_and_original_id_are_unchanged() {
+fn borrowed_query_bytes_are_unchanged_and_the_original_id_is_restored() {
     block_on(async {
         let (server, address) = bind_ipv4();
         let id = 0xabcd;
@@ -225,7 +242,10 @@ fn borrowed_query_bytes_and_original_id_are_unchanged() {
         let server_task = spawn_blocking(move || {
             let mut buffer = vec![0u8; LEGAL_UDP_PAYLOAD];
             let (read, peer) = server.recv_from(&mut buffer).expect("receive query");
-            assert_eq!(&buffer[..read], server_snapshot.as_slice());
+            // Only the DNS ID differs on the wire to the upstream.
+            assert_eq!(read, server_snapshot.len());
+            assert_eq!(&buffer[2..read], &server_snapshot[2..]);
+            let reply = with_id(reply, upstream_id(&buffer));
             server.send_to(&reply, peer).expect("send reply");
         });
 
@@ -272,6 +292,8 @@ fn wrong_id_datagram_is_ignored_until_a_matching_id_arrives() {
         let server_task = spawn_blocking(move || {
             let mut buffer = vec![0u8; LEGAL_UDP_PAYLOAD];
             let (_, peer) = server.recv_from(&mut buffer).expect("receive query");
+            let wrong = with_id(wrong, other_id(&buffer));
+            let reply = with_id(reply, upstream_id(&buffer));
             server.send_to(&wrong, peer).expect("send wrong id");
             server.send_to(&reply, peer).expect("send matching id");
         });
@@ -293,21 +315,26 @@ fn wrong_peer_datagram_is_ignored() {
     block_on(async {
         let (server, address) = bind_ipv4();
         let (spoof, _spoof_address) = bind_ipv4();
-        let (peer_tx, peer_rx) = mpsc::channel::<SocketAddr>();
+        let (peer_tx, peer_rx) = mpsc::channel::<(SocketAddr, u16)>();
         let id = 0x3333;
         let spoof_reply = response_wire(id, 6);
         let expected = response_wire(id, 7);
         let reply = expected.clone();
 
         let spoof_task = spawn_blocking(move || {
-            let peer = peer_rx.recv().expect("client peer address");
+            let (peer, id) = peer_rx.recv().expect("client peer address");
+            // The spoof carries the live upstream ID but the wrong source.
+            let spoof_reply = with_id(spoof_reply, id);
             spoof.send_to(&spoof_reply, peer).expect("send spoof reply");
         });
         let server_task = spawn_blocking(move || {
             let mut buffer = vec![0u8; LEGAL_UDP_PAYLOAD];
             let (_, peer) = server.recv_from(&mut buffer).expect("receive query");
-            peer_tx.send(peer).expect("report client peer");
+            peer_tx
+                .send((peer, upstream_id(&buffer)))
+                .expect("report client peer");
             std::thread::sleep(Duration::from_millis(50));
+            let reply = with_id(reply, upstream_id(&buffer));
             server.send_to(&reply, peer).expect("send reply");
         });
 
@@ -388,6 +415,7 @@ fn concurrent_exchanges_are_isolated() {
                 .expect("receive first query");
             // Delay the first reply so the two exchanges genuinely overlap.
             std::thread::sleep(Duration::from_millis(50));
+            let first_reply = with_id(first_reply, upstream_id(&buffer));
             first_server
                 .send_to(&first_reply, peer)
                 .expect("send first reply");
@@ -397,6 +425,7 @@ fn concurrent_exchanges_are_isolated() {
             let (_, peer) = second_server
                 .recv_from(&mut buffer)
                 .expect("receive second query");
+            let second_reply = with_id(second_reply, upstream_id(&buffer));
             second_server
                 .send_to(&second_reply, peer)
                 .expect("send second reply");
@@ -603,6 +632,7 @@ fn exchange_sends_exactly_one_datagram() {
         let server_task = spawn_blocking(move || {
             let mut buffer = vec![0u8; LEGAL_UDP_PAYLOAD];
             let (_, peer) = server.recv_from(&mut buffer).expect("receive query");
+            let reply = with_id(reply, upstream_id(&buffer));
             server.send_to(&reply, peer).expect("send reply");
             // The first slice has no automatic UDP retransmission.
             server
@@ -691,7 +721,8 @@ fn late_datagram_cannot_complete_a_later_exchange() {
             allow_late_rx.recv().expect("allow-late-send released");
             // Deliver an otherwise valid response only after the first socket
             // is gone, so no live exchange can accept it.
-            let _ = first_server.send_to(&response_wire(0x1111, 11), peer);
+            let late = with_id(response_wire(0x1111, 11), upstream_id(&buffer));
+            let _ = first_server.send_to(&late, peer);
             late_sent_tx.send(()).expect("signal late datagram sent");
         });
 
@@ -752,6 +783,7 @@ fn late_datagram_cannot_complete_a_later_exchange() {
             let (_, peer) = second_server
                 .recv_from(&mut buffer)
                 .expect("receive second query");
+            let second_reply = with_id(second_reply, upstream_id(&buffer));
             second_server
                 .send_to(&second_reply, peer)
                 .expect("send second reply");
@@ -1023,6 +1055,7 @@ fn completed_and_failed_exchanges_release_their_registration() {
         let server_task = spawn_blocking(move || {
             let mut buffer = vec![0u8; LEGAL_UDP_PAYLOAD];
             let (_, peer) = server.recv_from(&mut buffer).expect("receive query");
+            let reply = with_id(reply, upstream_id(&buffer));
             server.send_to(&reply, peer).expect("send reply");
         });
 
@@ -1152,6 +1185,7 @@ fn wrong_id_then_deadline_retains_mismatch_with_deadline_cause() {
         let server_task = spawn_blocking(move || {
             let mut buffer = vec![0u8; LEGAL_UDP_PAYLOAD];
             let (_, peer) = server.recv_from(&mut buffer).expect("receive query");
+            let wrong = with_id(wrong, other_id(&buffer));
             server.send_to(&wrong, peer).expect("send wrong id");
         });
 
@@ -1182,17 +1216,21 @@ fn wrong_peer_then_deadline_retains_unexpected_peer_with_deadline_cause() {
     block_on(async {
         let (server, address) = bind_ipv4();
         let (spoof, _spoof_address) = bind_ipv4();
-        let (peer_tx, peer_rx) = mpsc::channel::<SocketAddr>();
+        let (peer_tx, peer_rx) = mpsc::channel::<(SocketAddr, u16)>();
         let request_id = 0x1a02;
         let spoof_reply = response_wire(request_id, 21);
         let spoof_task = spawn_blocking(move || {
-            let peer = peer_rx.recv().expect("client peer address");
+            let (peer, id) = peer_rx.recv().expect("client peer address");
+            // The spoof carries the live upstream ID but the wrong source.
+            let spoof_reply = with_id(spoof_reply, id);
             spoof.send_to(&spoof_reply, peer).expect("send spoof reply");
         });
         let server_task = spawn_blocking(move || {
             let mut buffer = vec![0u8; LEGAL_UDP_PAYLOAD];
             let (_, peer) = server.recv_from(&mut buffer).expect("receive query");
-            peer_tx.send(peer).expect("report client peer");
+            peer_tx
+                .send((peer, upstream_id(&buffer)))
+                .expect("report client peer");
             // No expected-peer reply: the exchange must terminate on deadline.
         });
 
@@ -1222,18 +1260,23 @@ fn wrong_peer_and_wrong_id_are_both_retained_before_deadline() {
     block_on(async {
         let (server, address) = bind_ipv4();
         let (spoof, _spoof_address) = bind_ipv4();
-        let (peer_tx, peer_rx) = mpsc::channel::<SocketAddr>();
+        let (peer_tx, peer_rx) = mpsc::channel::<(SocketAddr, u16)>();
         let request_id = 0x1a03;
         let spoof_reply = response_wire(request_id, 22);
         let wrong_id = response_wire(0x9999, 23);
         let server_task = spawn_blocking(move || {
             let mut buffer = vec![0u8; LEGAL_UDP_PAYLOAD];
             let (_, peer) = server.recv_from(&mut buffer).expect("receive query");
-            peer_tx.send(peer).expect("report client peer");
+            peer_tx
+                .send((peer, upstream_id(&buffer)))
+                .expect("report client peer");
+            let wrong_id = with_id(wrong_id, other_id(&buffer));
             server.send_to(&wrong_id, peer).expect("send wrong id");
         });
         let spoof_task = spawn_blocking(move || {
-            let peer = peer_rx.recv().expect("client peer address");
+            let (peer, id) = peer_rx.recv().expect("client peer address");
+            // The spoof carries the live upstream ID but the wrong source.
+            let spoof_reply = with_id(spoof_reply, id);
             spoof.send_to(&spoof_reply, peer).expect("send spoof reply");
         });
 
@@ -1268,6 +1311,7 @@ fn caller_cancellation_after_wrong_id_retains_diagnostics() {
         let server_task = spawn_blocking(move || {
             let mut buffer = vec![0u8; LEGAL_UDP_PAYLOAD];
             let (_, peer) = server.recv_from(&mut buffer).expect("receive query");
+            let wrong = with_id(wrong, other_id(&buffer));
             server.send_to(&wrong, peer).expect("send wrong id");
             seen_tx.send(()).expect("signal receipt");
         });
@@ -1322,17 +1366,21 @@ fn owner_close_after_wrong_peer_retains_diagnostics() {
     block_on(async {
         let (server, address) = bind_ipv4();
         let (spoof, _spoof_address) = bind_ipv4();
-        let (peer_tx, peer_rx) = mpsc::channel::<SocketAddr>();
+        let (peer_tx, peer_rx) = mpsc::channel::<(SocketAddr, u16)>();
         let (seen_tx, seen_rx) = oneshot::channel::<()>();
         let request_id = 0x1a05;
         let spoof_reply = response_wire(request_id, 25);
         let server_task = spawn_blocking(move || {
             let mut buffer = vec![0u8; LEGAL_UDP_PAYLOAD];
             let (_, peer) = server.recv_from(&mut buffer).expect("receive query");
-            peer_tx.send(peer).expect("report client peer");
+            peer_tx
+                .send((peer, upstream_id(&buffer)))
+                .expect("report client peer");
         });
         let spoof_task = spawn_blocking(move || {
-            let peer = peer_rx.recv().expect("client peer address");
+            let (peer, id) = peer_rx.recv().expect("client peer address");
+            // The spoof carries the live upstream ID but the wrong source.
+            let spoof_reply = with_id(spoof_reply, id);
             spoof.send_to(&spoof_reply, peer).expect("send spoof reply");
             seen_tx.send(()).expect("signal spoof sent");
         });

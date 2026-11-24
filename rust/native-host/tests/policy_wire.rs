@@ -477,7 +477,8 @@ fn redirect_query_view_preserves_flags_qtype_and_opt() {
         .set_dnssec_ok(true);
     let response = request(&host, original.to_vec().unwrap());
     let target = peer.join().unwrap();
-    assert_eq!(target.id(), original.id());
+    // The UDP upstream sees a fresh DNS ID; the client's ID is checked on the
+    // response below.
     assert_eq!(target.queries()[0].query_type(), RecordType::AAAA);
     assert_eq!(target.queries()[0].query_class(), DNSClass::IN);
     assert!(target.recursion_desired());

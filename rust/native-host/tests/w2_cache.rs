@@ -93,7 +93,9 @@ fn query_has_label(query: &[u8], label: &str) -> bool {
 
 fn response_for(query: &[u8]) -> Vec<u8> {
     if query_has_label(query, "malformed") {
-        return vec![1, 2, 3];
+        // Too short to be a response, but carrying the ID the upstream
+        // received, so the UDP exchange attributes it and fails as malformed.
+        return vec![query[0], query[1], 3];
     }
     let (header, question) = parse_query(query).expect("test query");
     let truncated = query_has_label(query, "truncated");
