@@ -1684,6 +1684,80 @@ mod persistence_tests {
         (query, response)
     }
     #[test]
+    fn dump_export_import_round_trip_keeps_every_entry_field() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        tokio::task::LocalSet::new().block_on(&runtime, async {
+            // Runtime and wall clocks deliberately far apart.
+            let clock = CacheTestClock::new(7);
+            clock.set_wall(1000);
+            let source =
+                NativeCacheAdapter::with_options_and_clock(8, 3600, Rc::new(clock.clone()))
+                    .unwrap();
+            let (query, response) = query_response();
+            assert!(
+                source
+                    .begin_store(&query)
+                    .unwrap()
+                    .unwrap()
+                    .publish_with_domain(&response, "kept")
+                    .unwrap()
+            );
+            // Imported entries keep the dump's wall times, including old ones.
+            let mut other_query = query.clone();
+            other_query[13] = b'b';
+            let mut other_response = response.clone();
+            other_response[13] = b'b';
+            let imported = atomdns_cache_core::NativeSnapshotEntry {
+                attachment: None,
+                key: source.key_for_query(&other_query).unwrap().unwrap(),
+                response: other_response,
+                domain_set: Vec::new(),
+                times: [0; 3],
+                wall_times: Some([900, 999, 2000]),
+            };
+            source
+                .import_dump(crate::cache_dump::encode(&[imported]).unwrap())
+                .await
+                .unwrap();
+            let sorted = |bytes: &[u8]| {
+                let mut entries = crate::cache_dump::decode(bytes).unwrap();
+                entries.sort_by(|a, b| a.key.cmp(&b.key));
+                entries
+                    .into_iter()
+                    .map(|entry| {
+                        (
+                            entry.key,
+                            entry.response,
+                            entry.domain_set,
+                            entry.wall_times,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let first = source.dump().unwrap();
+            let entries = sorted(&first);
+            assert_eq!(entries.len(), 2);
+            assert_eq!(entries[0].3, Some([1000, 1060, 3600 + 1000]));
+            assert_eq!(entries[1].3, Some([900, 999, 2000]));
+            let restart =
+                NativeCacheAdapter::with_options_and_clock(8, 3600, Rc::new(clock.clone()))
+                    .unwrap();
+            restart.import_dump(first.clone()).await.unwrap();
+            assert_eq!(sorted(&restart.dump().unwrap()), entries);
+            let hits = |cache: &NativeCacheAdapter| {
+                [&query, &other_query].map(|q| {
+                    let hit = cache.lookup_entry(q).unwrap().unwrap();
+                    (hit.response, hit.domain_set, hit.state)
+                })
+            };
+            assert_eq!(hits(&restart), hits(&source));
+        });
+    }
+
+    #[test]
     fn ecs_suffix_validation_is_atomic_even_for_expired_last_entries() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

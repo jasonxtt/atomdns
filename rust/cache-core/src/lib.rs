@@ -119,7 +119,56 @@ struct CacheEntry {
     stored_at_unix: i64,
     message_expires_at_unix: i64,
     cache_expires_at_unix: i64,
-    wall_times: Option<[i64; 3]>,
+    wall_times: WallTimes,
+}
+
+/// The wall-clock copy of an entry's three times, kept for the dump file.
+///
+/// Every native store and every dump import sets the three wall times with
+/// the same offsets as the runtime times, so one wall time plus the runtime
+/// deltas reproduces all three. That keeps `CacheEntry` at 80 bytes
+/// (docs/rust/validation-records/11-24-cache-entry-wall-times.md). Any other
+/// combination is kept exactly in a boxed copy, so what an entry returns never
+/// depends on the representation.
+#[derive(Debug)]
+enum WallTimes {
+    None,
+    /// Wall stored-at; the other two follow the runtime deltas.
+    Derived(i64),
+    Exact(Box<[i64; 3]>),
+}
+
+impl WallTimes {
+    fn new(wall_times: Option<[i64; 3]>, times: [i64; 3]) -> Self {
+        let Some(wall) = wall_times else {
+            return Self::None;
+        };
+        if derive_wall_times(wall[0], times) == wall {
+            Self::Derived(wall[0])
+        } else {
+            Self::Exact(Box::new(wall))
+        }
+    }
+
+    fn get(&self, times: [i64; 3]) -> Option<[i64; 3]> {
+        match self {
+            Self::None => None,
+            Self::Derived(stored) => Some(derive_wall_times(*stored, times)),
+            Self::Exact(wall) => Some(**wall),
+        }
+    }
+}
+
+/// Wrapping arithmetic on purpose: [`WallTimes::new`] keeps the compact form
+/// only when this exact computation reproduces the given wall times, and
+/// [`WallTimes::get`] repeats the same computation, so overflow can never
+/// change a returned value.
+fn derive_wall_times(stored: i64, times: [i64; 3]) -> [i64; 3] {
+    [
+        stored,
+        stored.wrapping_add(times[1].wrapping_sub(times[0])),
+        stored.wrapping_add(times[2].wrapping_sub(times[0])),
+    ]
 }
 
 impl CacheEntry {
@@ -140,8 +189,16 @@ impl CacheEntry {
             stored_at_unix: times[0],
             message_expires_at_unix: times[1],
             cache_expires_at_unix: times[2],
-            wall_times,
+            wall_times: WallTimes::new(wall_times, times),
         }
+    }
+
+    fn times(&self) -> [i64; 3] {
+        [
+            self.stored_at_unix,
+            self.message_expires_at_unix,
+            self.cache_expires_at_unix,
+        ]
     }
 
     fn response(&self) -> &[u8] {
@@ -158,12 +215,8 @@ impl CacheEntry {
             key: key.into_vec(),
             response: self.response().to_vec(),
             domain_set: self.domain_set().to_vec(),
-            times: [
-                self.stored_at_unix,
-                self.message_expires_at_unix,
-                self.cache_expires_at_unix,
-            ],
-            wall_times: self.wall_times,
+            times: self.times(),
+            wall_times: self.wall_times.get(self.times()),
         }
     }
 }
@@ -633,6 +686,91 @@ mod tests {
         let current = cache.state.entries.get(&b"key"[..]).expect("stored");
         cache.remove_entry(b"key", &current);
         assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn cache_entry_stays_compact() {
+        // 80 bytes plus the 16-byte `Arc` header fill one 96-byte allocator class.
+        assert!(std::mem::size_of::<super::CacheEntry>() <= 80);
+        assert_eq!(std::mem::size_of::<super::WallTimes>(), 16);
+    }
+
+    #[test]
+    fn wall_times_round_trip_in_compact_and_fallback_form() {
+        const MAX: i64 = i64::MAX;
+        const MIN: i64 = i64::MIN;
+        type Case = ([i64; 3], Option<[i64; 3]>, Option<bool>);
+        let wrapped = MAX.wrapping_add(MAX.wrapping_sub(-1));
+        // Each case: runtime times, wall times, compact form expected.
+        let cases: [Case; 13] = [
+            ([100, 160, 200], Some([1000, 1060, 1100]), Some(true)),
+            ([7, 37, 37], Some([1000, 1030, 1030]), Some(true)),
+            ([0, 0, 0], Some([0, 0, 0]), Some(true)),
+            ([1, 2, 3], Some([1, 2, 3]), Some(true)),
+            ([0, MAX, MAX], Some([0, MAX, MAX]), Some(true)),
+            ([MIN, MIN, 0], Some([MIN, MIN, 0]), Some(true)),
+            // The derivation wraps here and still reproduces the input exactly.
+            ([-1, MAX, MAX], Some([MAX, wrapped, wrapped]), Some(true)),
+            ([0, 0, 0], Some([900, 999, 2000]), Some(false)),
+            ([0, 0, 0], Some([1, 2, 3]), Some(false)),
+            ([100, 160, 200], Some([1000, 999, 1060]), Some(false)),
+            ([100, 160, 200], Some([1001, 1060, 1060]), Some(false)),
+            ([-1, MAX, MAX], Some([MAX, MAX, MAX]), Some(false)),
+            ([100, 160, 200], None, None),
+        ];
+        let config = CacheConfig {
+            capacity: 10_000,
+            ..CONFIG
+        };
+        let first = NativeCache::new(config).unwrap();
+        let wire = response(60, [192, 0, 2, 1]);
+        for (index, (times, wall, compact)) in cases.iter().enumerate() {
+            let key = format!("key-{index}");
+            first
+                .store_timed(key.as_bytes(), &wire, b"rules", *times, *wall)
+                .unwrap();
+            let entry = first.state.entries.get(key.as_bytes()).unwrap();
+            let form = match entry.wall_times {
+                super::WallTimes::None => None,
+                super::WallTimes::Derived(_) => Some(true),
+                super::WallTimes::Exact(_) => Some(false),
+            };
+            assert_eq!(form, *compact, "case {index}");
+        }
+        let check = |cache: &NativeCache, label: &str| {
+            let mut snapshot = cache.snapshot(MIN);
+            snapshot.sort_by(|a, b| a.key.cmp(&b.key));
+            assert_eq!(snapshot.len(), cases.len(), "{label}");
+            let mut expected: Vec<_> = cases
+                .iter()
+                .enumerate()
+                .map(|(index, case)| (format!("key-{index}").into_bytes(), case))
+                .collect();
+            expected.sort_by(|a, b| a.0.cmp(&b.0));
+            for (item, (key, (times, wall, _))) in snapshot.iter().zip(&expected) {
+                assert_eq!(&item.key, key, "{label}");
+                assert_eq!(item.times, *times, "{label}");
+                assert_eq!(item.wall_times, *wall, "{label}");
+                assert_eq!(item.response, wire, "{label}");
+                assert_eq!(item.domain_set, b"rules", "{label}");
+            }
+            snapshot
+        };
+        let snapshot = check(&first, "stored");
+        let second = NativeCache::new(config).unwrap();
+        second.merge_prepared(
+            snapshot
+                .into_iter()
+                .map(|item| super::PreparedNativeEntry::new(item).unwrap())
+                .collect(),
+        );
+        check(&second, "imported");
+        let hit = second.lookup(b"key-0", 110).unwrap().unwrap();
+        assert_eq!(
+            (hit.state, hit.stored_at_unix, hit.message_expires_at_unix),
+            (LookupState::Fresh, 100, 160)
+        );
+        assert_eq!(answer_ttl(&hit.response), 50);
     }
 
     #[test]
