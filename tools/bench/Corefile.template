@@ -1,0 +1,15 @@
+# Fake upstream for the fixed benchmark: answers every A/AAAA name at once with a
+# documentation address, NOERROR/empty for everything else. No recursion, no network.
+# @LISTEN@ is replaced by upstream.sh (e.g. 0.0.0.0 or a LAN address of the load host).
+.:@PORT@ {
+    bind @LISTEN@
+    template IN A {
+        answer "{{ .Name }} 300 IN A 198.51.100.7"
+    }
+    template IN AAAA {
+        answer "{{ .Name }} 300 IN AAAA 2001:db8::7"
+    }
+    template ANY ANY {
+        rcode NOERROR
+    }
+}
