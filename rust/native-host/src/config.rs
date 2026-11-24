@@ -10,7 +10,7 @@ use atomdns_matcher_core::MixMatcher;
 use atomdns_sequence_core::{
     ExecutableId, ExecutableSpec, ExecutableTarget, ExecutableTargetSpec, ExecutionControl,
     ExecutionError, ExecutionMachine, ExecutionState, ExternalRef, ExternalSpec, MatcherSpecInput,
-    ProgramSpec, RuleSpec, SequenceId, SequenceRef, SequenceSpec, ValidatedExecutable,
+    ProgramSpec, RuleSpec, SequenceId, SequenceRef, SequenceSpec, SharedStr, ValidatedExecutable,
     ValidatedProgram,
 };
 use atomdns_upstream_core::{Endpoint, ServerIdentity, Transport};
@@ -609,6 +609,10 @@ pub struct CompiledConfig {
     /// means the compiler cannot prove reuse safe for that cache owner.
     pub(crate) cache_dependencies: Vec<Option<String>>,
     pub(crate) response_identities: std::collections::HashMap<(usize, usize), std::sync::Arc<str>>,
+    /// Generation-local shared `ip:port` strings for upstream peers (pre-populated
+    /// with configured endpoints and bounded to [`PEER_LABELS_CAP`] entries).
+    /// Only borrowed synchronously inside [`CompiledConfig::peer_text`], never across `.await`.
+    pub(crate) peer_labels: RefCell<Vec<(SocketAddr, SharedStr)>>,
     /// Ordered listener inventory. `listener` remains the primary helper view.
     pub listeners: Vec<ListenerConfig>,
     pub response_policies: Vec<ResponsePolicyConfig>,
@@ -654,7 +658,59 @@ pub struct ResponseIpRuleConfig {
     pub prefixes: Vec<Rc<crate::policy::IpListHandle>>,
 }
 
+const PEER_LABELS_CAP: usize = 64;
+
+pub(crate) fn initial_peer_labels(
+    forwards: &[ForwardConfig],
+    definitions: &[ForwardDefinitionConfig],
+) -> RefCell<Vec<(SocketAddr, SharedStr)>> {
+    let mut labels: Vec<(SocketAddr, SharedStr)> = Vec::new();
+    let mut insert = |peer: SocketAddr| {
+        if labels.len() >= PEER_LABELS_CAP || labels.iter().any(|(addr, _)| *addr == peer) {
+            return;
+        }
+        labels.push((peer, SharedStr::from(peer.to_string())));
+    };
+    for forward in forwards {
+        insert(forward.endpoint.address());
+    }
+    for definition in definitions {
+        for entry in &definition.entries {
+            if let Some(dial) = entry.target.dial_addr {
+                insert(dial);
+            }
+        }
+    }
+    RefCell::new(labels)
+}
+
 impl CompiledConfig {
+    /// Returns the formatted `ip:port` text for an upstream peer, reusing a
+    /// generation-local shared label table bounded to [`PEER_LABELS_CAP`] entries.
+    ///
+    /// Borrows `self.peer_labels` only synchronously within this call; callers
+    /// never hold a borrow guard across an `.await`.
+    #[must_use]
+    pub(crate) fn peer_text(&self, peer: SocketAddr) -> SharedStr {
+        if let Some((_, label)) = self
+            .peer_labels
+            .borrow()
+            .iter()
+            .find(|(addr, _)| *addr == peer)
+        {
+            return label.clone();
+        }
+        let label = SharedStr::from(peer.to_string());
+        let mut labels = self.peer_labels.borrow_mut();
+        if let Some((_, existing)) = labels.iter().find(|(addr, _)| *addr == peer) {
+            return existing.clone();
+        }
+        if labels.len() < PEER_LABELS_CAP {
+            labels.push((peer, label.clone()));
+        }
+        label
+    }
+
     /// Every settable item with its effective value and source.
     #[doc(hidden)]
     #[must_use]
@@ -1228,7 +1284,7 @@ impl<'a> CacheDependencyClosure<'a> {
             self.refuse_reuse();
             return;
         };
-        if let Some(plugin) = self.plugins.get(&sequence.name).copied() {
+        if let Some(plugin) = self.plugins.get(sequence.name.as_str()).copied() {
             self.add_plugin(plugin);
             self.add_references(&plugin.args);
         } else if sequence.synthetic {
@@ -1345,7 +1401,7 @@ impl<'a> CacheDependencyClosure<'a> {
             self.refuse_reuse();
             return;
         };
-        let Some(plugin) = self.plugins.get(&sequence.name).copied() else {
+        let Some(plugin) = self.plugins.get(sequence.name.as_str()).copied() else {
             self.refuse_reuse();
             return;
         };
@@ -1641,7 +1697,7 @@ fn target_name(config: &CompiledConfig, target: NativeTarget) -> String {
         NativeTarget::Sequence(sequence) => config
             .program
             .sequence(sequence)
-            .map(|sequence| sequence.name.clone())
+            .map(|sequence| sequence.name.as_str().to_owned())
             .unwrap_or_else(|| "<missing-sequence>".into()),
         NativeTarget::Fixture(executable) => config
             .program
@@ -2970,6 +3026,7 @@ fn compile_definitions(
             management.reason = Some("the file is shared with other configuration readers".into());
         }
     }
+    let peer_labels = initial_peer_labels(&compiled_forwards, &forward_compiler.definitions);
     let compiled = CompiledConfig {
         ui_base: None,
         settings: settings::Settings::default(),
@@ -2982,6 +3039,7 @@ fn compile_definitions(
         generation: 0,
         cache_dependencies: Vec::new(),
         response_identities,
+        peer_labels,
         listeners: listeners
             .into_iter()
             .map(|(listener, _)| listener)
@@ -3366,7 +3424,7 @@ fn compile_flow_setter(plugin: &RawPlugin) -> Result<FlowSetterConfig, ConfigErr
                     "flow_setter values must not be empty",
                 ));
             }
-            *slot = Some(value);
+            *slot = Some(SharedStr::from(value));
         }
     }
     config
@@ -6641,5 +6699,54 @@ plugins:
                 "  - tag: nap\n    type: sleep\n    args: { duration: 1 }\n  - tag: forward\n",
             );
         compile_yaml(&sleepy).expect("sleep as fallback target");
+    }
+
+    #[test]
+    fn peer_text_shares_static_and_dynamic_labels_and_enforces_cap() {
+        use std::net::SocketAddr;
+        let yaml = r#"
+log: { level: error }
+plugins:
+  - tag: entry
+    type: sequence
+    args: [ { exec: "$forward" } ]
+  - tag: forward
+    type: forward
+    args: { upstreams: [ { addr: "udp://192.0.2.10:5353" } ] }
+  - tag: listener
+    type: udp_server
+    args: { entry: entry, listen: "127.0.0.1:15353", enable_audit: false }
+"#;
+        let config = compile_yaml(yaml).expect("valid config");
+        let static_peer: SocketAddr = "192.0.2.10:5353".parse().unwrap();
+        let a = config.peer_text(static_peer);
+        let b = config.peer_text(static_peer);
+        assert_eq!(a.as_str(), "192.0.2.10:5353");
+        assert!(a.ptr_eq(&b));
+
+        // Dynamic peers are cached up to PEER_LABELS_CAP (64) entries.
+        let dynamic_peer: SocketAddr = "198.51.100.1:53".parse().unwrap();
+        let d1 = config.peer_text(dynamic_peer);
+        let d2 = config.peer_text(dynamic_peer);
+        assert_eq!(d1.as_str(), "198.51.100.1:53");
+        assert!(d1.ptr_eq(&d2));
+
+        // Fill beyond cap and verify table length stays bounded while lookups still work.
+        for port in 1000..1100_u16 {
+            let peer = SocketAddr::new(
+                std::net::IpAddr::V4(std::net::Ipv4Addr::new(203, 0, 113, 1)),
+                port,
+            );
+            let label = config.peer_text(peer);
+            assert_eq!(label.as_str(), format!("203.0.113.1:{port}"));
+        }
+        assert_eq!(config.peer_labels.borrow().len(), super::PEER_LABELS_CAP);
+        // Overflow peer still formats accurately without inserting into the capped table.
+        let overflow: SocketAddr = "203.0.113.99:53".parse().unwrap();
+        let o1 = config.peer_text(overflow);
+        let o2 = config.peer_text(overflow);
+        assert_eq!(o1.as_str(), "203.0.113.99:53");
+        assert!(!o1.ptr_eq(&o2));
+        assert_eq!(config.peer_labels.borrow().len(), super::PEER_LABELS_CAP);
     }
 }

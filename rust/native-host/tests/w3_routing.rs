@@ -285,7 +285,7 @@ fn assert_frozen_w3_observations(
             record.response,
             ResponseState::Dns {
                 rcode: 0,
-                source: ResponseSource::Upstream(final_upstream.clone()),
+                source: ResponseSource::Upstream(final_upstream.as_str().into()),
             }
         );
         assert_eq!(record.cache_status, CacheStatus::NotApplicable);

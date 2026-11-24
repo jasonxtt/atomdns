@@ -4,6 +4,7 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::rc::{Rc, Weak};
+use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
@@ -16,7 +17,7 @@ use atomdns_sequence_core::{
     CancellationToken, ExecutableId, ExecutionCompletion, ExecutionControl, ExecutionError,
     ExecutionMachine, ExecutionState, ExecutorError, ExecutorOutcome, ExternalDispatch,
     MachineStep, ResponseState as MachineResponseState, RootFuelHandle, RoutingState, SequenceId,
-    WatchToken,
+    SharedStr, WatchToken,
 };
 use atomdns_upstream_core::{ExchangeResponse, TransportCancellation, UpstreamError};
 
@@ -364,6 +365,33 @@ impl<E: ExchangeExecutor + ?Sized> BranchContext<'_, E> {
     }
 }
 
+/// Returns a shared allocation for hardcoded diagnostic branch vocabulary words
+/// only; any non-static string is allocated fresh (never stored in statics).
+fn static_branch_word(word: &str) -> SharedStr {
+    macro_rules! shared {
+        ($lit:literal) => {{
+            static VALUE: LazyLock<SharedStr> = LazyLock::new(|| SharedStr::from($lit));
+            VALUE.clone()
+        }};
+    }
+    match word {
+        "root" => shared!("root"),
+        "completed" => shared!("completed"),
+        "skipped" => shared!("skipped"),
+        "canceled" => shared!("canceled"),
+        "suppressed" => shared!("suppressed"),
+        "selected" => shared!("selected"),
+        "primary" => shared!("primary"),
+        "secondary" => shared!("secondary"),
+        "original" => shared!("original"),
+        "reference" => shared!("reference"),
+        "fallback" => shared!("fallback"),
+        "prefer_ipv4" => shared!("prefer_ipv4"),
+        "prefer_ipv6" => shared!("prefer_ipv6"),
+        other => SharedStr::from(other),
+    }
+}
+
 #[derive(Clone, Debug)]
 struct BranchTrace {
     branches: Vec<UpstreamDiagnosticBranch>,
@@ -380,10 +408,10 @@ impl BranchTrace {
             branches: vec![UpstreamDiagnosticBranch {
                 id: 0,
                 parent_id: None,
-                role: "root".to_owned(),
+                role: static_branch_word("root"),
                 policy: None,
                 qtype,
-                decision: "completed".to_owned(),
+                decision: static_branch_word("completed"),
             }],
             attempts: Vec::new(),
             candidates: std::collections::BTreeMap::new(),
@@ -404,10 +432,10 @@ impl BranchTrace {
         self.branches.push(UpstreamDiagnosticBranch {
             id,
             parent_id,
-            role: role.to_owned(),
-            policy: Some(policy.to_owned()),
+            role: static_branch_word(role),
+            policy: Some(static_branch_word(policy)),
             qtype,
-            decision: "skipped".to_owned(),
+            decision: static_branch_word("skipped"),
         });
         id
     }
@@ -415,7 +443,7 @@ impl BranchTrace {
     fn mark(&mut self, id: Option<usize>, decision: &str) {
         if let Some(id) = id {
             if let Some(branch) = self.branches.get_mut(id) {
-                branch.decision = decision.to_owned();
+                branch.decision = static_branch_word(decision);
             }
         }
     }
@@ -423,7 +451,7 @@ impl BranchTrace {
     fn start(&mut self, id: Option<usize>) {
         if let Some(id) = id {
             if let Some(branch) = self.branches.get_mut(id) {
-                branch.decision = "completed".to_owned();
+                branch.decision = static_branch_word("completed");
             }
         }
     }
@@ -432,7 +460,7 @@ impl BranchTrace {
         &mut self,
         branch_id: Option<usize>,
         qtype: u16,
-        entry: String,
+        entry: SharedStr,
         peer: Option<SocketAddr>,
         transport: Option<UpstreamTransport>,
         outcome: UpstreamAttemptOutcome,
@@ -448,7 +476,7 @@ impl BranchTrace {
         });
     }
 
-    fn begin_attempt(&mut self, branch_id: Option<usize>, qtype: u16, entry: String) -> u64 {
+    fn begin_attempt(&mut self, branch_id: Option<usize>, qtype: u16, entry: SharedStr) -> u64 {
         let token = self.next_pending_attempt;
         self.next_pending_attempt = self.next_pending_attempt.saturating_add(1);
         let index = self.attempts.len();
@@ -468,7 +496,7 @@ impl BranchTrace {
     fn complete_attempt(
         &mut self,
         token: u64,
-        entry: String,
+        entry: SharedStr,
         peer: Option<SocketAddr>,
         transport: Option<UpstreamTransport>,
         outcome: UpstreamAttemptOutcome,
@@ -487,7 +515,7 @@ impl BranchTrace {
     fn candidate(
         &mut self,
         branch_id: Option<usize>,
-        entry: String,
+        entry: SharedStr,
         peer: Option<SocketAddr>,
         transport: Option<UpstreamTransport>,
     ) {
@@ -538,14 +566,16 @@ impl BranchTrace {
                 definition
                     .entries
                     .iter()
-                    .map(|entry| entry.identity.clone())
+                    .map(|entry| SharedStr::from(Arc::clone(&entry.response_identity)))
                     .collect::<Vec<_>>()
             });
         Rc::new(RefCell::new(move |entry_index| {
             let entry = entry_names
                 .as_ref()
                 .and_then(|entries| entries.get(entry_index).cloned())
-                .unwrap_or_else(|| format!("executable:{:?}:{}", executable, entry_index));
+                .unwrap_or_else(|| {
+                    SharedStr::from(format!("executable:{:?}:{}", executable, entry_index))
+                });
             trace.borrow_mut().begin_attempt(branch_id, qtype, entry)
         }))
     }
@@ -850,14 +880,14 @@ pub(crate) struct ExecutionResult {
     pub response: ObservedResponseState,
     pub response_details: ResponseDetails,
     pub cache_status: CacheStatus,
-    pub final_sequence: Option<String>,
-    pub matched_group: Option<String>,
-    pub domain_set: Option<String>,
-    pub effective_tag: Option<String>,
-    pub matched_rule_source: Option<String>,
-    pub final_upstream: Option<String>,
-    pub upstream_targets: Option<String>,
-    pub selected_upstream: Option<String>,
+    pub final_sequence: Option<SharedStr>,
+    pub matched_group: Option<SharedStr>,
+    pub domain_set: Option<SharedStr>,
+    pub effective_tag: Option<SharedStr>,
+    pub matched_rule_source: Option<SharedStr>,
+    pub final_upstream: Option<SharedStr>,
+    pub upstream_targets: Option<SharedStr>,
+    pub selected_upstream: Option<SharedStr>,
     pub upstream_attempts: UpstreamAttemptList,
     pub upstream_diagnostics: Option<UpstreamDiagnostics>,
     pub failure_provenance: Option<FailureProvenance>,
@@ -899,9 +929,9 @@ struct FactsState {
     branch_metrics: Rc<RefCell<UpstreamAttemptList>>,
     failure_provenance: Option<FailureProvenance>,
     policy_failure: Option<ExecutionError>,
-    /// The real named-sequence execution position, materialized only when
-    /// detailed audit capture is enabled.
-    final_sequence: Option<String>,
+    /// The real named-sequence execution position, resolved only when
+    /// finalizing a result or dropped checkpoint.
+    final_sequence_id: Option<SequenceId>,
     routing: RoutingState,
     /// Routing facts committed by the response that ultimately owns the wire.
     /// A parent sequence may replace a child response without touching the
@@ -1033,11 +1063,21 @@ impl FactsState {
         if !self.capture_audit_details {
             return;
         }
-        if let Some(sequence) = origin.and_then(|id| config.program.sequence(id)) {
-            if !sequence.synthetic {
-                self.final_sequence = Some(sequence.name.clone());
-            }
+        if let Some(id) = origin
+            && config
+                .program
+                .sequence(id)
+                .is_some_and(|sequence| !sequence.synthetic)
+        {
+            self.final_sequence_id = Some(id);
         }
+    }
+
+    fn resolved_final_sequence(&self, config: &CompiledConfig) -> Option<SharedStr> {
+        self.final_sequence_id
+            .and_then(|id| config.program.sequence(id))
+            .filter(|sequence| !sequence.synthetic)
+            .map(|sequence| sequence.name.clone())
     }
 
     fn note_routing(&mut self, state: &ExecutionState) {
@@ -1141,7 +1181,7 @@ impl FactsState {
         }
     }
 
-    fn record_upstream_response(&mut self, upstream: String) {
+    fn record_upstream_response(&mut self, upstream: SharedStr) {
         if self.capture_audit_details {
             self.upstream_attempts.push(UpstreamAttemptRecord {
                 upstream: upstream.clone(),
@@ -1165,7 +1205,7 @@ impl FactsState {
         config: &CompiledConfig,
         executable: ExecutableId,
         entry_index: usize,
-        upstream: Option<String>,
+        upstream: Option<SharedStr>,
         peer: Option<SocketAddr>,
         transport: Option<UpstreamTransport>,
         outcome: UpstreamAttemptOutcome,
@@ -1203,15 +1243,15 @@ impl FactsState {
         }
     }
 
-    fn record_invocation_failure(&mut self, upstream: &str, outcome: UpstreamAttemptOutcome) {
+    fn record_invocation_failure(&mut self, upstream: &SharedStr, outcome: UpstreamAttemptOutcome) {
         if self.capture_audit_details {
             self.failure_provenance = Some(if outcome == UpstreamAttemptOutcome::TimedOut {
                 FailureProvenance::UpstreamTimeout {
-                    upstream: upstream.to_owned(),
+                    upstream: upstream.clone(),
                 }
             } else {
                 FailureProvenance::UpstreamFailure {
-                    upstream: upstream.to_owned(),
+                    upstream: upstream.clone(),
                 }
             });
             self.response_source = Some(ResponseSource::Local);
@@ -1220,7 +1260,7 @@ impl FactsState {
 
     fn select_invocation_attempt(
         &mut self,
-        upstream: String,
+        upstream: SharedStr,
         peer: Option<SocketAddr>,
         transport: Option<UpstreamTransport>,
     ) {
@@ -1242,7 +1282,7 @@ impl FactsState {
 
     fn record_upstream_failure(
         &mut self,
-        upstream: String,
+        upstream: SharedStr,
         outcome: UpstreamAttemptOutcome,
         timed_out: bool,
     ) {
@@ -1285,7 +1325,7 @@ impl<'a> ExecutionFacts<'a> {
         &mut self,
         executable: ExecutableId,
         entry_index: usize,
-        upstream: Option<String>,
+        upstream: Option<SharedStr>,
         peer: Option<SocketAddr>,
         transport: Option<UpstreamTransport>,
         outcome: UpstreamAttemptOutcome,
@@ -1330,7 +1370,7 @@ impl FactsState {
             branch_metrics: Rc::default(),
             failure_provenance: None,
             policy_failure: None,
-            final_sequence: None,
+            final_sequence_id: None,
             routing: RoutingState::default(),
             response_routing: None,
             last_response_generation: 0,
@@ -1405,7 +1445,7 @@ impl FactsState {
                 });
                 if self.capture_audit_details {
                     let trace_entry = upstream.clone().unwrap_or_else(|| {
-                        format!("executable:{:?}:{}", executable, slot.entry_index)
+                        SharedStr::from(format!("executable:{:?}:{}", executable, slot.entry_index))
                     });
                     if let Some(trace) = &self.policy_trace {
                         let mut trace = trace.borrow_mut();
@@ -1473,7 +1513,7 @@ impl FactsState {
                     .routing
                     .final_sequence
                     .clone()
-                    .or_else(|| self.final_sequence.clone()),
+                    .or_else(|| self.resolved_final_sequence(config)),
                 matched_group: self.routing.matched_group.clone(),
                 domain_set: self.routing.domain_set.clone(),
                 effective_tag: self.routing.effective_tag.clone(),
@@ -1753,7 +1793,7 @@ impl<'a> RootRun<'a> {
                 // No entry-tag backfill: the field carries the real executing
                 // position recorded during execution, or nothing when none was
                 // observed.
-                final_sequence: None,
+                final_sequence_id: None,
                 routing: RoutingState::default(),
                 response_routing: None,
                 last_response_generation: 0,
@@ -4632,18 +4672,12 @@ fn rewrite_query_qtype(raw: &[u8], qtype: u16) -> Option<Vec<u8>> {
     Some(rewritten)
 }
 
-fn upstream_identity(config: &CompiledConfig, executable: ExecutableId) -> Option<String> {
+fn upstream_identity(config: &CompiledConfig, executable: ExecutableId) -> Option<SharedStr> {
     config
         .forwards
         .iter()
         .find(|forward| forward.executable == executable)
-        .map(|forward| {
-            forward
-                .upstream_tag
-                .as_deref()
-                .unwrap_or(&forward.tag)
-                .to_owned()
-        })
+        .map(|forward| SharedStr::from(forward.upstream_tag.as_deref().unwrap_or(&forward.tag)))
         .or_else(|| {
             let invocation = config
                 .forward_invocations
@@ -4654,7 +4688,7 @@ fn upstream_identity(config: &CompiledConfig, executable: ExecutableId) -> Optio
             definition
                 .entries
                 .get(entry_index)
-                .map(|entry| entry.identity.clone())
+                .map(|entry| SharedStr::from(Arc::clone(&entry.response_identity)))
         })
 }
 
@@ -4662,7 +4696,7 @@ fn invocation_identity(
     config: &CompiledConfig,
     executable: ExecutableId,
     entry_index: usize,
-) -> Option<String> {
+) -> Option<SharedStr> {
     let invocation = config
         .forward_invocations
         .iter()
@@ -4671,7 +4705,7 @@ fn invocation_identity(
     definition
         .entries
         .get(entry_index)
-        .map(|entry| entry.identity.clone())
+        .map(|entry| SharedStr::from(Arc::clone(&entry.response_identity)))
 }
 
 fn invocation_response_origin(
@@ -4689,7 +4723,7 @@ fn invocation_response_origin(
                 .get(&(executable.0, index))
                 .cloned()
         })
-        .or_else(|| upstream_identity(config, executable).map(std::sync::Arc::from))?;
+        .or_else(|| upstream_identity(config, executable).map(SharedStr::into_arc))?;
     let slot = selected_entry
         .and_then(|index| ledger.slots().iter().find(|slot| slot.entry_index == index));
     Some(atomdns_sequence_core::ResponseOrigin {
@@ -4753,9 +4787,9 @@ fn record_invocation_ledger(
         );
         if let Some(trace) = &facts.policy_trace {
             let mut trace = trace.borrow_mut();
-            let entry = upstream
-                .clone()
-                .unwrap_or_else(|| format!("executable:{:?}:{}", executable, slot.entry_index));
+            let entry = upstream.clone().unwrap_or_else(|| {
+                SharedStr::from(format!("executable:{:?}:{}", executable, slot.entry_index))
+            });
             if let Some(trace_slot) = slot.trace_slot {
                 trace.complete_attempt(trace_slot, entry, slot.peer, slot.transport, outcome);
             } else {
@@ -4822,7 +4856,7 @@ fn record_branch_ledger_data(record: BranchLedgerRecord<'_>) {
     let trace = trace.cloned();
     if slots.is_empty() {
         let entry = upstream_identity(config, executable)
-            .unwrap_or_else(|| format!("executable:{:?}", executable));
+            .unwrap_or_else(|| SharedStr::from(format!("executable:{:?}", executable)));
         branch_metrics
             .borrow_mut()
             .push_metric(UpstreamMetricAttempt {
@@ -4866,8 +4900,10 @@ fn record_branch_ledger_data(record: BranchLedgerRecord<'_>) {
         return;
     }
     for slot in slots {
-        let entry = invocation_identity(config, executable, slot.entry_index)
-            .unwrap_or_else(|| format!("executable:{:?}:{}", executable, slot.entry_index));
+        let entry =
+            invocation_identity(config, executable, slot.entry_index).unwrap_or_else(|| {
+                SharedStr::from(format!("executable:{:?}:{}", executable, slot.entry_index))
+            });
         let outcome = slot.outcome.unwrap_or({
             if root_cancelled {
                 UpstreamAttemptOutcome::Canceled
@@ -5012,7 +5048,7 @@ fn result_from_wire(response_wire: Vec<u8>, facts: &mut ExecutionFacts) -> Execu
         .then_some(facts.response_origin.as_ref())
         .flatten();
     let supplying_identity = origin
-        .map(|origin| origin.identity.to_string())
+        .map(|origin| SharedStr::from(Arc::clone(&origin.identity)))
         .or_else(|| {
             facts.response_source.as_ref().and_then(|source| {
                 if let ResponseSource::Upstream(upstream) = source {
@@ -5022,18 +5058,17 @@ fn result_from_wire(response_wire: Vec<u8>, facts: &mut ExecutionFacts) -> Execu
                 }
             })
         });
-    let derived_final_upstream = supplying_identity.clone();
     let final_sequence = routing
         .final_sequence
         .clone()
-        .or_else(|| facts.final_sequence.clone());
+        .or_else(|| facts.resolved_final_sequence(config));
     let final_upstream = routing
         .final_upstream
         .clone()
-        .or(derived_final_upstream.clone());
+        .or_else(|| supplying_identity.clone());
     let effective_tag = routing.effective_tag.clone().or_else(|| {
         routing
-            .response_domain_set()
+            .response_domain_set_shared()
             .map(|domain_set| {
                 compute_effective_tag(
                     domain_set,
@@ -5046,19 +5081,19 @@ fn result_from_wire(response_wire: Vec<u8>, facts: &mut ExecutionFacts) -> Execu
                 (routing.matched_rule_source.is_none()
                     && routing.domain_set.is_none()
                     && final_sequence.is_some())
-                .then(|| "unmatched_rule".to_owned())
+                .then(static_unmatched_rule)
             })
     });
     let actual_upstream = (!response_wire.is_empty())
         .then(|| {
             origin
                 .and_then(|origin| origin.peer)
-                .map(|peer| peer.to_string())
+                .map(|peer| config.peer_text(peer))
                 .or_else(|| {
                     supplying_identity
                         .as_deref()
                         .and_then(|identity| upstream_endpoint(config, identity))
-                        .or_else(|| facts.selected_peer.map(|peer| peer.to_string()))
+                        .or_else(|| facts.selected_peer.map(|peer| config.peer_text(peer)))
                 })
         })
         .flatten();
@@ -5072,7 +5107,7 @@ fn result_from_wire(response_wire: Vec<u8>, facts: &mut ExecutionFacts) -> Execu
                 let transport = UpstreamTransport::parse(origin.transport?)?;
                 Some(UpstreamDiagnosticSelected {
                     branch_id: None,
-                    entry: origin.identity.to_string(),
+                    entry: SharedStr::from(Arc::clone(&origin.identity)),
                     peer: origin.peer?,
                     transport,
                 })
@@ -5129,20 +5164,145 @@ fn overlay_routing(target: &mut RoutingState, before: &RoutingState, after: &Rou
     );
 }
 
-fn upstream_endpoint(config: &CompiledConfig, identity: &str) -> Option<String> {
+fn upstream_endpoint(config: &CompiledConfig, identity: &str) -> Option<SharedStr> {
     config
         .forwards
         .iter()
         .find(|forward| forward.upstream_tag.as_deref().unwrap_or(&forward.tag) == identity)
-        .map(|forward| forward.endpoint.address().to_string())
+        .map(|forward| config.peer_text(forward.endpoint.address()))
         .or_else(|| {
             config
                 .forward_definitions
                 .iter()
                 .flat_map(|definition| definition.entries.iter())
                 .find(|entry| entry.identity == identity)
-                .and_then(|entry| entry.target.dial_addr.map(|address| address.to_string()))
+                .and_then(|entry| {
+                    entry
+                        .target
+                        .dial_addr
+                        .map(|address| config.peer_text(address))
+                })
         })
+}
+
+fn static_unmatched_rule() -> SharedStr {
+    static VALUE: LazyLock<SharedStr> = LazyLock::new(|| SharedStr::from("unmatched_rule"));
+    VALUE.clone()
+}
+
+/// Returns a shared allocation for hardcoded constant audit/routing tags only.
+/// User-configured or rule-file strings must never enter this table.
+fn static_shared_tag(tag: &str) -> Option<SharedStr> {
+    macro_rules! shared {
+        ($lit:literal) => {{
+            static VALUE: LazyLock<SharedStr> = LazyLock::new(|| SharedStr::from($lit));
+            Some(VALUE.clone())
+        }};
+    }
+    match tag {
+        "unmatched_rule" => Some(static_unmatched_rule()),
+        "重定向" => shared!("重定向"),
+        "指定客户端直连" => shared!("指定客户端直连"),
+        "黑名单" => shared!("黑名单"),
+        "广告屏蔽" => shared!("广告屏蔽"),
+        "BANAAAA" => shared!("BANAAAA"),
+        "BANSOA" => shared!("BANSOA"),
+        "BANPTR" => shared!("BANPTR"),
+        "BANHTTPS" => shared!("BANHTTPS"),
+        "DDNS域名" => shared!("DDNS域名"),
+        "stash国内" => shared!("stash国内"),
+        "stash国外" => shared!("stash国外"),
+        "clashmi国内" => shared!("clashmi国内"),
+        "clashmi国外" => shared!("clashmi国外"),
+        "sing-box国内" => shared!("sing-box国内"),
+        "sing-box国外" => shared!("sing-box国外"),
+        "白名单" => shared!("白名单"),
+        "直连域名" => shared!("直连域名"),
+        "订阅直连补充" => shared!("订阅直连补充"),
+        "中国域名" => shared!("中国域名"),
+        "订阅直连" => shared!("订阅直连"),
+        "CN fakeip filter" => shared!("CN fakeip filter"),
+        "!CN fakeip filter" => shared!("!CN fakeip filter"),
+        "灰名单" => shared!("灰名单"),
+        "代理域名" => shared!("代理域名"),
+        "订阅代理补充" => shared!("订阅代理补充"),
+        "非中国域名" => shared!("非中国域名"),
+        "订阅代理" => shared!("订阅代理"),
+        "记忆直连" => shared!("记忆直连"),
+        "记忆代理" => shared!("记忆代理"),
+        "记忆代理转直连" => shared!("记忆代理转直连"),
+        "直连候选转代理" => shared!("直连候选转代理"),
+        "记忆无V4" => shared!("记忆无V4"),
+        "记忆无V6" => shared!("记忆无V6"),
+        _ => None,
+    }
+}
+
+struct TagBuf<'a> {
+    inline: [&'a str; 16],
+    len: usize,
+    heap: Vec<&'a str>,
+}
+
+impl<'a> TagBuf<'a> {
+    fn new() -> Self {
+        Self {
+            inline: [""; 16],
+            len: 0,
+            heap: Vec::new(),
+        }
+    }
+
+    fn as_slice(&self) -> &[&'a str] {
+        if self.heap.is_empty() {
+            &self.inline[..self.len]
+        } else {
+            self.heap.as_slice()
+        }
+    }
+
+    fn push_unique(&mut self, tag: &'a str) {
+        if self.as_slice().contains(&tag) {
+            return;
+        }
+        if !self.heap.is_empty() {
+            self.heap.push(tag);
+        } else if self.len < self.inline.len() {
+            self.inline[self.len] = tag;
+            self.len += 1;
+        } else {
+            self.heap.reserve(self.inline.len() + 4);
+            self.heap.extend_from_slice(&self.inline);
+            self.heap.push(tag);
+        }
+    }
+}
+
+fn matches_joined(whole: &str, parts: &[&str]) -> bool {
+    let mut iter = parts.iter();
+    let Some(&first) = iter.next() else {
+        return whole.is_empty();
+    };
+    let Some(mut rest) = whole.strip_prefix(first) else {
+        return false;
+    };
+    for &part in iter {
+        let Some(after_sep) = rest.strip_prefix('|') else {
+            return false;
+        };
+        let Some(after_part) = after_sep.strip_prefix(part) else {
+            return false;
+        };
+        rest = after_part;
+    }
+    rest.is_empty()
+}
+
+fn reuse_or_static_tag(tag: &str, domain_set: &SharedStr) -> SharedStr {
+    if domain_set.as_str() == tag {
+        return domain_set.clone();
+    }
+    static_shared_tag(tag).unwrap_or_else(|| SharedStr::from(tag))
 }
 
 // Decision tags of the direct and proxy route groups in priority order. The
@@ -5175,35 +5335,38 @@ const PROXY_CANDIDATE_TAGS: [&str; 5] = [
 ];
 
 fn compute_effective_tag(
-    domain_set: &str,
+    domain_set: &SharedStr,
     final_upstream: Option<&str>,
     matched_group: Option<&str>,
     final_sequence: Option<&str>,
-) -> String {
-    let domain_set = domain_set.trim();
-    if domain_set.is_empty() || domain_set == "unmatched_rule" {
-        return "unmatched_rule".to_owned();
+) -> SharedStr {
+    let trimmed = domain_set.trim();
+    if trimmed.is_empty() || trimmed == "unmatched_rule" {
+        return static_unmatched_rule();
     }
-    if let Some(special) =
-        normalize_special_tag(matched_group).or_else(|| normalize_special_tag(final_upstream))
+    if let Some(special) = normalize_special_tag(matched_group, domain_set)
+        .or_else(|| normalize_special_tag(final_upstream, domain_set))
     {
         return special;
     }
-    let mut tags = Vec::new();
-    for tag in domain_set
-        .split('|')
-        .map(str::trim)
-        .filter(|tag| !tag.is_empty())
-    {
-        if !tags.contains(&tag) {
-            tags.push(tag);
+    let mut tag_buf = TagBuf::new();
+    if !trimmed.contains('|') {
+        tag_buf.push_unique(trimmed);
+    } else {
+        for tag in trimmed
+            .split('|')
+            .map(str::trim)
+            .filter(|tag| !tag.is_empty())
+        {
+            tag_buf.push_unique(tag);
         }
     }
+    let tags = tag_buf.as_slice();
     if tags.is_empty() {
-        return "unmatched_rule".to_owned();
+        return static_unmatched_rule();
     }
-    if let Some(tag) = tags.iter().find(|tag| tag.starts_with("特殊上游")) {
-        return (*tag).to_owned();
+    if let Some(&tag) = tags.iter().find(|tag| tag.starts_with("特殊上游")) {
+        return reuse_or_static_tag(tag, domain_set);
     }
     for candidate in [
         "重定向",
@@ -5223,15 +5386,13 @@ fn compute_effective_tag(
         "sing-box国外",
     ] {
         if tags.contains(&candidate) {
-            return candidate.to_owned();
+            return reuse_or_static_tag(candidate, domain_set);
         }
     }
-    let no_v: Vec<_> = ["记忆无V4", "记忆无V6"]
-        .into_iter()
-        .filter(|tag| tags.contains(tag))
-        .collect();
+    let has_nov4 = tags.contains(&"记忆无V4");
+    let has_nov6 = tags.contains(&"记忆无V6");
     if tags.contains(&"!CN fakeip filter") {
-        return join_effective_tags(&no_v, "!CN fakeip filter");
+        return join_effective_tags(has_nov4, has_nov6, "!CN fakeip filter", domain_set);
     }
     let route_kind = match final_upstream.map(str::trim) {
         Some("domestic" | "cnfake") => Some("direct"),
@@ -5249,7 +5410,7 @@ fn compute_effective_tag(
             _ => "",
         };
         if !memory.is_empty() {
-            return join_effective_tags(&no_v, memory);
+            return join_effective_tags(has_nov4, has_nov6, memory, domain_set);
         }
     }
     if route_kind == Some("proxy")
@@ -5260,7 +5421,7 @@ fn compute_effective_tag(
     {
         for candidate in DIRECT_ROUTE_TAGS {
             if tags.contains(&candidate) {
-                return join_effective_tags(&no_v, "直连候选转代理");
+                return join_effective_tags(has_nov4, has_nov6, "直连候选转代理", domain_set);
             }
         }
     }
@@ -5269,13 +5430,13 @@ fn compute_effective_tag(
         Some("proxy") => PROXY_CANDIDATE_TAGS.as_slice(),
         _ => [].as_slice(),
     };
-    if let Some(tag) = candidates.iter().find(|candidate| tags.contains(candidate)) {
-        return join_effective_tags(&no_v, tag);
+    if let Some(&tag) = candidates.iter().find(|candidate| tags.contains(candidate)) {
+        return join_effective_tags(has_nov4, has_nov6, tag, domain_set);
     }
     // Cache-origin hints may name an entry rather than a route group. With no
     // classifiable route, keep the first recognized decision in domain_set,
     // including no-V flags, as the maintained audit projection does.
-    if let Some(tag) = tags.iter().find(|tag| {
+    if let Some(&tag) = tags.iter().find(|tag| {
         matches!(
             **tag,
             "白名单"
@@ -5292,32 +5453,70 @@ fn compute_effective_tag(
                 | "!CN fakeip filter"
         )
     }) {
-        return join_effective_tags(&no_v, tag);
+        return join_effective_tags(has_nov4, has_nov6, tag, domain_set);
     }
-    tags.join("|")
+    if matches_joined(domain_set.as_str(), tags) {
+        return domain_set.clone();
+    }
+    if tags.len() == 1 {
+        return reuse_or_static_tag(tags[0], domain_set);
+    }
+    SharedStr::from(tags.join("|"))
 }
 
-fn normalize_special_tag(value: Option<&str>) -> Option<String> {
+fn normalize_special_tag(value: Option<&str>, domain_set: &SharedStr) -> Option<SharedStr> {
     let value = value?.trim();
     let slot = value
         .strip_prefix("special_upstream_")
         .or_else(|| value.strip_prefix("special_"))?;
-    (!slot.is_empty() && slot.bytes().all(|byte| byte.is_ascii_digit()))
-        .then(|| format!("特殊上游{slot}"))
+    if slot.is_empty() || !slot.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    if domain_set.strip_prefix("特殊上游") == Some(slot) {
+        return Some(domain_set.clone());
+    }
+    Some(SharedStr::from(format!("特殊上游{slot}")))
 }
 
-fn join_effective_tags(no_v: &[&str], core: &str) -> String {
-    let mut tags = Vec::new();
-    for tag in no_v
-        .iter()
-        .copied()
-        .chain((!core.is_empty()).then_some(core))
-    {
-        if !tags.contains(&tag) {
-            tags.push(tag);
-        }
+fn join_effective_tags(
+    has_nov4: bool,
+    has_nov6: bool,
+    core: &str,
+    domain_set: &SharedStr,
+) -> SharedStr {
+    if !has_nov4 && !has_nov6 {
+        return reuse_or_static_tag(core, domain_set);
     }
-    tags.join("|")
+    let mut parts = [""; 3];
+    let mut len = 0;
+    if has_nov4 {
+        parts[len] = "记忆无V4";
+        len += 1;
+    }
+    if has_nov6 {
+        parts[len] = "记忆无V6";
+        len += 1;
+    }
+    if !core.is_empty() && !parts[..len].contains(&core) {
+        parts[len] = core;
+        len += 1;
+    }
+    let parts = &parts[..len];
+    if matches_joined(domain_set.as_str(), parts) {
+        return domain_set.clone();
+    }
+    if parts.len() == 1 {
+        return reuse_or_static_tag(parts[0], domain_set);
+    }
+    let total_len: usize = parts.iter().map(|s| s.len()).sum::<usize>() + parts.len() - 1;
+    let mut out = String::with_capacity(total_len);
+    for (index, part) in parts.iter().enumerate() {
+        if index > 0 {
+            out.push('|');
+        }
+        out.push_str(part);
+    }
+    SharedStr::from(out)
 }
 
 pub(crate) fn diagnose_response_wire(response_wire: &[u8]) -> ResponseDetails {
@@ -6731,7 +6930,7 @@ plugins:
         assert_eq!(
             timeout.failure_provenance,
             Some(FailureProvenance::UpstreamTimeout {
-                upstream: "forward".to_owned()
+                upstream: "forward".into()
             })
         );
         assert_eq!(timeout.upstream_attempts.len(), 1);
@@ -6762,7 +6961,7 @@ plugins:
             upstream_servfail_result.response,
             ResponseState::Dns {
                 rcode: 2,
-                source: ResponseSource::Upstream("phase5a_forward".to_owned())
+                source: ResponseSource::Upstream("phase5a_forward".into())
             }
         );
         assert_eq!(upstream_servfail_result.failure_provenance, None);
@@ -7178,7 +7377,7 @@ plugins:
             negative_b.response,
             ResponseState::Dns {
                 rcode: 0,
-                source: ResponseSource::Upstream("route_c".to_owned())
+                source: ResponseSource::Upstream("route_c".into())
             }
         );
     }
@@ -7222,6 +7421,7 @@ plugins:
             generation: 0,
             cache_dependencies: Vec::new(),
             response_identities: Default::default(),
+            peer_labels: Default::default(),
             listeners: Vec::new(),
             response_policies: Vec::new(),
             ip_sets: Vec::new(),
@@ -7342,6 +7542,7 @@ plugins:
                 generation: 0,
                 cache_dependencies: Vec::new(),
                 response_identities: Default::default(),
+                peer_labels: Default::default(),
                 listeners: Vec::new(),
                 response_policies: Vec::new(),
                 ip_sets: Vec::new(),
@@ -7468,7 +7669,7 @@ plugins:
         assert_eq!(
             execution.failure_provenance,
             Some(FailureProvenance::UpstreamFailure {
-                upstream: "b".to_owned()
+                upstream: "b".into()
             })
         );
         assert_eq!(execution.upstream_attempts.len(), 1);
@@ -7570,7 +7771,7 @@ plugins:
         assert_eq!(
             execution.failure_provenance,
             Some(FailureProvenance::UpstreamFailure {
-                upstream: "a".to_owned()
+                upstream: "a".into()
             })
         );
         assert_eq!(
@@ -7884,6 +8085,7 @@ plugins:
             generation: 0,
             cache_dependencies: Vec::new(),
             response_identities: Default::default(),
+            peer_labels: Default::default(),
             listeners: Vec::new(),
             response_policies: Vec::new(),
             ip_sets: Vec::new(),
@@ -8006,6 +8208,7 @@ plugins:
                 generation: 0,
                 cache_dependencies: Vec::new(),
                 response_identities: Default::default(),
+                peer_labels: Default::default(),
                 listeners: Vec::new(),
                 response_policies: Vec::new(),
                 ip_sets: Vec::new(),
@@ -8206,6 +8409,7 @@ plugins:
             generation: 0,
             cache_dependencies: Vec::new(),
             response_identities: Default::default(),
+            peer_labels: Default::default(),
             listeners: Vec::new(),
             response_policies: Vec::new(),
             ip_sets: Vec::new(),
@@ -8683,7 +8887,7 @@ plugins:
         );
         assert_eq!(result.domain_set, None);
         assert_eq!(result.matched_rule_source, None);
-        assert_eq!(result.selected_upstream, Some("127.0.0.1:2".to_owned()));
+        assert_eq!(result.selected_upstream.as_deref(), Some("127.0.0.1:2"));
     }
 
     #[test]
@@ -9202,27 +9406,29 @@ plugins:
 
     #[test]
     fn cached_entry_hints_keep_the_first_effective_route_label_and_no_v_flags() {
+        let eval = |domain_set: &str, upstream, group, seq| {
+            compute_effective_tag(
+                &atomdns_sequence_core::SharedStr::from(domain_set),
+                upstream,
+                group,
+                seq,
+            )
+        };
         for upstream in [None, Some("ali-entry")] {
+            assert_eq!(eval("白名单|订阅代理", upstream, None, None), "白名单");
+            assert_eq!(eval("订阅代理|白名单", upstream, None, None), "订阅代理");
             assert_eq!(
-                compute_effective_tag("白名单|订阅代理", upstream, None, None),
-                "白名单"
-            );
-            assert_eq!(
-                compute_effective_tag("订阅代理|白名单", upstream, None, None),
-                "订阅代理"
-            );
-            assert_eq!(
-                compute_effective_tag("记忆无V6|白名单|订阅直连", upstream, None, None),
+                eval("记忆无V6|白名单|订阅直连", upstream, None, None),
                 "记忆无V6|白名单"
             );
         }
         assert_eq!(
-            compute_effective_tag("订阅代理|白名单", Some("domestic"), None, None),
+            eval("订阅代理|白名单", Some("domestic"), None, None),
             "白名单",
             "a known group keeps route-specific priority"
         );
         assert_eq!(
-            compute_effective_tag("foo|bar", None, None, None),
+            eval("foo|bar", None, None, None),
             "foo|bar",
             "unknown user labels remain intact"
         );
@@ -9230,6 +9436,14 @@ plugins:
 
     #[test]
     fn subscription_tags_derive_the_same_under_old_and_new_names() {
+        let eval = |domain_set: &str, upstream, group, seq| {
+            compute_effective_tag(
+                &atomdns_sequence_core::SharedStr::from(domain_set),
+                upstream,
+                group,
+                seq,
+            )
+        };
         // (old name, new name) of the four subscription sets.
         let direct_base = ("订阅直连", "中国域名");
         let direct_custom = ("订阅直连补充", "直连域名");
@@ -9239,7 +9453,7 @@ plugins:
             let name = |pair: (&'static str, &'static str)| if pick == 0 { pair.0 } else { pair.1 };
             // Direct route: the custom set outranks the base set, the whitelist both.
             assert_eq!(
-                compute_effective_tag(
+                eval(
                     &format!("{}|{}", name(direct_base), name(direct_custom)),
                     Some("domestic"),
                     None,
@@ -9248,11 +9462,11 @@ plugins:
                 name(direct_custom)
             );
             assert_eq!(
-                compute_effective_tag(name(direct_base), Some("domestic"), None, None),
+                eval(name(direct_base), Some("domestic"), None, None),
                 name(direct_base)
             );
             assert_eq!(
-                compute_effective_tag(
+                eval(
                     &format!("{}|白名单", name(direct_custom)),
                     Some("domestic"),
                     None,
@@ -9262,7 +9476,7 @@ plugins:
             );
             // Proxy route likewise, the greylist first.
             assert_eq!(
-                compute_effective_tag(
+                eval(
                     &format!("{}|{}", name(proxy_base), name(proxy_custom)),
                     Some("foreign"),
                     None,
@@ -9271,11 +9485,11 @@ plugins:
                 name(proxy_custom)
             );
             assert_eq!(
-                compute_effective_tag(name(proxy_base), Some("foreign"), None, None),
+                eval(name(proxy_base), Some("foreign"), None, None),
                 name(proxy_base)
             );
             assert_eq!(
-                compute_effective_tag(
+                eval(
                     &format!("{}|灰名单", name(proxy_custom)),
                     Some("foreign"),
                     None,
@@ -9286,7 +9500,7 @@ plugins:
             // A direct candidate routed to the proxy by FakeIP.
             for direct in [direct_base, direct_custom] {
                 assert_eq!(
-                    compute_effective_tag(
+                    eval(
                         name(direct),
                         Some("foreign"),
                         None,
@@ -9297,7 +9511,7 @@ plugins:
             }
             // No route type: the first recognized decision stays, with no-V flags.
             assert_eq!(
-                compute_effective_tag(
+                eval(
                     &format!("记忆无V4|{}|{}", name(proxy_base), name(direct_base)),
                     None,
                     None,
@@ -9310,8 +9524,16 @@ plugins:
 
     #[test]
     fn effective_tag_normalization_keeps_special_and_memory_precedence() {
-        assert_eq!(
+        let eval = |domain_set: &str, upstream, group, seq| {
             compute_effective_tag(
+                &atomdns_sequence_core::SharedStr::from(domain_set),
+                upstream,
+                group,
+                seq,
+            )
+        };
+        assert_eq!(
+            eval(
                 "记忆无V6|订阅直连",
                 Some("foreign"),
                 None,
@@ -9320,7 +9542,7 @@ plugins:
             "记忆无V6|订阅直连"
         );
         assert_eq!(
-            compute_effective_tag(
+            eval(
                 "订阅直连",
                 Some("foreign"),
                 None,
@@ -9329,17 +9551,14 @@ plugins:
             "直连候选转代理"
         );
         assert_eq!(
-            compute_effective_tag("anything", Some("special_upstream_7"), None, None),
+            eval("anything", Some("special_upstream_7"), None, None),
             "特殊上游7"
         );
         assert_eq!(
-            compute_effective_tag("unmatched_rule", Some("foreign"), None, None),
+            eval("unmatched_rule", Some("foreign"), None, None),
             "unmatched_rule"
         );
-        assert_eq!(
-            compute_effective_tag("foo|foo|bar|foo", None, None, None),
-            "foo|bar"
-        );
+        assert_eq!(eval("foo|foo|bar|foo", None, None, None), "foo|bar");
     }
 
     #[test]
@@ -9560,7 +9779,7 @@ plugins:
         trace.mark(Some(branch_id), "selected");
         trace.candidate(
             Some(branch_id),
-            "forward".to_owned(),
+            "forward".into(),
             Some("127.0.0.1:53".parse::<SocketAddr>().expect("peer")),
             Some(UpstreamTransport::Udp),
         );
@@ -9880,5 +10099,137 @@ plugins:
                 prefer_ipv4_rewrites_reference_qtype_and_suppresses_original_answer
             ) >= 1
         );
+    }
+
+    #[test]
+    fn compute_effective_tag_preserves_all_rules_and_shares_allocations() {
+        use super::compute_effective_tag;
+        use atomdns_sequence_core::SharedStr;
+
+        // Empty and unmatched_rule return the shared static sentinel.
+        let empty = compute_effective_tag(&SharedStr::from("   "), None, None, None);
+        let pipe_only = compute_effective_tag(&SharedStr::from(" | | "), None, None, None);
+        let explicit = compute_effective_tag(&SharedStr::from("unmatched_rule"), None, None, None);
+        assert_eq!(empty, "unmatched_rule");
+        assert!(empty.ptr_eq(&pipe_only));
+        assert!(empty.ptr_eq(&explicit));
+
+        // All 15 high-priority static tags match verbatim and reuse domain_set or static table.
+        for tag in [
+            "重定向",
+            "指定客户端直连",
+            "黑名单",
+            "广告屏蔽",
+            "BANAAAA",
+            "BANSOA",
+            "BANPTR",
+            "BANHTTPS",
+            "DDNS域名",
+            "stash国内",
+            "stash国外",
+            "clashmi国内",
+            "clashmi国外",
+            "sing-box国内",
+            "sing-box国外",
+        ] {
+            let single = SharedStr::from(tag);
+            let out_single = compute_effective_tag(&single, Some("domestic"), None, None);
+            assert_eq!(out_single, tag);
+            assert!(out_single.ptr_eq(&single));
+
+            let combined = SharedStr::from(format!("中国域名|{tag}"));
+            let out_a = compute_effective_tag(&combined, Some("domestic"), None, None);
+            let out_b = compute_effective_tag(&combined, Some("domestic"), None, None);
+            assert_eq!(out_a, tag);
+            assert!(out_a.ptr_eq(&out_b));
+        }
+
+        // Direct/proxy candidates and fallback recognition.
+        for tag in [
+            "白名单",
+            "直连域名",
+            "订阅直连补充",
+            "中国域名",
+            "订阅直连",
+            "CN fakeip filter",
+            "!CN fakeip filter",
+        ] {
+            let input = SharedStr::from(tag);
+            let out = compute_effective_tag(&input, Some("domestic"), None, None);
+            assert_eq!(out, tag);
+            assert!(out.ptr_eq(&input));
+        }
+        for tag in [
+            "灰名单",
+            "代理域名",
+            "订阅代理补充",
+            "非中国域名",
+            "订阅代理",
+        ] {
+            let input = SharedStr::from(tag);
+            let out = compute_effective_tag(&input, Some("foreign"), None, None);
+            assert_eq!(out, tag);
+            assert!(out.ptr_eq(&input));
+        }
+
+        // Special group normalization & domain_set reuse.
+        let special = SharedStr::from("特殊上游50");
+        assert!(compute_effective_tag(&special, None, Some("special_50"), None).ptr_eq(&special));
+        assert_eq!(
+            compute_effective_tag(
+                &SharedStr::from("中国域名"),
+                Some("special_upstream_7"),
+                None,
+                None
+            ),
+            "特殊上游7"
+        );
+        assert_eq!(
+            compute_effective_tag(&SharedStr::from("中国域名|特殊上游9"), None, None, None),
+            "特殊上游9"
+        );
+
+        // Memory & no-V4/no-V6 combinations.
+        let nov4_cn = SharedStr::from("记忆无V4|中国域名");
+        let out_nov4_cn = compute_effective_tag(&nov4_cn, Some("domestic"), None, None);
+        assert_eq!(out_nov4_cn, "记忆无V4|中国域名");
+        assert!(out_nov4_cn.ptr_eq(&nov4_cn));
+
+        assert_eq!(
+            compute_effective_tag(
+                &SharedStr::from("记忆无V6|记忆无V4|记忆代理"),
+                Some("domestic"),
+                None,
+                None
+            ),
+            "记忆无V4|记忆无V6|记忆代理转直连"
+        );
+        assert_eq!(
+            compute_effective_tag(
+                &SharedStr::from("记忆无V4|中国域名"),
+                Some("foreign"),
+                None,
+                Some("sequence_fakeip_addlist")
+            ),
+            "记忆无V4|直连候选转代理"
+        );
+
+        // Passthrough of unrecognized single tag ("未命中") reuses domain_set directly.
+        let miss = SharedStr::from("未命中");
+        let out_miss = compute_effective_tag(&miss, Some("foreign"), None, None);
+        assert_eq!(out_miss, "未命中");
+        assert!(out_miss.ptr_eq(&miss));
+
+        // > 16 distinct unknown tags exercise TagBuf::Heap overflow and preserve order/dedup.
+        let many: Vec<String> = (1..=20).map(|i| format!("custom_{i}")).collect();
+        let joined = many.join("|");
+        let input_clean = SharedStr::from(joined.clone());
+        let out_clean = compute_effective_tag(&input_clean, None, None, None);
+        assert_eq!(out_clean, joined);
+        assert!(out_clean.ptr_eq(&input_clean));
+
+        let input_dup = SharedStr::from(format!(" custom_1 | {joined} | custom_20 "));
+        let out_dup = compute_effective_tag(&input_dup, None, None, None);
+        assert_eq!(out_dup, joined);
     }
 }

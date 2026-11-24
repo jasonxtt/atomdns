@@ -1,13 +1,13 @@
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::{
-    Arc,
+    Arc, LazyLock,
     atomic::{AtomicBool, Ordering},
 };
 
 use crate::{
     DispatchMetadata, ExecutableId, ExecutableTarget, ExecutionState, ExecutorError,
-    ExecutorOutcome, MatcherError, SequenceId, ValidatedExecutable, ValidatedProgram,
+    ExecutorOutcome, MatcherError, SequenceId, SharedStr, ValidatedExecutable, ValidatedProgram,
     ValidatedRule,
 };
 
@@ -1353,6 +1353,11 @@ fn run_rule(
 }
 
 fn apply_dispatch_metadata(state: &mut ExecutionState, metadata: &DispatchMetadata) {
+    static BAN_AAAA: LazyLock<SharedStr> = LazyLock::new(|| SharedStr::from("BANAAAA"));
+    static BAN_SOA: LazyLock<SharedStr> = LazyLock::new(|| SharedStr::from("BANSOA"));
+    static BAN_PTR: LazyLock<SharedStr> = LazyLock::new(|| SharedStr::from("BANPTR"));
+    static BAN_HTTPS: LazyLock<SharedStr> = LazyLock::new(|| SharedStr::from("BANHTTPS"));
+
     if state.routing.domain_set.is_some() {
         return;
     }
@@ -1360,12 +1365,12 @@ fn apply_dispatch_metadata(state: &mut ExecutionState, metadata: &DispatchMetada
         DispatchMetadata::None => None,
         DispatchMetadata::AnonymousQname { rule_name } => Some(rule_name.clone()),
         DispatchMetadata::Switch6 => {
-            (state.query.question.qtype == QTYPE_AAAA).then(|| "BANAAAA".to_owned())
+            (state.query.question.qtype == QTYPE_AAAA).then(|| BAN_AAAA.clone())
         }
         DispatchMetadata::Switch5 => match state.query.question.qtype {
-            QTYPE_SOA => Some("BANSOA".to_owned()),
-            QTYPE_PTR => Some("BANPTR".to_owned()),
-            QTYPE_HTTPS => Some("BANHTTPS".to_owned()),
+            QTYPE_SOA => Some(BAN_SOA.clone()),
+            QTYPE_PTR => Some(BAN_PTR.clone()),
+            QTYPE_HTTPS => Some(BAN_HTTPS.clone()),
             _ => None,
         },
     };

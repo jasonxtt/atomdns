@@ -838,15 +838,15 @@ fn canonical_contract_snapshot_is_typed_and_deterministic() {
     state.marks.insert(7);
     state.fast_flags = 0x0001_0000_0000_0001;
     state.routing = RoutingState {
-        domain_set: Some("domain-set".to_owned()),
+        domain_set: Some("domain-set".into()),
         effective_domain_set: None,
         effective_tag: None,
-        matched_group: Some("group".to_owned()),
-        final_sequence: Some("final-sequence".to_owned()),
-        final_upstream: Some("final-upstream".to_owned()),
-        final_upstream_targets: Some("target-a,target-b".to_owned()),
-        selected_upstream: Some("selected-upstream".to_owned()),
-        matched_rule_source: Some("rule-source".to_owned()),
+        matched_group: Some("group".into()),
+        final_sequence: Some("final-sequence".into()),
+        final_upstream: Some("final-upstream".into()),
+        final_upstream_targets: Some("target-a,target-b".into()),
+        selected_upstream: Some("selected-upstream".into()),
+        matched_rule_source: Some("rule-source".into()),
     };
     state
         .set_synthesized_response(0x0fff)
@@ -862,15 +862,15 @@ fn canonical_contract_snapshot_is_typed_and_deterministic() {
                 SynthesizedResponse::new(0x0fff).expect("configured RCODE is valid"),
             ),
             routing: RoutingState {
-                domain_set: Some("domain-set".to_owned()),
+                domain_set: Some("domain-set".into()),
                 effective_domain_set: None,
                 effective_tag: None,
-                matched_group: Some("group".to_owned()),
-                final_sequence: Some("final-sequence".to_owned()),
-                final_upstream: Some("final-upstream".to_owned()),
-                final_upstream_targets: Some("target-a,target-b".to_owned()),
-                selected_upstream: Some("selected-upstream".to_owned()),
-                matched_rule_source: Some("rule-source".to_owned()),
+                matched_group: Some("group".into()),
+                final_sequence: Some("final-sequence".into()),
+                final_upstream: Some("final-upstream".into()),
+                final_upstream_targets: Some("target-a,target-b".into()),
+                selected_upstream: Some("selected-upstream".into()),
+                matched_rule_source: Some("rule-source".into()),
             },
         }
     );
@@ -1028,7 +1028,7 @@ fn state_contract_snapshot() -> Phase3bStateSnapshot {
     snapshot_state.marks.insert(49);
     snapshot_state.marks.insert(7);
     snapshot_state.fast_flags = 1 << 48;
-    snapshot_state.routing.domain_set = Some("rule-a".to_owned());
+    snapshot_state.routing.domain_set = Some("rule-a".into());
     let snapshot = snapshot_state.snapshot();
     snapshot_state.marks.insert(100);
     snapshot_state.fast_flags = 0;
@@ -1421,7 +1421,7 @@ fn metadata_label_for_qtype(qtype: u16, metadata: DispatchMetadata) -> Option<St
     state.query.question.qtype = qtype;
     let mut control = ExecutionControl::with_fuel(2);
     execute(&program, entry(&program), &mut state, &mut control).expect("metadata execution");
-    state.routing.domain_set
+    state.routing.domain_set.map(|s| s.as_str().to_owned())
 }
 
 fn matcher_contract_snapshot() -> Phase3bMatcherSnapshot {
@@ -1561,7 +1561,7 @@ fn reverse_matcher_snapshot() -> (ContractCheck, ContractCheck) {
                 vec![snapshot_reverse_matcher(
                     &calls,
                     DispatchMetadata::AnonymousQname {
-                        rule_name: "positive-rule".to_owned(),
+                        rule_name: "positive-rule".into(),
                     },
                 )],
                 None,
@@ -1582,7 +1582,7 @@ fn routing_matcher_snapshot() -> (Option<String>, Option<String>, Vec<String>, C
     let qname_label = metadata_label_for_qtype(
         1,
         DispatchMetadata::AnonymousQname {
-            rule_name: "qname-rule".to_owned(),
+            rule_name: "qname-rule".into(),
         },
     );
     let switch6_label = metadata_label_for_qtype(28, DispatchMetadata::Switch6);
@@ -1602,7 +1602,7 @@ fn routing_matcher_snapshot() -> (Option<String>, Option<String>, Vec<String>, C
                         "first",
                         &calls,
                         DispatchMetadata::AnonymousQname {
-                            rule_name: "first".to_owned(),
+                            rule_name: "first".into(),
                         },
                     )],
                     None,
@@ -1612,7 +1612,7 @@ fn routing_matcher_snapshot() -> (Option<String>, Option<String>, Vec<String>, C
                         "second",
                         &calls,
                         DispatchMetadata::AnonymousQname {
-                            rule_name: "second".to_owned(),
+                            rule_name: "second".into(),
                         },
                     )],
                     None,

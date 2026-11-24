@@ -1,7 +1,7 @@
 use atomdns_dns_core::{QueryHeader, QuestionInfo};
 use atomdns_sequence_core::{
     DnsResponseInspector, ExecutionState, OwnedResponseWire, ResponseError, ResponseState,
-    RoutingState, SynthesizedResponse,
+    RoutingLabelOverlay, RoutingState, SharedStr, SynthesizedResponse,
 };
 
 fn state() -> ExecutionState {
@@ -45,14 +45,129 @@ fn complete_response_wire() -> Vec<u8> {
 #[test]
 fn cached_default_is_preserved_without_a_live_learning_prefix() {
     let mut state = state();
-    state.routing.domain_set = Some("NEW_STATIC".to_owned());
-    state.domain_set_overlay = Some(atomdns_sequence_core::RoutingLabelOverlay {
+    let replaced_default = SharedStr::from("DEFAULT");
+    state.routing.domain_set = Some("NEW_STATIC".into());
+    state.domain_set_overlay = Some(RoutingLabelOverlay {
         prefix_len: 0,
         dynamic_label_count: 1,
-        replaced: vec!["LEARNED".to_owned(), "DEFAULT".to_owned()].into(),
+        replaced: vec![SharedStr::from("LEARNED"), replaced_default.clone()].into(),
     });
-    state.restore_cached_domain_set("DEFAULT".to_owned());
-    assert_eq!(state.routing.domain_set.as_deref(), Some("DEFAULT"));
+    state.restore_cached_domain_set("DEFAULT");
+    let restored = state.routing.domain_set.as_ref().expect("restored");
+    assert_eq!(restored.as_str(), "DEFAULT");
+    assert!(restored.ptr_eq(&replaced_default));
+}
+
+#[test]
+fn restore_cached_domain_set_preserves_shared_allocation_across_cache_and_learning_paths() {
+    // 1. No overlay, identical text keeps the existing SharedStr allocation.
+    let mut plain = state();
+    let existing = SharedStr::from("中国域名");
+    plain.routing.domain_set = Some(existing.clone());
+    plain.restore_cached_domain_set("中国域名");
+    assert!(
+        plain
+            .routing
+            .domain_set
+            .as_ref()
+            .expect("domain_set")
+            .ptr_eq(&existing)
+    );
+    assert_eq!(plain.routing.effective_domain_set, None);
+
+    // 2. Overlay with prefix_len == 0, identical text keeps the existing SharedStr.
+    let mut with_overlay = state();
+    let static_label = SharedStr::from("中国域名");
+    let learned_label = SharedStr::from("记忆无V4");
+    let default_label = SharedStr::from("未命中");
+    with_overlay.routing.domain_set = Some(static_label.clone());
+    with_overlay.domain_set_overlay = Some(RoutingLabelOverlay {
+        prefix_len: 0,
+        dynamic_label_count: 1,
+        replaced: vec![learned_label.clone(), default_label.clone()].into(),
+    });
+    with_overlay.restore_cached_domain_set("中国域名");
+    assert!(
+        with_overlay
+            .routing
+            .domain_set
+            .as_ref()
+            .expect("domain_set")
+            .ptr_eq(&static_label)
+    );
+    assert_eq!(with_overlay.routing.effective_domain_set, None);
+
+    // 3. Live learning prefix superseding cached default keeps prefix SharedStr and
+    //    reuses replaced default SharedStr for effective_domain_set.
+    let mut learned = state();
+    learned.routing.domain_set = Some(learned_label.clone());
+    learned.domain_set_overlay = Some(RoutingLabelOverlay {
+        prefix_len: learned_label.len(),
+        dynamic_label_count: 1,
+        replaced: vec![learned_label.clone(), default_label.clone()].into(),
+    });
+    learned.restore_cached_domain_set("未命中");
+    assert!(
+        learned
+            .routing
+            .domain_set
+            .as_ref()
+            .expect("domain_set")
+            .ptr_eq(&learned_label)
+    );
+    assert!(
+        learned
+            .routing
+            .effective_domain_set
+            .as_ref()
+            .expect("effective_domain_set")
+            .ptr_eq(&default_label)
+    );
+
+    // 4. Expired learning-only cached label keeps current mapper default and
+    //    records effective_domain_set using overlay.replaced.
+    let mut expired = state();
+    expired.routing.domain_set = Some(default_label.clone());
+    expired.domain_set_overlay = Some(RoutingLabelOverlay {
+        prefix_len: 0,
+        dynamic_label_count: 1,
+        replaced: vec![learned_label.clone(), default_label.clone()].into(),
+    });
+    expired.restore_cached_domain_set("记忆无V4");
+    assert!(
+        expired
+            .routing
+            .domain_set
+            .as_ref()
+            .expect("domain_set")
+            .ptr_eq(&default_label)
+    );
+    assert!(
+        expired
+            .routing
+            .effective_domain_set
+            .as_ref()
+            .expect("effective_domain_set")
+            .ptr_eq(&learned_label)
+    );
+
+    // 5. Live learning prefix combined with non-superseded cached static label.
+    let mut combined = state();
+    combined.routing.domain_set = Some(learned_label.clone());
+    combined.domain_set_overlay = Some(RoutingLabelOverlay {
+        prefix_len: learned_label.len(),
+        dynamic_label_count: 1,
+        replaced: vec![learned_label, default_label].into(),
+    });
+    combined.restore_cached_domain_set("中国域名");
+    assert_eq!(
+        combined.routing.domain_set.as_deref(),
+        Some("记忆无V4|中国域名")
+    );
+    assert_eq!(
+        combined.routing.effective_domain_set.as_deref(),
+        Some("中国域名")
+    );
 }
 
 #[test]
@@ -61,15 +176,15 @@ fn state_snapshot_is_typed_owned_and_deterministic() {
     state.marks.extend([49, 7, 7]);
     state.fast_flags = 1 << 48;
     state.routing = RoutingState {
-        domain_set: Some("domain".to_owned()),
+        domain_set: Some("domain".into()),
         effective_domain_set: None,
         effective_tag: None,
-        matched_group: Some("group".to_owned()),
-        final_sequence: Some("sequence".to_owned()),
-        final_upstream: Some("upstream".to_owned()),
-        final_upstream_targets: Some("target-a,target-b".to_owned()),
-        selected_upstream: Some("selected".to_owned()),
-        matched_rule_source: Some("source".to_owned()),
+        matched_group: Some("group".into()),
+        final_sequence: Some("sequence".into()),
+        final_upstream: Some("upstream".into()),
+        final_upstream_targets: Some("target-a,target-b".into()),
+        selected_upstream: Some("selected".into()),
+        matched_rule_source: Some("source".into()),
     };
 
     let snapshot = state.snapshot();

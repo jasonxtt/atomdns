@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::{ExecutionState, StateMutation};
+use crate::{ExecutionState, SharedStr, StateMutation};
 
 const DEFAULT_REJECT_RCODE: u16 = 5;
 const MAX_REJECT_RCODE: u16 = 0x0fff;
@@ -195,7 +195,7 @@ pub struct MatcherSpec {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DispatchMetadata {
     None,
-    AnonymousQname { rule_name: String },
+    AnonymousQname { rule_name: SharedStr },
     Switch6,
     Switch5,
 }
@@ -449,9 +449,10 @@ impl ProgramSpec {
                 return Err(ProgramError::InternalInvariant);
             };
             let id = SequenceId(index);
+            let shared_name = SharedStr::from(sequence.name);
             let rules = normalize_rules(
                 sequence.rules,
-                &sequence.name,
+                &shared_name,
                 &sequence_ids,
                 &fixture_ids,
                 &external_ids,
@@ -460,8 +461,8 @@ impl ProgramSpec {
             )?;
             sequence_slots[index] = Some(ValidatedSequence {
                 id,
-                trace_name: sequence.name.clone(),
-                name: sequence.name,
+                trace_name: shared_name.clone(),
+                name: shared_name,
                 synthetic: false,
                 rules,
             });
@@ -488,7 +489,7 @@ impl ProgramSpec {
 pub struct ValidatedRule {
     pub matchers: Vec<MatcherSpec>,
     pub executable: Option<ValidatedExecutable>,
-    pub audit_source: Option<String>,
+    pub audit_source: Option<SharedStr>,
     /// The step-trace name of the rule's action; `None` when not reported.
     pub plugin_name: Option<String>,
 }
@@ -497,14 +498,14 @@ pub struct ValidatedRule {
 /// not appear in the public name catalog.
 pub struct ValidatedSequence {
     pub id: SequenceId,
-    pub name: String,
+    pub name: SharedStr,
     /// Whether this sequence is a synthetic multi-exec lowering rather than a
     /// configuration-named sequence. Only named sequences are real execution
     /// origins, so a synthetic scope must never be reported as one.
     pub synthetic: bool,
     /// The name this sequence reports its steps under: its own name, or for a
     /// synthetic inline sequence the named sequence it was lowered from.
-    pub trace_name: String,
+    pub trace_name: SharedStr,
     pub rules: Vec<ValidatedRule>,
 }
 
@@ -586,7 +587,7 @@ pub enum ProgramError {
 
 fn normalize_rules(
     rules: Vec<RuleSpec>,
-    owner: &str,
+    owner: &SharedStr,
     sequence_ids: &BTreeMap<String, SequenceId>,
     fixture_ids: &BTreeMap<String, ExecutableId>,
     external_ids: &BTreeMap<String, ExecutableId>,
@@ -613,7 +614,7 @@ fn normalize_rules(
             Ok(ValidatedRule {
                 matchers,
                 executable,
-                audit_source: rule.audit_source,
+                audit_source: rule.audit_source.map(SharedStr::from),
                 plugin_name: rule.plugin_name,
             })
         })
@@ -644,7 +645,7 @@ fn validate_matcher(input: MatcherSpecInput) -> Result<MatcherSpec, ProgramError
 
 fn normalize_executable_list(
     exec: Option<Vec<ExecutableSpec>>,
-    (owner, exec_names): (&str, &[String]),
+    (owner, exec_names): (&SharedStr, &[String]),
     sequence_ids: &BTreeMap<String, SequenceId>,
     fixture_ids: &BTreeMap<String, ExecutableId>,
     external_ids: &BTreeMap<String, ExecutableId>,
@@ -683,13 +684,13 @@ fn normalize_executable_list(
         sequence_slots,
         inline_counter,
     )?;
-    let name = format!("<inline:{}>", *inline_counter);
+    let name = SharedStr::from(format!("<inline:{}>", *inline_counter));
     *inline_counter += 1;
     sequence_slots[target.index()] = Some(ValidatedSequence {
         id: target,
         name,
         synthetic: true,
-        trace_name: owner.to_owned(),
+        trace_name: owner.clone(),
         rules,
     });
     Ok(Some(ValidatedExecutable::Inline { target }))

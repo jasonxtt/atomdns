@@ -46,7 +46,7 @@ fn fixture(index: u32) -> AuditRecord {
         terminal_outcome: QueryTerminalOutcome::SendSucceeded,
         response: ResponseState::Dns {
             rcode: u16::try_from(index % 4).unwrap(),
-            source: ResponseSource::Upstream("provider".to_owned()),
+            source: ResponseSource::Upstream("provider".into()),
         },
         response_details: ResponseDetails {
             rcode: u16::try_from(index % 4).unwrap(),
@@ -84,20 +84,20 @@ fn fixture(index: u32) -> AuditRecord {
         } else {
             CacheStatus::Miss
         },
-        final_sequence: Some("sequence".to_owned()),
+        final_sequence: Some("sequence".into()),
         matched_group: None,
         domain_set: match index % 3 {
             0 => None,
-            1 => Some(String::new()),
-            _ => Some("白名单|订阅代理".to_owned()),
+            1 => Some("".into()),
+            _ => Some("白名单|订阅代理".into()),
         },
-        effective_tag: Some("白名单".to_owned()),
-        matched_rule_source: Some("provider:测试".to_owned()),
-        final_upstream: Some("domestic".to_owned()),
-        upstream_targets: Some("tls://resolver.example:853".to_owned()),
-        selected_upstream: Some(peer.to_string()),
+        effective_tag: Some("白名单".into()),
+        matched_rule_source: Some("provider:测试".into()),
+        final_upstream: Some("domestic".into()),
+        upstream_targets: Some("tls://resolver.example:853".into()),
+        selected_upstream: Some(peer.to_string().into()),
         upstream_attempts: vec![UpstreamAttemptRecord {
-            upstream: "provider".to_owned(),
+            upstream: "provider".into(),
             outcome: UpstreamAttemptOutcome::Response,
         }],
         upstream_diagnostics: (!index.is_multiple_of(3)).then(|| UpstreamDiagnostics {
@@ -106,23 +106,23 @@ fn fixture(index: u32) -> AuditRecord {
                 UpstreamDiagnosticBranch {
                     id: 0,
                     parent_id: None,
-                    role: "root".to_owned(),
+                    role: "root".into(),
                     policy: None,
                     qtype: 1,
-                    decision: "response".to_owned(),
+                    decision: "response".into(),
                 },
                 UpstreamDiagnosticBranch {
                     id: 1,
                     parent_id: Some(0),
-                    role: "child".to_owned(),
-                    policy: Some("prefer_ipv4".to_owned()),
+                    role: "child".into(),
+                    policy: Some("prefer_ipv4".into()),
                     qtype: 28,
-                    decision: "canceled".to_owned(),
+                    decision: "canceled".into(),
                 },
             ],
             selected: Some(UpstreamDiagnosticSelected {
                 branch_id: Some(0),
-                entry: "provider".to_owned(),
+                entry: "provider".into(),
                 peer,
                 transport: UpstreamTransport::Tls,
             }),
@@ -139,7 +139,7 @@ fn fixture(index: u32) -> AuditRecord {
                 ordinal,
                 branch_id: Some(ordinal % 2),
                 qtype: Some(28),
-                entry: format!("entry-{ordinal}"),
+                entry: format!("entry-{ordinal}").into(),
                 peer: (ordinal % 2 == 0).then_some(peer),
                 transport: (ordinal % 2 == 0).then_some(UpstreamTransport::Tls),
                 outcome,
@@ -147,7 +147,7 @@ fn fixture(index: u32) -> AuditRecord {
             .collect(),
         }),
         failure_provenance: Some(FailureProvenance::UpstreamTimeout {
-            upstream: "failed-peer".to_owned(),
+            upstream: "failed-peer".into(),
         }),
     }
 }

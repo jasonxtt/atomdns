@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use atomdns_sequence_core::{
     ExecutionState, Executor, ExecutorError, ExecutorOutcome, MatchOutcome, Matcher, MatcherError,
-    ResponseState, RoutingField, StateMutation,
+    ResponseState, RoutingField, SharedStr, StateMutation,
 };
 
 /// The typed native representation of one `fast_mark` configuration.
@@ -127,9 +127,9 @@ impl Executor for MarkExecutor {
 /// The three routing fields accepted by the native `flow_setter` subset.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct FlowSetterConfig {
-    pub(crate) matched_group: Option<String>,
-    pub(crate) final_sequence: Option<String>,
-    pub(crate) final_upstream: Option<String>,
+    pub(crate) matched_group: Option<SharedStr>,
+    pub(crate) final_sequence: Option<SharedStr>,
+    pub(crate) final_upstream: Option<SharedStr>,
 }
 
 impl FlowSetterConfig {
@@ -158,7 +158,7 @@ impl FlowSetterConfig {
             "upstream" => &mut self.final_upstream,
             _ => return Err(format!("unknown flow_setter key `{key}`")),
         };
-        *slot = Some(value.to_owned());
+        *slot = Some(SharedStr::from(value));
         Ok(())
     }
 
@@ -274,13 +274,13 @@ fn response_rcode(response: &ResponseState) -> Option<i64> {
 /// `domain_set` label to store, where an empty label clears it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TagSetterConfig {
-    tag: Option<String>,
+    tag: Option<SharedStr>,
 }
 
 impl TagSetterConfig {
     pub(crate) fn new(tag: &str) -> Self {
         Self {
-            tag: (!tag.is_empty()).then(|| tag.to_owned()),
+            tag: (!tag.is_empty()).then(|| SharedStr::from(tag)),
         }
     }
 
@@ -292,7 +292,7 @@ impl TagSetterConfig {
 }
 
 struct TagSetterExecutor {
-    tag: Option<String>,
+    tag: Option<SharedStr>,
 }
 
 impl Executor for TagSetterExecutor {
@@ -463,7 +463,7 @@ mod tests {
         let mut state = state();
         state.apply_mutation(StateMutation::SetRouting {
             field: atomdns_sequence_core::RoutingField::MatchedRuleSource,
-            value: Some("source".to_owned()),
+            value: Some("source".into()),
         });
         TagSetterConfig::new("first")
             .executor()
@@ -492,7 +492,7 @@ mod tests {
         state.apply_mutation(StateMutation::AddMark(9));
         state.apply_mutation(StateMutation::SetRouting {
             field: atomdns_sequence_core::RoutingField::DomainSet,
-            value: Some("tag".to_owned()),
+            value: Some("tag".into()),
         });
         DropRespExecutor.execute(&mut state).unwrap();
         assert_eq!(state.response, ResponseState::None);

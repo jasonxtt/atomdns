@@ -39,6 +39,8 @@ mod runtime_snapshot;
 mod settings_api;
 #[doc(hidden)]
 pub mod settings_migrate;
+#[cfg(test)]
+mod shared_strings_tests;
 mod special_groups;
 mod standard_groups_api;
 mod static_ui;
@@ -59,6 +61,7 @@ pub use assembly::{
     AssemblyError, BoundHost, DnsServer, ForwardAdapter, HostAssembly, HostOptions, HostRunError,
     HostRuntime,
 };
+pub use atomdns_sequence_core::SharedStr;
 pub use cache::{
     CacheAdapterError, CacheCatalog, CacheClock, CacheTestClock, NativeCacheAdapter, PendingStore,
 };

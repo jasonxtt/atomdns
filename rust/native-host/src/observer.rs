@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use std::time::{Duration, SystemTime};
 
-use atomdns_sequence_core::ExecutableId;
+use atomdns_sequence_core::{ExecutableId, SharedStr};
 use atomdns_upstream_core::TransportCancellation;
 
 mod retention;
@@ -322,7 +322,7 @@ pub enum ResponseSource {
     /// The native host formed the response locally.
     Local,
     /// The named configured upstream supplied the final response.
-    Upstream(String),
+    Upstream(SharedStr),
 }
 
 /// Whether execution formed a DNS response, with its code and source when present.
@@ -389,7 +389,7 @@ impl UpstreamTransport {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct UpstreamDiagnosticSelected {
     pub branch_id: Option<usize>,
-    pub entry: String,
+    pub entry: SharedStr,
     pub peer: SocketAddr,
     pub transport: UpstreamTransport,
 }
@@ -400,7 +400,7 @@ pub struct UpstreamDiagnosticAttempt {
     pub ordinal: usize,
     pub branch_id: Option<usize>,
     pub qtype: Option<u16>,
-    pub entry: String,
+    pub entry: SharedStr,
     pub peer: Option<SocketAddr>,
     pub transport: Option<UpstreamTransport>,
     pub outcome: UpstreamAttemptOutcome,
@@ -412,10 +412,10 @@ pub struct UpstreamDiagnosticAttempt {
 pub struct UpstreamDiagnosticBranch {
     pub id: usize,
     pub parent_id: Option<usize>,
-    pub role: String,
-    pub policy: Option<String>,
+    pub role: SharedStr,
+    pub policy: Option<SharedStr>,
     pub qtype: u16,
-    pub decision: String,
+    pub decision: SharedStr,
 }
 
 /// Native-only schema 1 supplier diagnostics. Old supplier fields remain the
@@ -631,7 +631,7 @@ impl Drop for UpstreamAttemptTracker {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct UpstreamAttemptRecord {
     /// Configured upstream identity; never a query or client value.
-    pub upstream: String,
+    pub upstream: SharedStr,
     /// Outcome observed for this attempt.
     pub outcome: UpstreamAttemptOutcome,
 }
@@ -788,9 +788,9 @@ pub enum LocalFailureKind {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum FailureProvenance {
     /// An upstream leg timed out.
-    UpstreamTimeout { upstream: String },
+    UpstreamTimeout { upstream: SharedStr },
     /// An upstream leg failed without timing out.
-    UpstreamFailure { upstream: String },
+    UpstreamFailure { upstream: SharedStr },
     /// The native host failed locally.
     LocalFailure(LocalFailureKind),
 }
@@ -823,21 +823,21 @@ pub struct AuditRecord {
     /// Cache result for this query.
     pub cache_status: CacheStatus,
     /// Final executed sequence tag, if established.
-    pub final_sequence: Option<String>,
+    pub final_sequence: Option<SharedStr>,
     /// Configured matched group, when the sequence set one.
-    pub matched_group: Option<String>,
+    pub matched_group: Option<SharedStr>,
     /// Provider or inline rule identity that established the route.
-    pub domain_set: Option<String>,
+    pub domain_set: Option<SharedStr>,
     /// Effective product routing label, when provenance is known.
-    pub effective_tag: Option<String>,
+    pub effective_tag: Option<SharedStr>,
     /// Configuration-owned source descriptor, when established.
-    pub matched_rule_source: Option<String>,
+    pub matched_rule_source: Option<SharedStr>,
     /// Upstream that supplied the final response, if any.
-    pub final_upstream: Option<String>,
+    pub final_upstream: Option<SharedStr>,
     /// Configured targets belonging to the final supplying leg.
-    pub upstream_targets: Option<String>,
+    pub upstream_targets: Option<SharedStr>,
     /// Actual numeric endpoint that supplied the final wire.
-    pub selected_upstream: Option<String>,
+    pub selected_upstream: Option<SharedStr>,
     /// Actual upstream attempts in execution order.
     pub upstream_attempts: Vec<UpstreamAttemptRecord>,
     /// Optional native schema-versioned supplier facts.
@@ -1057,14 +1057,14 @@ pub(crate) struct TerminalObservation {
     pub response: ResponseState,
     pub response_details: ResponseDetails,
     pub cache_status: CacheStatus,
-    pub final_sequence: Option<String>,
-    pub matched_group: Option<String>,
-    pub domain_set: Option<String>,
-    pub effective_tag: Option<String>,
-    pub matched_rule_source: Option<String>,
-    pub final_upstream: Option<String>,
-    pub upstream_targets: Option<String>,
-    pub selected_upstream: Option<String>,
+    pub final_sequence: Option<SharedStr>,
+    pub matched_group: Option<SharedStr>,
+    pub domain_set: Option<SharedStr>,
+    pub effective_tag: Option<SharedStr>,
+    pub matched_rule_source: Option<SharedStr>,
+    pub final_upstream: Option<SharedStr>,
+    pub upstream_targets: Option<SharedStr>,
+    pub selected_upstream: Option<SharedStr>,
     pub upstream_attempts: UpstreamAttemptList,
     pub upstream_diagnostics: Option<UpstreamDiagnostics>,
     pub failure_provenance: Option<FailureProvenance>,
@@ -1100,19 +1100,19 @@ pub(crate) struct ExecutionCheckpoint {
     response: ResponseState,
     response_details: ResponseDetails,
     cache_status: CacheStatus,
-    final_sequence: Option<String>,
-    matched_group: Option<String>,
-    domain_set: Option<String>,
-    effective_tag: Option<String>,
-    matched_rule_source: Option<String>,
-    final_upstream: Option<String>,
-    upstream_targets: Option<String>,
-    selected_upstream: Option<String>,
+    final_sequence: Option<SharedStr>,
+    matched_group: Option<SharedStr>,
+    domain_set: Option<SharedStr>,
+    effective_tag: Option<SharedStr>,
+    matched_rule_source: Option<SharedStr>,
+    final_upstream: Option<SharedStr>,
+    upstream_targets: Option<SharedStr>,
+    selected_upstream: Option<SharedStr>,
     upstream_attempts: UpstreamAttemptList,
     upstream_diagnostics: Option<UpstreamDiagnostics>,
     attempt_ledger: UpstreamAttemptLedgerHandle,
     failure_provenance: Option<FailureProvenance>,
-    in_flight_upstream: Option<String>,
+    in_flight_upstream: Option<SharedStr>,
     completed_observation: Option<TerminalObservation>,
     /// The step trace of a running diagnostic capture, set at admission.
     step_trace: Option<Rc<dyn atomdns_sequence_core::StepTrace>>,
@@ -1179,7 +1179,7 @@ impl ExecutionCheckpoint {
     pub(crate) fn capture_partial(
         &mut self,
         observation: &TerminalObservation,
-        in_flight_upstream: Option<String>,
+        in_flight_upstream: Option<SharedStr>,
     ) {
         self.response = observation.response.clone();
         self.response_details = observation.response_details.clone();
@@ -2180,10 +2180,10 @@ mod tests {
     #[test]
     fn compact_retention_round_trips_complete_records_without_losing_optional_values() {
         let mut original = audit_record(observation(Duration::from_micros(123)), "a.example.");
-        original.domain_set = Some(String::new());
-        original.matched_rule_source = Some("provider:名单".to_owned());
+        original.domain_set = Some("".into());
+        original.matched_rule_source = Some("provider:名单".into());
         original.failure_provenance = Some(FailureProvenance::UpstreamTimeout {
-            upstream: "route-b".to_owned(),
+            upstream: "route-b".into(),
         });
         original.response_details.answers = vec![super::AuditAnswer {
             rrtype: 65000,
@@ -2211,7 +2211,8 @@ mod tests {
                         observer.record_terminal(event, |event| {
                             let mut record =
                                 audit_record(event, &format!("{worker}-{index}.example."));
-                            record.final_sequence = Some(format!("generation-{}", index / 8));
+                            record.final_sequence =
+                                Some(format!("generation-{}", index / 8).into());
                             record
                         });
                     }
@@ -2523,7 +2524,7 @@ mod tests {
         let mut attempts = UpstreamAttemptList::with_capacity_hint(3);
         assert!(attempts.is_inline());
         attempts.push(UpstreamAttemptRecord {
-            upstream: "route-a".to_owned(),
+            upstream: "route-a".into(),
             outcome: UpstreamAttemptOutcome::Response,
         });
         assert!(attempts.is_inline());
@@ -2531,7 +2532,7 @@ mod tests {
         assert_eq!(attempts[0].upstream, "route-a");
 
         attempts.push(UpstreamAttemptRecord {
-            upstream: "route-b".to_owned(),
+            upstream: "route-b".into(),
             outcome: UpstreamAttemptOutcome::Failed,
         });
         assert!(!attempts.is_inline());
@@ -2575,14 +2576,14 @@ mod tests {
             outcome: QueryTerminalOutcome::SendSucceeded,
             response: ResponseState::Dns {
                 rcode: 0,
-                source: ResponseSource::Upstream("route-a".to_owned()),
+                source: ResponseSource::Upstream("route-a".into()),
             },
             cache_status: CacheStatus::Miss,
-            final_sequence: Some("w1".to_owned()),
+            final_sequence: Some("w1".into()),
             matched_group: None,
             final_upstream: None,
             upstream_attempts: UpstreamAttemptList::from(vec![UpstreamAttemptRecord {
-                upstream: "route-a".to_owned(),
+                upstream: "route-a".into(),
                 outcome: UpstreamAttemptOutcome::Response,
             }]),
             failure_provenance: None,
@@ -2603,7 +2604,7 @@ mod tests {
             audit.records[0].response,
             ResponseState::Dns {
                 rcode: 0,
-                source: ResponseSource::Upstream("route-a".to_owned()),
+                source: ResponseSource::Upstream("route-a".into()),
             }
         );
         assert_eq!(audit.records[0].cache_status, CacheStatus::Miss);
@@ -2692,20 +2693,20 @@ mod tests {
                 outcome: QueryTerminalOutcome::NoResponse,
                 response: ResponseState::NoResponse,
                 cache_status: CacheStatus::Miss,
-                final_sequence: Some("entry".to_owned()),
+                final_sequence: Some("entry".into()),
                 matched_group: None,
                 final_upstream: None,
                 upstream_attempts: UpstreamAttemptList::from(vec![UpstreamAttemptRecord {
-                    upstream: "route-a".to_owned(),
+                    upstream: "route-a".into(),
                     outcome: UpstreamAttemptOutcome::Response,
                 }]),
                 failure_provenance: Some(FailureProvenance::UpstreamFailure {
-                    upstream: "route-a".to_owned(),
+                    upstream: "route-a".into(),
                 }),
                 elapsed: Duration::ZERO,
                 ..Default::default()
             },
-            Some("route-b".to_owned()),
+            Some("route-b".into()),
         );
         drop(guard);
 
@@ -2718,14 +2719,14 @@ mod tests {
         assert_eq!(
             record.upstream_attempts[1],
             UpstreamAttemptRecord {
-                upstream: "route-b".to_owned(),
+                upstream: "route-b".into(),
                 outcome: UpstreamAttemptOutcome::Interrupted,
             }
         );
         assert_eq!(
             record.failure_provenance,
             Some(FailureProvenance::UpstreamFailure {
-                upstream: "route-a".to_owned(),
+                upstream: "route-a".into(),
             })
         );
 
@@ -2741,7 +2742,7 @@ mod tests {
                 outcome: QueryTerminalOutcome::NoResponse,
                 response: ResponseState::NoResponse,
                 cache_status: CacheStatus::Undetermined,
-                final_sequence: Some("entry".to_owned()),
+                final_sequence: Some("entry".into()),
                 matched_group: None,
                 final_upstream: None,
                 upstream_attempts: UpstreamAttemptList::default(),
@@ -2749,7 +2750,7 @@ mod tests {
                 elapsed: Duration::ZERO,
                 ..Default::default()
             },
-            Some("route-a".to_owned()),
+            Some("route-a".into()),
         );
         cancellation.cancel();
         drop(guard);
@@ -2759,7 +2760,7 @@ mod tests {
         assert_eq!(
             audit.records[1].upstream_attempts,
             [UpstreamAttemptRecord {
-                upstream: "route-a".to_owned(),
+                upstream: "route-a".into(),
                 outcome: UpstreamAttemptOutcome::Canceled,
             }]
         );
@@ -2790,14 +2791,14 @@ mod tests {
             outcome: QueryTerminalOutcome::SendSucceeded,
             response: ResponseState::Dns {
                 rcode: 0,
-                source: ResponseSource::Upstream("route-a".to_owned()),
+                source: ResponseSource::Upstream("route-a".into()),
             },
             cache_status: CacheStatus::Miss,
-            final_sequence: Some("entry".to_owned()),
+            final_sequence: Some("entry".into()),
             matched_group: None,
             final_upstream: None,
             upstream_attempts: UpstreamAttemptList::from(vec![UpstreamAttemptRecord {
-                upstream: "route-a".to_owned(),
+                upstream: "route-a".into(),
                 outcome: UpstreamAttemptOutcome::Response,
             }]),
             failure_provenance: None,
@@ -2820,9 +2821,9 @@ mod tests {
             terminal_outcome: observation.outcome,
             response: observation.response,
             cache_status: observation.cache_status,
-            final_sequence: Some("entry".to_owned()),
+            final_sequence: Some("entry".into()),
             matched_group: None,
-            final_upstream: Some("route-a".to_owned()),
+            final_upstream: Some("route-a".into()),
             upstream_attempts: observation.upstream_attempts.into_vec(),
             upstream_diagnostics: observation.upstream_diagnostics,
             failure_provenance: None,
@@ -2928,7 +2929,7 @@ mod tests {
     fn failure_provenance_has_typed_upstream_and_local_cases() {
         assert_ne!(
             FailureProvenance::UpstreamTimeout {
-                upstream: "route-a".to_owned()
+                upstream: "route-a".into()
             },
             FailureProvenance::LocalFailure(LocalFailureKind::NoUsableUpstreamResponse)
         );
@@ -2942,7 +2943,7 @@ mod tests {
                 QueryTerminalOutcome::SendSucceeded,
                 ResponseState::Dns {
                     rcode: 0,
-                    source: ResponseSource::Upstream("route-a".to_owned()),
+                    source: ResponseSource::Upstream("route-a".into()),
                 },
                 CacheStatus::Hit,
                 vec![],
@@ -2955,7 +2956,7 @@ mod tests {
                 },
                 CacheStatus::Miss,
                 vec![UpstreamAttemptRecord {
-                    upstream: "route-b".to_owned(),
+                    upstream: "route-b".into(),
                     outcome: UpstreamAttemptOutcome::Failed,
                 }],
             ),
@@ -2964,7 +2965,7 @@ mod tests {
                 ResponseState::NoResponse,
                 CacheStatus::NotApplicable,
                 vec![UpstreamAttemptRecord {
-                    upstream: "route-b".to_owned(),
+                    upstream: "route-b".into(),
                     outcome: UpstreamAttemptOutcome::TimedOut,
                 }],
             ),
@@ -2973,7 +2974,7 @@ mod tests {
                 ResponseState::NoResponse,
                 CacheStatus::Miss,
                 vec![UpstreamAttemptRecord {
-                    upstream: "unconfigured-route".to_owned(),
+                    upstream: "unconfigured-route".into(),
                     outcome: UpstreamAttemptOutcome::Response,
                 }],
             ),

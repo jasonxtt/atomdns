@@ -388,7 +388,7 @@ impl Matcher for ErrorMatcher {
 fn caller_state(marker: u32) -> ExecutionState {
     let mut state = state(1);
     state.marks.insert(marker);
-    state.routing.matched_rule_source = Some("caller-owned".to_owned());
+    state.routing.matched_rule_source = Some("caller-owned".into());
     state
 }
 
@@ -434,7 +434,7 @@ fn matcher_dispatch_applies_ordered_mutations_before_reverse_and_metadata() {
                         }),
                         false,
                         DispatchMetadata::AnonymousQname {
-                            rule_name: "rule-a".to_owned(),
+                            rule_name: "rule-a".into(),
                         },
                     ),
                 ],
@@ -482,7 +482,7 @@ fn reverse_keeps_matcher_mutation_but_skips_positive_metadata_and_executable() {
                     }),
                     true,
                     DispatchMetadata::AnonymousQname {
-                        rule_name: "must-not-appear".to_owned(),
+                        rule_name: "must-not-appear".into(),
                     },
                 )],
                 Some(vec![fixture_exec("exec")]),

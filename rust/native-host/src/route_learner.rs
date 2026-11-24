@@ -150,21 +150,30 @@ impl Shared {
     }
 }
 
+/// Maximum number of categories for which all non-empty subset label/source
+/// combinations are precomputed into a bitmask table (`2^6 = 64` entries).
+const PRECOMPUTED_CATEGORY_LIMIT: usize = 6;
+
 /// What a lookup found for one name.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct LearnedHit {
     /// Fast-flag bits (bit `mark` per category).
     pub(crate) flags: u64,
     /// Joined labels.
-    pub(crate) tags: String,
+    pub(crate) tags: Arc<str>,
     /// Joined rule sources.
-    pub(crate) sources: String,
+    pub(crate) sources: Arc<str>,
 }
 
 /// The runtime owner of one `route_learner` plugin.
 pub struct RouteLearner {
     pub tag: String,
     settings: Arc<Settings>,
+    /// Pre-normalised `(tags, sources)` per single category.
+    category_labels: Vec<(Arc<str>, Arc<str>)>,
+    /// When `categories.len() <= PRECOMPUTED_CATEGORY_LIMIT`, precomputed
+    /// `(tags, sources)` indexed by matched-category bitmask.
+    combo_labels: Vec<(Arc<str>, Arc<str>)>,
     shared: RefCell<Rc<RefCell<Shared>>>,
     phase: Cell<Phase>,
     started: Cell<bool>,
@@ -195,9 +204,48 @@ pub struct RouteLearnConfig {
 impl RouteLearner {
     pub(crate) fn new(tag: &str, settings: Settings) -> Self {
         let tags = settings.categories.iter().map(|c| c.tag.clone()).collect();
+        let category_labels: Vec<(Arc<str>, Arc<str>)> = settings
+            .categories
+            .iter()
+            .map(|c| {
+                (
+                    Arc::from(append_joined("", &c.label)),
+                    Arc::from(append_joined("", &c.source)),
+                )
+            })
+            .collect();
+        let combo_labels = if settings.categories.len() <= PRECOMPUTED_CATEGORY_LIMIT {
+            let empty: Arc<str> = Arc::from("");
+            let combinations = 1_usize << settings.categories.len();
+            let mut table = Vec::with_capacity(combinations);
+            for mask in 0..combinations {
+                if mask == 0 {
+                    table.push((Arc::clone(&empty), Arc::clone(&empty)));
+                } else if mask.count_ones() == 1 {
+                    let index = mask.trailing_zeros() as usize;
+                    let (label, source) = &category_labels[index];
+                    table.push((Arc::clone(label), Arc::clone(source)));
+                } else {
+                    let mut joined_tags = String::new();
+                    let mut joined_sources = String::new();
+                    for (index, spec) in settings.categories.iter().enumerate() {
+                        if mask & (1 << index) != 0 {
+                            joined_tags = append_joined(&joined_tags, &spec.label);
+                            joined_sources = append_joined(&joined_sources, &spec.source);
+                        }
+                    }
+                    table.push((Arc::from(joined_tags), Arc::from(joined_sources)));
+                }
+            }
+            table
+        } else {
+            Vec::new()
+        };
         Self {
             tag: tag.to_owned(),
             settings: Arc::new(settings),
+            category_labels,
+            combo_labels,
             shared: RefCell::new(Rc::new(RefCell::new(Shared::new(tags)))),
             phase: Cell::new(Phase::Running),
             started: Cell::new(false),
@@ -241,7 +289,12 @@ impl RouteLearner {
             return None;
         }
         let now = state.now();
-        let mut hit: Option<LearnedHit> = None;
+        let mut flags = 0_u64;
+        let mut matched_mask = 0_usize;
+        let mut matched_count = 0_usize;
+        let mut first_index = 0_usize;
+        let mut overflow: Option<(String, String)> = None;
+        let use_combo = !self.combo_labels.is_empty();
         let mut expired = 0_u64;
         let mut touched = false;
         for (index, spec) in self.settings.categories.iter().enumerate() {
@@ -259,16 +312,22 @@ impl RouteLearner {
             }
             entry.hits = entry.hits.saturating_add(1);
             touched = true;
-            let found = hit.get_or_insert_with(|| LearnedHit {
-                flags: 0,
-                tags: String::new(),
-                sources: String::new(),
-            });
+            matched_count += 1;
             if spec.mark < 64 {
-                found.flags |= 1 << spec.mark;
+                flags |= 1 << spec.mark;
             }
-            found.tags = append_joined(&found.tags, &spec.label);
-            found.sources = append_joined(&found.sources, &spec.source);
+            if use_combo {
+                matched_mask |= 1 << index;
+            } else if matched_count == 1 {
+                first_index = index;
+            } else {
+                let (tags, sources) = overflow.get_or_insert_with(|| {
+                    let (first_tags, first_sources) = &self.category_labels[first_index];
+                    (first_tags.to_string(), first_sources.to_string())
+                });
+                *tags = append_joined(tags, &spec.label);
+                *sources = append_joined(sources, &spec.source);
+            }
         }
         if expired > 0 {
             state.counters.expired += expired;
@@ -277,7 +336,24 @@ impl RouteLearner {
         if touched {
             state.hits_dirty = true;
         }
-        hit
+        if matched_count == 0 {
+            return None;
+        }
+        let (tags, sources) = if use_combo {
+            let (tags, sources) = &self.combo_labels[matched_mask];
+            (Arc::clone(tags), Arc::clone(sources))
+        } else if matched_count == 1 {
+            let (tags, sources) = &self.category_labels[first_index];
+            (Arc::clone(tags), Arc::clone(sources))
+        } else {
+            let (tags, sources) = overflow.expect("multiple matches populate overflow");
+            (Arc::from(tags), Arc::from(sources))
+        };
+        Some(LearnedHit {
+            flags,
+            tags,
+            sources,
+        })
     }
 
     /// Confirms `qname` (DNS wire form) in `categories` on behalf of rule
@@ -1170,12 +1246,12 @@ mod tests {
         l.learn(&[0, 1], reason, &wire("both.example"));
         let hit = l.lookup("MIXED.example.").unwrap();
         assert_eq!(hit.flags, 1 << 11);
-        assert_eq!(hit.tags, "DIRECT");
-        assert_eq!(hit.sources, "direct-source");
+        assert_eq!(hit.tags.as_ref(), "DIRECT");
+        assert_eq!(hit.sources.as_ref(), "direct-source");
         let both = l.lookup("both.example.").unwrap();
         assert_eq!(both.flags, (1 << 4) | (1 << 11));
-        assert_eq!(both.tags, "SPECIAL|DIRECT");
-        assert_eq!(both.sources, "special-source|direct-source");
+        assert_eq!(both.tags.as_ref(), "SPECIAL|DIRECT");
+        assert_eq!(both.sources.as_ref(), "special-source|direct-source");
         assert!(l.lookup("other.example.").is_none());
         // The root and an empty name are never recorded.
         l.learn(&[0], reason, &[0]);
@@ -1371,5 +1447,55 @@ mod tests {
         alone.fence();
         alone.learn(&[1], reason, &wire("d.example"));
         assert!(alone.names("direct").is_empty());
+    }
+
+    #[test]
+    fn lookup_shares_precomputed_arcs_for_single_and_combined_categories() {
+        let l = two(PathBuf::from("unused.json"));
+        l.learn(&[1], "rule", &wire("a.example"));
+        l.learn(&[1], "rule", &wire("b.example"));
+        l.learn(&[0, 1], "rule", &wire("c.example"));
+        l.learn(&[0, 1], "rule", &wire("d.example"));
+
+        let s1 = l.lookup("a.example.").unwrap();
+        let s2 = l.lookup("b.example.").unwrap();
+        assert!(Arc::ptr_eq(&s1.tags, &s2.tags));
+        assert!(Arc::ptr_eq(&s1.sources, &s2.sources));
+
+        let m1 = l.lookup("c.example.").unwrap();
+        let m2 = l.lookup("d.example.").unwrap();
+        assert!(Arc::ptr_eq(&m1.tags, &m2.tags));
+        assert!(Arc::ptr_eq(&m1.sources, &m2.sources));
+        assert_eq!(m1.tags.as_ref(), "SPECIAL|DIRECT");
+        assert_eq!(m1.sources.as_ref(), "special-source|direct-source");
+
+        // Above the precomputed bitmask limit, single-category hits still share
+        // and multi-category hits preserve exact joined output.
+        let many_specs: Vec<_> = (0..8)
+            .map(|i| {
+                spec(
+                    &format!("c{i}"),
+                    u8::try_from(i + 1).unwrap(),
+                    &format!("L{i}"),
+                    100,
+                    10,
+                )
+            })
+            .collect();
+        let many = learner(PathBuf::from("unused.json"), many_specs);
+        many.learn(&[2], "rule", &wire("one.example"));
+        many.learn(&[2], "rule", &wire("two.example"));
+        many.learn(&[1, 6], "rule", &wire("combo.example"));
+
+        let o1 = many.lookup("one.example.").unwrap();
+        let o2 = many.lookup("two.example.").unwrap();
+        assert!(Arc::ptr_eq(&o1.tags, &o2.tags));
+        assert!(Arc::ptr_eq(&o1.sources, &o2.sources));
+        assert_eq!(o1.tags.as_ref(), "L2");
+
+        let combo = many.lookup("combo.example.").unwrap();
+        assert_eq!(combo.flags, (1 << 2) | (1 << 7));
+        assert_eq!(combo.tags.as_ref(), "L1|L6");
+        assert_eq!(combo.sources.as_ref(), "c1-source|c6-source");
     }
 }

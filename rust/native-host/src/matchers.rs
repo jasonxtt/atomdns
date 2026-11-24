@@ -7,22 +7,46 @@ use atomdns_dns_core::observe_answer_addresses;
 use atomdns_matcher_core::IpPrefixList;
 use atomdns_matcher_core::MixMatcher;
 use atomdns_sequence_core::{
-    ExecutionState, MatchOutcome, Matcher, MatcherError, ResponseState, StateMutation,
+    ExecutionState, MatchOutcome, Matcher, MatcherError, ResponseState, SharedStr, StateMutation,
 };
 
 use crate::managed::DomainSetHandle;
 use crate::policy::IpListHandle;
+
+struct QnameGroup {
+    /// Pre-split `domain_set:<tag>` label (`Some(tag)`) for provider groups;
+    /// `None` for anonymous inline qname groups.
+    domain_set: Option<SharedStr>,
+    /// Pre-built `domain_set:<tag>` provenance string for provider groups;
+    /// `None` for anonymous inline qname groups.
+    matched_rule_source: Option<SharedStr>,
+    set: DomainSetHandle,
+}
 
 /// One qname matcher plus every domain set it consults. A match is true when
 /// any consulted set matches, preserving the configured reference order. A
 /// managed set is read through its current published generation at every
 /// evaluation, so a POST is visible to the very next query.
 pub(crate) struct QnameMatcher {
-    groups: Vec<(String, DomainSetHandle)>,
+    groups: Vec<QnameGroup>,
 }
 
 impl QnameMatcher {
     pub(crate) fn new(groups: Vec<(String, DomainSetHandle)>) -> Self {
+        let groups = groups
+            .into_iter()
+            .map(|(source, set)| {
+                let (domain_set, matched_rule_source) = match source.strip_prefix("domain_set:") {
+                    Some(tag) => (Some(SharedStr::from(tag)), Some(SharedStr::from(source))),
+                    None => (None, None),
+                };
+                QnameGroup {
+                    domain_set,
+                    matched_rule_source,
+                    set,
+                }
+            })
+            .collect();
         Self { groups }
     }
 }
@@ -36,30 +60,29 @@ impl Matcher for QnameMatcher {
         let presentation = self
             .groups
             .iter()
-            .any(|(_, set)| set.uses_presentation_name())
+            .any(|group| group.set.uses_presentation_name())
             .then(|| crate::config::presentation_name(wire))
             .flatten();
-        let Some((source, _set)) = self.groups.iter().find(|(_, set)| {
-            let name = if set.uses_presentation_name() {
+        let Some(group) = self.groups.iter().find(|group| {
+            let name = if group.set.uses_presentation_name() {
                 presentation.as_deref()
             } else {
                 hostname.as_deref()
             };
-            name.is_some_and(|name| set.matches(name))
+            name.is_some_and(|name| group.set.matches(name))
         }) else {
             return Ok(MatchOutcome::new(false, None));
         };
-        let is_provider = source.starts_with("domain_set:");
         Ok(MatchOutcome::new(
             true,
             Some(StateMutation::SetRoutingFields {
-                domain_set: is_provider.then(|| source["domain_set:".len()..].to_owned()),
+                domain_set: group.domain_set.clone(),
                 effective_tag: None,
                 // Inline qname identity is owned by the containing YAML
                 // rule. The compiler installs that identity only after all
                 // matchers succeed, so the matcher must not publish its
                 // helper path as public provenance.
-                matched_rule_source: is_provider.then(|| source.clone()),
+                matched_rule_source: group.matched_rule_source.clone(),
             }),
         ))
     }

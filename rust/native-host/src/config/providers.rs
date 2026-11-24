@@ -19,7 +19,8 @@ use atomdns_matcher_core::{
     decode_domain_srs, decode_ip_srs,
 };
 use atomdns_sequence_core::{
-    ExecutionState, Executor, ExecutorError, ExecutorOutcome, RoutingField, StateMutation,
+    ExecutionState, Executor, ExecutorError, ExecutorOutcome, RoutingField, SharedStr,
+    StateMutation,
 };
 
 use super::{
@@ -1120,8 +1121,8 @@ pub struct DomainMapperConfig {
     /// of a matcher generation: a rebuild neither clears nor reads it.
     pub(crate) learner: Rc<LearnerSlot>,
     default_mark: u8,
-    default_ctx_mark: u32,
-    default_tag: String,
+    default_ctx_marks: Arc<[u32]>,
+    default_tag: Arc<str>,
 }
 
 /// The learner a mapper merges into its results (`route_learner`'s
@@ -1130,7 +1131,7 @@ pub struct DomainMapperConfig {
 #[derive(Default)]
 pub(crate) struct LearnerSlot {
     learner: std::cell::RefCell<Option<Rc<crate::route_learner::RouteLearner>>>,
-    labels: std::cell::RefCell<Arc<[String]>>,
+    labels: std::cell::RefCell<Arc<[SharedStr]>>,
 }
 
 impl LearnerSlot {
@@ -1144,18 +1145,18 @@ impl LearnerSlot {
         if slot.is_some() {
             return false;
         }
-        let mut labels: Vec<String> = learner
+        let mut labels: Vec<SharedStr> = learner
             .settings()
             .categories
             .iter()
-            .map(|c| c.label.trim().to_owned())
+            .map(|c| SharedStr::from(c.label.trim()))
             .collect();
         labels.extend(
             default_tag
                 .split('|')
                 .map(str::trim)
                 .filter(|tag| !tag.is_empty())
-                .map(str::to_owned),
+                .map(SharedStr::from),
         );
         *self.labels.borrow_mut() = labels.into();
         *slot = Some(learner);
@@ -1234,6 +1235,53 @@ pub struct MapperOutcome {
     pub matched: bool,
 }
 
+/// Internal shared evaluation result used on the query hot path so single-source
+/// mapper/learner hits avoid allocating new strings or mark vectors.
+struct EvalOutcome {
+    fast_flags: u64,
+    ctx_marks: Arc<[u32]>,
+    domain_set: Option<Arc<str>>,
+    matched_rule_source: Option<Arc<str>>,
+    matched: bool,
+}
+
+impl EvalOutcome {
+    fn into_public(self) -> MapperOutcome {
+        MapperOutcome {
+            fast_flags: self.fast_flags,
+            ctx_marks: self.ctx_marks.to_vec(),
+            domain_set: self.domain_set.map(|s| s.to_string()),
+            matched_rule_source: self.matched_rule_source.map(|s| s.to_string()),
+            matched: self.matched,
+        }
+    }
+}
+
+fn empty_marks() -> Arc<[u32]> {
+    static EMPTY: std::sync::LazyLock<Arc<[u32]>> = std::sync::LazyLock::new(|| Arc::from([]));
+    Arc::clone(&EMPTY)
+}
+
+fn merge_shared_joined(prefix: &Arc<str>, suffix: Option<Arc<str>>) -> Option<Arc<str>> {
+    match (prefix.is_empty(), suffix) {
+        (true, None) => None,
+        (true, Some(s)) => (!s.is_empty()).then_some(s),
+        (false, None) => Some(Arc::clone(prefix)),
+        (false, Some(s)) if s.is_empty() => Some(Arc::clone(prefix)),
+        (false, Some(s)) => {
+            if s.split('|')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .all(|part| prefix.split('|').any(|have| have.trim() == part))
+            {
+                return Some(Arc::clone(prefix));
+            }
+            let merged = append_joined(prefix, &s);
+            (!merged.is_empty()).then(|| Arc::from(merged))
+        }
+    }
+}
+
 impl DomainMapperConfig {
     pub(super) fn default_tag(&self) -> &str {
         &self.default_tag
@@ -1257,14 +1305,14 @@ impl DomainMapperConfig {
     /// Evaluates a presentation-form query name (no trailing dot required).
     #[must_use]
     pub fn evaluate(&self, name: Option<&str>) -> MapperOutcome {
-        self.evaluate_with_overlay(name).0
+        self.evaluate_with_overlay(name).0.into_public()
     }
 
     fn evaluate_with_overlay(
         &self,
         name: Option<&str>,
     ) -> (
-        MapperOutcome,
+        EvalOutcome,
         Option<atomdns_sequence_core::RoutingLabelOverlay>,
     ) {
         let matcher = self.matcher.get();
@@ -1276,35 +1324,31 @@ impl DomainMapperConfig {
                 replaced: Arc::clone(&self.learner.labels.borrow()),
             }
         });
-        if let Some(result) = name.and_then(|name| matcher.r#match(name)) {
+        if let Some(result) = name.and_then(|name| matcher.match_shared(name)) {
             // Rule mark `m` is stored as bit `m - 1` of the result mask and
             // set as fast flag `m`.
-            let mut outcome = MapperOutcome {
+            let mut outcome = EvalOutcome {
                 fast_flags: result.fast_marks << 1,
-                ctx_marks: result.ctx_marks,
-                domain_set: (!result.joined_tags.is_empty()).then_some(result.joined_tags),
+                ctx_marks: Arc::clone(&result.ctx_marks),
+                domain_set: (!result.joined_tags.is_empty())
+                    .then(|| Arc::clone(&result.joined_tags)),
                 matched_rule_source: (!result.joined_sources.is_empty())
-                    .then_some(result.joined_sources),
+                    .then(|| Arc::clone(&result.joined_sources)),
                 matched: true,
             };
             if let Some(learned) = hot {
                 outcome.fast_flags |= learned.flags;
-                let merged =
-                    append_joined(&learned.tags, outcome.domain_set.as_deref().unwrap_or(""));
-                outcome.domain_set = (!merged.is_empty()).then_some(merged);
-                let sources = append_joined(
-                    &learned.sources,
-                    outcome.matched_rule_source.as_deref().unwrap_or(""),
-                );
-                outcome.matched_rule_source = (!sources.is_empty()).then_some(sources);
+                outcome.domain_set = merge_shared_joined(&learned.tags, outcome.domain_set);
+                outcome.matched_rule_source =
+                    merge_shared_joined(&learned.sources, outcome.matched_rule_source);
             }
             return (outcome, overlay);
         }
         if let Some(learned) = hot {
             return (
-                MapperOutcome {
+                EvalOutcome {
                     fast_flags: learned.flags,
-                    ctx_marks: Vec::new(),
+                    ctx_marks: empty_marks(),
                     domain_set: (!learned.tags.is_empty()).then_some(learned.tags),
                     matched_rule_source: (!learned.sources.is_empty()).then_some(learned.sources),
                     matched: true,
@@ -1313,18 +1357,14 @@ impl DomainMapperConfig {
             );
         }
         (
-            MapperOutcome {
+            EvalOutcome {
                 fast_flags: if self.default_mark == 0 {
                     0
                 } else {
                     1 << self.default_mark
                 },
-                ctx_marks: if self.default_ctx_mark == 0 {
-                    Vec::new()
-                } else {
-                    vec![self.default_ctx_mark]
-                },
-                domain_set: (!self.default_tag.is_empty()).then(|| self.default_tag.clone()),
+                ctx_marks: Arc::clone(&self.default_ctx_marks),
+                domain_set: (!self.default_tag.is_empty()).then(|| Arc::clone(&self.default_tag)),
                 matched_rule_source: None,
                 matched: false,
             },
@@ -1352,19 +1392,19 @@ impl Executor for MapperExecutor {
                 state.fast_flags | outcome.fast_flags,
             ));
         }
-        for mark in outcome.ctx_marks {
+        for &mark in outcome.ctx_marks.iter() {
             state.apply_mutation(StateMutation::AddMark(mark));
         }
         if let Some(tags) = outcome.domain_set {
             state.apply_mutation(StateMutation::SetRouting {
                 field: RoutingField::DomainSet,
-                value: Some(tags),
+                value: Some(SharedStr::from(tags)),
             });
         }
         if let Some(sources) = outcome.matched_rule_source {
             state.apply_mutation(StateMutation::SetRouting {
                 field: RoutingField::MatchedRuleSource,
-                value: Some(sources),
+                value: Some(SharedStr::from(sources)),
             });
         }
         // A no-op mapper must not discard a preceding mapper's live labels.
@@ -1542,8 +1582,12 @@ impl MapperSpec {
             matcher: Rc::new(crate::rule_sources::Live::new(matcher)),
             learner: Rc::new(LearnerSlot::default()),
             default_mark: self.default_mark,
-            default_ctx_mark: self.default_ctx_mark,
-            default_tag: self.default_tag.clone(),
+            default_ctx_marks: if self.default_ctx_mark == 0 {
+                empty_marks()
+            } else {
+                Arc::from([self.default_ctx_mark])
+            },
+            default_tag: Arc::from(self.default_tag.as_str()),
         }
     }
 }

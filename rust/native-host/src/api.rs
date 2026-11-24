@@ -1811,18 +1811,18 @@ fn project_log(record: &AuditRecord) -> AuditLogResponse {
             record.response_details.answer_details_status,
         ),
         answer_decode_error: record.response_details.answer_decode_error.clone(),
-        domain_set: record.domain_set.clone(),
-        effective_tag: record.effective_tag.clone(),
-        matched_group: record.matched_group.clone(),
-        final_sequence: record.final_sequence.clone(),
-        final_upstream: record.final_upstream.clone(),
-        upstream_targets: record.upstream_targets.clone(),
-        selected_upstream: record.selected_upstream.clone(),
+        domain_set: record.domain_set.as_deref().map(str::to_owned),
+        effective_tag: record.effective_tag.as_deref().map(str::to_owned),
+        matched_group: record.matched_group.as_deref().map(str::to_owned),
+        final_sequence: record.final_sequence.as_deref().map(str::to_owned),
+        final_upstream: record.final_upstream.as_deref().map(str::to_owned),
+        upstream_targets: record.upstream_targets.as_deref().map(str::to_owned),
+        selected_upstream: record.selected_upstream.as_deref().map(str::to_owned),
         upstream_diagnostics: record
             .upstream_diagnostics
             .as_ref()
             .map(project_upstream_diagnostics),
-        matched_rule_source: record.matched_rule_source.clone(),
+        matched_rule_source: record.matched_rule_source.as_deref().map(str::to_owned),
     }
 }
 
@@ -1835,10 +1835,10 @@ fn project_upstream_diagnostics(diagnostics: &UpstreamDiagnostics) -> AuditUpstr
             .map(|branch| AuditUpstreamBranch {
                 id: branch.id,
                 parent_id: branch.parent_id,
-                role: branch.role.clone(),
-                policy: branch.policy.clone(),
+                role: branch.role.as_str().to_owned(),
+                policy: branch.policy.as_deref().map(str::to_owned),
                 qtype: branch.qtype,
-                decision: branch.decision.clone(),
+                decision: branch.decision.as_str().to_owned(),
             })
             .collect(),
         selected: diagnostics
@@ -1846,7 +1846,7 @@ fn project_upstream_diagnostics(diagnostics: &UpstreamDiagnostics) -> AuditUpstr
             .as_ref()
             .map(|selected| AuditUpstreamSelected {
                 branch_id: selected.branch_id,
-                entry: selected.entry.clone(),
+                entry: selected.entry.as_str().to_owned(),
                 peer: selected.peer.to_string(),
                 transport: selected.transport.as_str(),
             }),
@@ -1857,7 +1857,7 @@ fn project_upstream_diagnostics(diagnostics: &UpstreamDiagnostics) -> AuditUpstr
                 ordinal: attempt.ordinal,
                 branch_id: attempt.branch_id,
                 qtype: attempt.qtype,
-                entry: attempt.entry.clone(),
+                entry: attempt.entry.as_str().to_owned(),
                 peer: attempt.peer.map(|peer| peer.to_string()),
                 transport: attempt.transport.map(|transport| transport.as_str()),
                 outcome: match attempt.outcome {
@@ -2216,11 +2216,11 @@ fn audit_record_matches(record: &RetainedAuditRecord, filter: &AuditFilter) -> b
     let domain_set_match = filter
         .domain_set
         .as_ref()
-        .is_none_or(|value| record.common().domain_set.as_deref() == Some(value));
+        .is_none_or(|value| record.common().domain_set.as_deref() == Some(value.as_str()));
     let effective_match = filter
         .effective_tag
         .as_ref()
-        .is_none_or(|value| record.common().effective_tag.as_deref() == Some(value));
+        .is_none_or(|value| record.common().effective_tag.as_deref() == Some(value.as_str()));
     let exact_domain_match = filter
         .exact_domain
         .as_ref()

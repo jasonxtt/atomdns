@@ -70,9 +70,9 @@ impl<'a> From<&'a ValuedRule> for ValuedRuleRef<'a> {
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ValuedMatchResult {
     pub fast_marks: u64,
-    pub ctx_marks: Vec<u32>,
-    pub joined_tags: String,
-    pub joined_sources: String,
+    pub ctx_marks: Arc<[u32]>,
+    pub joined_tags: Arc<str>,
+    pub joined_sources: Arc<str>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -132,9 +132,9 @@ impl AccumulatedResult {
     fn into_result(self) -> ValuedMatchResult {
         ValuedMatchResult {
             fast_marks: self.fast_marks,
-            ctx_marks: self.ctx_marks.into_iter().collect(),
-            joined_tags: self.joined_tags,
-            joined_sources: self.joined_sources,
+            ctx_marks: self.ctx_marks.into_iter().collect::<Vec<_>>().into(),
+            joined_tags: Arc::from(self.joined_tags),
+            joined_sources: Arc::from(self.joined_sources),
         }
     }
 }
@@ -424,6 +424,14 @@ impl ValuedDomainMatcher {
     /// Matches a query and merges full, domain, keyword, and regexp results.
     #[must_use]
     pub fn r#match(&self, name: &str) -> Option<ValuedMatchResult> {
+        self.match_shared(name).map(|result| (*result).clone())
+    }
+
+    /// Matches a query and returns the shared pooled result directly when a
+    /// single rule source matches (or later matches add nothing new), avoiding
+    /// per-query string and mark-list allocations.
+    #[must_use]
+    pub fn match_shared(&self, name: &str) -> Option<Arc<ValuedMatchResult>> {
         if !name.is_ascii() {
             return None;
         }
@@ -435,10 +443,10 @@ impl ValuedDomainMatcher {
         let mut merged = self
             .full
             .get(full.as_bytes())
-            .map(|id| self.results[id].as_ref().clone());
+            .map(|id| Arc::clone(&self.results[id]));
 
         if let Some(id) = self.domain.suffix(&suffix_key(normalized)) {
-            merged = Some(merge_results(merged, &self.results[id]));
+            merged = Some(merge_shared(merged, &self.results[id]));
         }
 
         for overlap in &self.overlaps {
@@ -452,10 +460,10 @@ impl ValuedDomainMatcher {
             if matches {
                 let result = match overlap {
                     OverlapRule::Keyword { result, .. } | OverlapRule::Regexp { result, .. } => {
-                        result.as_ref()
+                        result
                     }
                 };
-                merged = Some(merge_results(merged, result));
+                merged = Some(merge_shared(merged, result));
             }
         }
 
@@ -579,24 +587,74 @@ fn intern_result(
     id
 }
 
-fn merge_results(
-    current: Option<ValuedMatchResult>,
-    next: &ValuedMatchResult,
-) -> ValuedMatchResult {
-    let mut merged = current.map_or_else(AccumulatedResult::default, |result| AccumulatedResult {
-        fast_marks: result.fast_marks,
-        ctx_marks: result.ctx_marks.into_iter().collect(),
-        joined_tags: result.joined_tags,
-        joined_sources: result.joined_sources,
-    });
-    let next = AccumulatedResult {
-        fast_marks: next.fast_marks,
-        ctx_marks: next.ctx_marks.iter().copied().collect(),
-        joined_tags: next.joined_tags.clone(),
-        joined_sources: next.joined_sources.clone(),
+fn merge_shared(
+    current: Option<Arc<ValuedMatchResult>>,
+    next: &Arc<ValuedMatchResult>,
+) -> Arc<ValuedMatchResult> {
+    let Some(current) = current else {
+        return Arc::clone(next);
     };
-    merged.merge_result(&next);
-    merged.into_result()
+    if Arc::ptr_eq(&current, next) {
+        return current;
+    }
+    let tags_covered = joined_contains_all(&current.joined_tags, &next.joined_tags);
+    let sources_covered = joined_contains_all(&current.joined_sources, &next.joined_sources);
+    if (next.fast_marks & !current.fast_marks) == 0
+        && next
+            .ctx_marks
+            .iter()
+            .all(|mark| current.ctx_marks.binary_search(mark).is_ok())
+        && tags_covered
+        && sources_covered
+    {
+        return current;
+    }
+    let fast_marks = current.fast_marks | next.fast_marks;
+    let ctx_marks = if current.ctx_marks.is_empty() {
+        Arc::clone(&next.ctx_marks)
+    } else if next.ctx_marks.is_empty() {
+        Arc::clone(&current.ctx_marks)
+    } else {
+        let mut marks: BTreeSet<u32> = current.ctx_marks.iter().copied().collect();
+        marks.extend(next.ctx_marks.iter().copied());
+        marks.into_iter().collect::<Vec<_>>().into()
+    };
+    let joined_tags = if tags_covered {
+        Arc::clone(&current.joined_tags)
+    } else {
+        let mut tags = current.joined_tags.to_string();
+        append_joined_value(&mut tags, &next.joined_tags);
+        Arc::from(tags)
+    };
+    let joined_sources = if sources_covered {
+        Arc::clone(&current.joined_sources)
+    } else {
+        let mut sources = current.joined_sources.to_string();
+        append_joined_value(&mut sources, &next.joined_sources);
+        Arc::from(sources)
+    };
+    Arc::new(ValuedMatchResult {
+        fast_marks,
+        ctx_marks,
+        joined_tags,
+        joined_sources,
+    })
+}
+
+fn joined_contains_all(joined: &str, value: &str) -> bool {
+    if value.is_empty() || joined == value {
+        return true;
+    }
+    value
+        .split('|')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .all(|part| {
+            joined
+                .split('|')
+                .map(str::trim)
+                .any(|existing| existing == part)
+        })
 }
 
 fn append_joined_value(joined: &mut String, value: &str) {
@@ -656,11 +714,15 @@ mod tests {
         .unwrap();
         assert_eq!(matcher.results.len(), 1);
         assert_eq!(
-            matcher.r#match("child.example.com").unwrap().joined_tags,
+            matcher
+                .r#match("child.example.com")
+                .unwrap()
+                .joined_tags
+                .as_ref(),
             "new"
         );
         assert_eq!(
-            matcher.r#match("other.test").unwrap().joined_tags,
+            matcher.r#match("other.test").unwrap().joined_tags.as_ref(),
             "overlap"
         );
     }
@@ -675,8 +737,8 @@ mod tests {
         for name in ["case.example.com.", "CASE.EXAMPLE.COM.", "Case.Example.Com"] {
             let result = matcher.r#match(name).expect("case-insensitive full match");
             assert_eq!(result.fast_marks, 3, "{name}");
-            assert_eq!(result.joined_tags, "first|second", "{name}");
-            assert_eq!(result.joined_sources, "src-a|src-b", "{name}");
+            assert_eq!(result.joined_tags.as_ref(), "first|second", "{name}");
+            assert_eq!(result.joined_sources.as_ref(), "src-a|src-b", "{name}");
         }
     }
 
@@ -690,7 +752,7 @@ mod tests {
         let matcher = ValuedDomainMatcher::build(&rules).expect("valid valued rules");
         // The reference keeps one entry per dotted name; the later rule wins.
         let result = matcher.r#match("x.example.").expect("match");
-        assert_eq!((result.fast_marks, result.joined_tags.as_str()), (2, "B"));
+        assert_eq!((result.fast_marks, result.joined_tags.as_ref()), (2, "B"));
         // A doubled dot is a different name and never matches a query name.
         assert!(matcher.r#match("y.example.").is_none());
         assert!(matcher.r#match("y.example").is_none());
@@ -706,8 +768,8 @@ mod tests {
         let matcher = ValuedDomainMatcher::build(&rules).expect("valid valued rules");
         let result = matcher.r#match("x.example.").expect("match");
         assert_eq!(result.fast_marks, 7);
-        assert_eq!(result.joined_tags, "A|B|C");
-        assert_eq!(result.joined_sources, "sa|sb|sc");
+        assert_eq!(result.joined_tags.as_ref(), "A|B|C");
+        assert_eq!(result.joined_sources.as_ref(), "sa|sb|sc");
         assert_eq!(matcher.len(), 1, "one normalized rule");
     }
 
@@ -725,7 +787,7 @@ mod tests {
             let result = matcher.r#match(query).expect("match");
             // The two domain rules share one trie node (normalized), the later one wins.
             assert_eq!(
-                (result.fast_marks, result.joined_tags.as_str()),
+                (result.fast_marks, result.joined_tags.as_ref()),
                 (5, "A|C"),
                 "{query}"
             );
@@ -824,7 +886,7 @@ mod tests {
             .r#match(&format!("{}ax.", "a.".repeat(524_288)))
             .expect("match");
         assert_eq!(result.fast_marks, 7);
-        assert_eq!(result.joined_tags, "k|e|d");
+        assert_eq!(result.joined_tags.as_ref(), "k|e|d");
     }
 
     #[test]
@@ -848,10 +910,10 @@ mod tests {
             .expect("overlapping rule match");
 
         assert_eq!(result.fast_marks, 15);
-        assert_eq!(result.ctx_marks, vec![10, 20, 40, 80]);
-        assert_eq!(result.joined_tags, "full|base|keyword|regex");
+        assert_eq!(result.ctx_marks.as_ref(), &[10, 20, 40, 80]);
+        assert_eq!(result.joined_tags.as_ref(), "full|base|keyword|regex");
         assert_eq!(
-            result.joined_sources,
+            result.joined_sources.as_ref(),
             "full-source|base-source|keyword-source|regex-source"
         );
     }
@@ -914,9 +976,9 @@ mod tests {
         assert_eq!(matcher.pooled_result_len(), 1);
         let result = matcher.r#match("example.com").expect("domain match");
         assert_eq!(result.fast_marks, 3);
-        assert_eq!(result.ctx_marks, vec![10, 20, 30]);
-        assert_eq!(result.joined_tags, "a|b|c");
-        assert_eq!(result.joined_sources, "source|other");
+        assert_eq!(result.ctx_marks.as_ref(), &[10, 20, 30]);
+        assert_eq!(result.joined_tags.as_ref(), "a|b|c");
+        assert_eq!(result.joined_sources.as_ref(), "source|other");
     }
 
     #[test]
@@ -970,9 +1032,12 @@ mod tests {
             .r#match("CHILD.EXAMPLE.COM.")
             .expect("deterministic overlap match");
         assert_eq!(result.fast_marks, 31);
-        assert_eq!(result.joined_tags, "full|example|com|keyword|regexp");
         assert_eq!(
-            result.joined_sources,
+            result.joined_tags.as_ref(),
+            "full|example|com|keyword|regexp"
+        );
+        assert_eq!(
+            result.joined_sources.as_ref(),
             "full-source|example-source|com-source|keyword-source|regexp-source"
         );
     }
@@ -1003,9 +1068,9 @@ mod tests {
         let result = matcher
             .r#match("large.example")
             .expect("large domain match");
-        assert_eq!(result.ctx_marks, (0..4096).collect::<Vec<_>>());
-        assert_eq!(result.joined_tags, "tag");
-        assert_eq!(result.joined_sources, "source");
+        assert_eq!(result.ctx_marks.as_ref(), (0..4096).collect::<Vec<_>>());
+        assert_eq!(result.joined_tags.as_ref(), "tag");
+        assert_eq!(result.joined_sources.as_ref(), "source");
     }
 
     #[test]
@@ -1026,12 +1091,59 @@ mod tests {
             .r#match("property.example")
             .expect("generated domain match");
 
-        assert_eq!(result.ctx_marks, (0..7).collect::<Vec<_>>());
-        assert_eq!(result.joined_tags, "tag-0|tag-1|tag-2");
+        assert_eq!(result.ctx_marks.as_ref(), (0..7).collect::<Vec<_>>());
+        assert_eq!(result.joined_tags.as_ref(), "tag-0|tag-1|tag-2");
         assert_eq!(
-            result.joined_sources,
+            result.joined_sources.as_ref(),
             "source-0|source-1|source-2|source-3|source-4"
         );
         assert_ne!(result.fast_marks, 0);
+    }
+
+    #[test]
+    fn match_shared_reuses_pooled_arcs_on_single_and_covered_hits() {
+        use std::sync::Arc;
+
+        let matcher = ValuedDomainMatcher::build(&[
+            ValuedRule::new("domain:example.com", 1, [10], "base", "src-base"),
+            ValuedRule::new("full:exact.example.com", 2, [20], "exact", "src-exact"),
+            ValuedRule::new("keyword:onlykw", 4, [], "kw", "src-kw"),
+            ValuedRule::new("keyword:extra", 8, [30], "extra", "src-extra"),
+        ])
+        .expect("valid valued rules");
+
+        // Domain-only hits share the exact pooled Arc across queries.
+        let d1 = matcher.match_shared("a.example.com.").expect("domain hit");
+        let d2 = matcher.match_shared("b.example.com.").expect("domain hit");
+        assert!(Arc::ptr_eq(&d1, &d2));
+        assert!(Arc::ptr_eq(&d1.joined_tags, &d2.joined_tags));
+        assert!(Arc::ptr_eq(&d1.joined_sources, &d2.joined_sources));
+
+        // Full hit that already inherited its domain ancestor reuses the pooled Arc.
+        let f1 = matcher
+            .match_shared("exact.example.com.")
+            .expect("full hit");
+        let f2 = matcher
+            .match_shared("EXACT.example.com.")
+            .expect("full hit");
+        assert!(Arc::ptr_eq(&f1, &f2));
+        assert_eq!(f1.fast_marks, 3);
+        assert_eq!(f1.ctx_marks.as_ref(), &[10, 20]);
+        assert_eq!(f1.joined_tags.as_ref(), "exact|base");
+        assert_eq!(f1.joined_sources.as_ref(), "src-exact|src-base");
+
+        // Single overlap hit shares the pooled Arc directly.
+        let k1 = matcher.match_shared("a.onlykw.test.").expect("kw hit");
+        let k2 = matcher.match_shared("b.onlykw.test.").expect("kw hit");
+        assert!(Arc::ptr_eq(&k1, &k2));
+
+        // Multi-source overlap merges deterministically without mutating pooled entries.
+        let both = matcher
+            .match_shared("extra.example.com.")
+            .expect("both hit");
+        assert_eq!(both.fast_marks, 9);
+        assert_eq!(both.ctx_marks.as_ref(), &[10, 30]);
+        assert_eq!(both.joined_tags.as_ref(), "base|extra");
+        assert_eq!(both.joined_sources.as_ref(), "src-base|src-extra");
     }
 }

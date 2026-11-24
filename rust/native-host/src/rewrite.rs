@@ -15,10 +15,11 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::rc::Rc;
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use atomdns_matcher_core::{MixMatcher, normalize};
-use atomdns_sequence_core::{ExecutionState, RoutingField, SequenceId, StateMutation};
+use atomdns_sequence_core::{ExecutionState, RoutingField, SequenceId, SharedStr, StateMutation};
 use atomdns_upstream_core::{
     Endpoint, ExchangeContext, ExchangeRequest, Transport, TransportCancellation, Upstream,
 };
@@ -30,6 +31,11 @@ use crate::rule_sources::Reply;
 
 /// The audit `domain_set` label a rewritten query carries.
 pub(crate) const LABEL: &str = "重定向";
+
+fn shared_label() -> SharedStr {
+    static SHARED_LABEL: LazyLock<SharedStr> = LazyLock::new(|| SharedStr::from(LABEL));
+    SHARED_LABEL.clone()
+}
 /// TTL of every answer this plugin produces.
 const FIXED_TTL: u32 = 5;
 /// Longest wait for the DNS server a domain target resolves through.
@@ -359,7 +365,7 @@ impl Rewrite {
         };
         state.apply_mutation(StateMutation::SetRouting {
             field: RoutingField::DomainSet,
-            value: Some(LABEL.to_owned()),
+            value: Some(shared_label()),
         });
         let qtype = state.query.question.qtype;
         let response = match target {

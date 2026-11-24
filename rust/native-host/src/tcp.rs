@@ -588,7 +588,7 @@ mod tests {
                         && record.response
                             == ResponseState::Dns {
                                 rcode: 0,
-                                source: ResponseSource::Upstream("phase5a_forward".to_owned()),
+                                source: ResponseSource::Upstream("phase5a_forward".into()),
                             }
                         && record.cache_status == CacheStatus::NotApplicable
                         && record.final_sequence.as_deref() == Some("phase5a_entry")

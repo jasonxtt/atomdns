@@ -2,6 +2,7 @@
 
 mod engine;
 mod program;
+mod shared_str;
 mod state;
 
 pub use engine::{
@@ -16,6 +17,7 @@ pub use program::{
     RuleSpec, SequenceId, SequenceRef, SequenceSpec, ValidatedExecutable, ValidatedExternal,
     ValidatedFixture, ValidatedProgram, ValidatedRule, ValidatedSequence,
 };
+pub use shared_str::SharedStr;
 pub use state::{
     ClientContext, ClientTransport, DnsResponseInspector, ExecutionState, OwnedResponseWire,
     QueryState, ResponseError, ResponseInspection, ResponseInspector, ResponseOrigin,
@@ -69,7 +71,7 @@ mod slice1_state_tests {
         state.marks.insert(49);
         state.marks.insert(7);
         state.fast_flags = 1 << 48;
-        state.routing.domain_set = Some("rule-a".to_owned());
+        state.routing.domain_set = Some("rule-a".into());
 
         let snapshot = state.snapshot();
         assert_eq!(
@@ -558,7 +560,7 @@ mod slice2_dispatch_tests {
                             }),
                             false,
                             DispatchMetadata::AnonymousQname {
-                                rule_name: "rule-a".to_owned(),
+                                rule_name: "rule-a".into(),
                             },
                         )],
                         Some(vec![ExecutableSpec::Fixture {
@@ -575,7 +577,7 @@ mod slice2_dispatch_tests {
                             }),
                             false,
                             DispatchMetadata::AnonymousQname {
-                                rule_name: "rule-b".to_owned(),
+                                rule_name: "rule-b".into(),
                             },
                         )],
                         None,
@@ -604,14 +606,14 @@ mod slice2_dispatch_tests {
                             matched: false,
                             mutation: Some(StateMutation::SetRouting {
                                 field: RoutingField::MatchedRuleSource,
-                                value: Some("negated:qname".to_owned()),
+                                value: Some("negated:qname".into()),
                             }),
                             error: None,
                             calls: Rc::new(Cell::new(0)),
                         }),
                         true,
                         DispatchMetadata::AnonymousQname {
-                            rule_name: "must-not-appear".to_owned(),
+                            rule_name: "must-not-appear".into(),
                         },
                     )],
                     Some(vec![ExecutableSpec::Fixture {

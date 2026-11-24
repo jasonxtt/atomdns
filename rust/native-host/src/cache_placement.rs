@@ -102,7 +102,7 @@ pub(crate) fn validate(
                 let mut summary = Summary::default();
                 if rule
                     .audit_source
-                    .as_ref()
+                    .as_deref()
                     .is_some_and(|source| client_rules.contains(source))
                 {
                     summary

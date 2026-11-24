@@ -64,8 +64,8 @@ fn valued_construction_bounds_peak_and_preserves_results() {
         .r#match("x.leaf42.branch42.example.")
         .expect("suffix");
     assert_eq!(result.fast_marks, 1);
-    assert_eq!(result.joined_tags, "tag");
-    assert_eq!(result.joined_sources, "source");
+    assert_eq!(result.joined_tags.as_ref(), "tag");
+    assert_eq!(result.joined_sources.as_ref(), "source");
     assert!(
         peak <= 8 * 1024 * 1024,
         "build requested heap {peak} exceeds8MiB budget"
