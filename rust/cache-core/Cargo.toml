@@ -10,7 +10,6 @@ name = "atomdns_cache_core"
 crate-type = ["rlib"]
 
 [dependencies]
-bytes = "=1.12.1"
 moka = { version = "=0.12.12", features = ["sync"] }
 
 [lints]

@@ -71,7 +71,6 @@ dependencies = [
 name = "atomdns-cache-core"
 version = "0.1.0"
 dependencies = [
- "bytes",
  "moka",
 ]
 

@@ -120,7 +120,9 @@ pub(crate) async fn exchange(
         return Err(UpstreamError::Send(SideEffectState::MaybeSent));
     }
 
-    let mut buffer = vec![0u8; RECV_BUFFER_BYTES];
+    // Uninitialized capacity: zeroing 64 KiB per exchange cost ~6% of the
+    // new-domain path (docs/rust/validation-records/11-24-profile-allocator.md).
+    let mut buffer = Vec::with_capacity(RECV_BUFFER_BYTES);
     // Ignored datagrams are retained only as diagnostics on the terminal error;
     // they never replace the primary cause or the side-effect state.
     let mut ignored = IgnoredDatagrams::NONE;
@@ -131,6 +133,7 @@ pub(crate) async fn exchange(
             .check_at(Instant::now(), SideEffectState::Sent)
             .map_err(|error| diagnosed(error, ignored))?;
 
+        buffer.clear();
         let received = tokio::select! {
             biased;
             () = &mut owner_cancelled => {
@@ -145,7 +148,7 @@ pub(crate) async fn exchange(
                     ignored,
                 ))
             }
-            result = socket.recv_from(&mut buffer) => result,
+            result = socket.recv_buf_from(&mut buffer) => result,
         };
         let (length, peer) = received
             .map_err(|_| diagnosed(UpstreamError::Receive(SideEffectState::Sent), ignored))?;

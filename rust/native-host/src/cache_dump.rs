@@ -76,7 +76,7 @@ fn decode_origin(
     if field != origin_field(transport) {
         return Err(bad());
     }
-    Ok(atomdns_cache_core::NativeAttachment::new(
+    Ok(crate::cache::shared_origin_attachment(
         atomdns_sequence_core::ResponseOrigin {
             identity: std::sync::Arc::from(value.entry),
             peer: value.peer,

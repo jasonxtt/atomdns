@@ -3,9 +3,8 @@
 
 #![allow(clippy::missing_errors_doc)]
 
-use bytes::Bytes;
 use moka::sync::Cache as MokaCache;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 mod wire;
 
@@ -51,7 +50,7 @@ impl std::error::Error for CacheError {}
 
 struct CacheState {
     config: CacheConfig,
-    entries: MokaCache<Bytes, Arc<CacheEntry>>,
+    entries: MokaCache<Box<[u8]>, Arc<CacheEntry>>,
 }
 
 /// An owned, safe cache instance for Rust-native callers.
@@ -74,6 +73,22 @@ impl NativeAttachment {
     pub fn downcast_ref<T: std::any::Any>(&self) -> Option<&T> {
         self.0.downcast_ref()
     }
+    /// A non-owning handle, so a caller can share one attachment between many
+    /// entries without keeping it alive after the last entry is gone.
+    #[must_use]
+    pub fn downgrade(&self) -> WeakAttachment {
+        WeakAttachment(Arc::downgrade(&self.0))
+    }
+}
+
+/// A non-owning [`NativeAttachment`] handle.
+#[derive(Clone)]
+pub struct WeakAttachment(Weak<dyn std::any::Any + Send + Sync>);
+impl WeakAttachment {
+    #[must_use]
+    pub fn upgrade(&self) -> Option<NativeAttachment> {
+        self.0.upgrade().map(NativeAttachment)
+    }
 }
 impl std::fmt::Debug for NativeAttachment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -87,15 +102,65 @@ impl PartialEq for NativeAttachment {
 }
 impl Eq for NativeAttachment {}
 
+/// One stored answer. The response and the domain set share one allocation
+/// (`data` = response bytes, then domain-set bytes): a cache holds up to
+/// hundreds of thousands of these, so every allocation per entry counts
+/// (docs/rust/validation-records/11-24-memory-composition.md).
 #[derive(Debug)]
 struct CacheEntry {
     attachment: Option<NativeAttachment>,
-    response: Bytes,
-    domain_set: Bytes,
+    data: Box<[u8]>,
+    response_len: usize,
     stored_at_unix: i64,
     message_expires_at_unix: i64,
     cache_expires_at_unix: i64,
     wall_times: Option<[i64; 3]>,
+}
+
+impl CacheEntry {
+    fn new(
+        attachment: Option<NativeAttachment>,
+        response: &[u8],
+        domain_set: &[u8],
+        times: [i64; 3],
+        wall_times: Option<[i64; 3]>,
+    ) -> Self {
+        let mut data = Vec::with_capacity(response.len() + domain_set.len());
+        data.extend_from_slice(response);
+        data.extend_from_slice(domain_set);
+        Self {
+            attachment,
+            data: data.into_boxed_slice(),
+            response_len: response.len(),
+            stored_at_unix: times[0],
+            message_expires_at_unix: times[1],
+            cache_expires_at_unix: times[2],
+            wall_times,
+        }
+    }
+
+    fn response(&self) -> &[u8] {
+        &self.data[..self.response_len]
+    }
+
+    fn domain_set(&self) -> &[u8] {
+        &self.data[self.response_len..]
+    }
+
+    fn snapshot(&self, key: &[u8]) -> NativeSnapshotEntry {
+        NativeSnapshotEntry {
+            attachment: self.attachment.clone(),
+            key: key.to_vec(),
+            response: self.response().to_vec(),
+            domain_set: self.domain_set().to_vec(),
+            times: [
+                self.stored_at_unix,
+                self.message_expires_at_unix,
+                self.cache_expires_at_unix,
+            ],
+            wall_times: self.wall_times,
+        }
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -121,7 +186,7 @@ pub struct NativeSnapshotEntry {
 
 /// Fully validated, owned native insertion prepared before a management commit.
 pub struct PreparedNativeEntry {
-    key: Bytes,
+    key: Box<[u8]>,
     entry: Arc<CacheEntry>,
 }
 impl PreparedNativeEntry {
@@ -134,16 +199,14 @@ impl PreparedNativeEntry {
             item.times[2],
         )?;
         Ok(Self {
-            key: Bytes::from(item.key),
-            entry: Arc::new(CacheEntry {
-                attachment: item.attachment,
-                response: Bytes::from(item.response),
-                domain_set: Bytes::from(item.domain_set),
-                stored_at_unix: item.times[0],
-                message_expires_at_unix: item.times[1],
-                cache_expires_at_unix: item.times[2],
-                wall_times: item.wall_times,
-            }),
+            entry: Arc::new(CacheEntry::new(
+                item.attachment,
+                &item.response,
+                &item.domain_set,
+                item.times,
+                item.wall_times,
+            )),
+            key: item.key.into_boxed_slice(),
         })
     }
 }
@@ -186,9 +249,9 @@ fn lookup_data(
             .saturating_sub(entry.stored_at_unix)
             .clamp(0, i64::from(u32::MAX));
         let elapsed = u32::try_from(elapsed).unwrap_or(u32::MAX);
-        (LookupState::Fresh, wire::age_ttls(&entry.response, elapsed))
+        (LookupState::Fresh, wire::age_ttls(entry.response(), elapsed))
     } else if cache.state.config.lazy_cache_ttl_secs > 0 {
-        (LookupState::Lazy, wire::set_ttls(&entry.response, 5))
+        (LookupState::Lazy, wire::set_ttls(entry.response(), 5))
     } else {
         return Ok(None);
     };
@@ -202,7 +265,7 @@ fn lookup_data(
         stored_at_unix: entry.stored_at_unix,
         message_expires_at_unix: entry.message_expires_at_unix,
         response,
-        domain_set: entry.domain_set.to_vec(),
+        domain_set: entry.domain_set().to_vec(),
     }))
 }
 
@@ -262,29 +325,12 @@ impl NativeCache {
         wall_times: Option<[i64; 3]>,
         attachment: Option<NativeAttachment>,
     ) -> Result<(), CacheError> {
-        let [
-            stored_at_unix,
-            message_expires_at_unix,
-            cache_expires_at_unix,
-        ] = times;
-        validate_store(
-            key,
-            response,
-            stored_at_unix,
-            message_expires_at_unix,
-            cache_expires_at_unix,
-        )?;
+        validate_store(key, response, times[0], times[1], times[2])?;
         self.state.entries.insert(
-            Bytes::copy_from_slice(key),
-            Arc::new(CacheEntry {
-                attachment,
-                response: Bytes::copy_from_slice(response),
-                domain_set: Bytes::copy_from_slice(domain_set),
-                stored_at_unix,
-                message_expires_at_unix,
-                cache_expires_at_unix,
-                wall_times,
-            }),
+            Box::from(key),
+            Arc::new(CacheEntry::new(
+                attachment, response, domain_set, times, wall_times,
+            )),
         );
         Ok(())
     }
@@ -304,18 +350,7 @@ impl NativeCache {
             .entries
             .iter()
             .filter_map(|(key, entry)| {
-                (entry.cache_expires_at_unix > now).then(|| NativeSnapshotEntry {
-                    attachment: entry.attachment.clone(),
-                    key: key.to_vec(),
-                    response: entry.response.to_vec(),
-                    domain_set: entry.domain_set.to_vec(),
-                    times: [
-                        entry.stored_at_unix,
-                        entry.message_expires_at_unix,
-                        entry.cache_expires_at_unix,
-                    ],
-                    wall_times: entry.wall_times,
-                })
+                (entry.cache_expires_at_unix > now).then(|| entry.snapshot(&key))
             })
             .collect()
     }
@@ -336,24 +371,12 @@ impl NativeCache {
             }
             bytes = bytes
                 .checked_add(key.len())
-                .and_then(|n| n.checked_add(entry.response.len()))
-                .and_then(|n| n.checked_add(entry.domain_set.len()))
+                .and_then(|n| n.checked_add(entry.data.len()))
                 .ok_or(CacheError::InvalidConfig)?;
             if snapshot.len() >= max_entries || bytes > max_bytes {
                 return Err(CacheError::InvalidConfig);
             }
-            snapshot.push(NativeSnapshotEntry {
-                attachment: entry.attachment.clone(),
-                key: key.to_vec(),
-                response: entry.response.to_vec(),
-                domain_set: entry.domain_set.to_vec(),
-                times: [
-                    entry.stored_at_unix,
-                    entry.message_expires_at_unix,
-                    entry.cache_expires_at_unix,
-                ],
-                wall_times: entry.wall_times,
-            });
+            snapshot.push(entry.snapshot(&key));
         }
         Ok(snapshot)
     }

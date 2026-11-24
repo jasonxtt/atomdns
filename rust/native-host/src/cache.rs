@@ -1175,6 +1175,43 @@ impl CacheCatalog {
     }
 }
 
+/// Distinct response origins kept for sharing on one thread. Origins name
+/// configured upstreams, so a few dozen cover every entry; a miss only costs
+/// one separate allocation.
+const SHARED_ORIGIN_SLOTS: usize = 64;
+
+/// Returns an attachment equal to `origin`, reusing a live one already held by
+/// another entry. Entries from one upstream carry equal origins, so sharing
+/// saves one allocation (~100 bytes) per cache entry
+/// (docs/rust/validation-records/11-24-memory-composition.md).
+pub(crate) fn shared_origin_attachment(
+    origin: atomdns_sequence_core::ResponseOrigin,
+) -> atomdns_cache_core::NativeAttachment {
+    thread_local! {
+        static ORIGINS: RefCell<Vec<(
+            atomdns_sequence_core::ResponseOrigin,
+            atomdns_cache_core::WeakAttachment,
+        )>> = const { RefCell::new(Vec::new()) };
+    }
+    ORIGINS.with(|slots| {
+        let mut slots = slots.borrow_mut();
+        if let Some(live) = slots
+            .iter()
+            .find(|(known, _)| *known == origin)
+            .and_then(|(_, weak)| weak.upgrade())
+        {
+            return live;
+        }
+        slots.retain(|(_, weak)| weak.upgrade().is_some());
+        if slots.len() >= SHARED_ORIGIN_SLOTS {
+            slots.remove(0);
+        }
+        let attachment = atomdns_cache_core::NativeAttachment::new(origin.clone());
+        slots.push((origin, attachment.downgrade()));
+        attachment
+    })
+}
+
 /// One request-owned cache publication token. Dropping it is the normal path
 /// for cancellation, failed execution, malformed responses, and local errors.
 pub struct CacheHit {
@@ -1287,7 +1324,7 @@ impl PendingStore {
                 add(stored_at, cache_ttl)?,
             ],
             Some([wall, add(wall, retention)?, add(wall, cache_ttl)?]),
-            origin.map(atomdns_cache_core::NativeAttachment::new),
+            origin.map(shared_origin_attachment),
         )?;
         self.adapter.owner.revision.set(next_revision);
         Ok(true)
@@ -1419,6 +1456,27 @@ impl From<ResponseError> for CacheAdapterError {
 #[cfg(test)]
 mod persistence_tests {
     use super::*;
+
+    #[test]
+    fn equal_origins_share_one_attachment_until_released() {
+        let origin = |peer: u16| atomdns_sequence_core::ResponseOrigin {
+            identity: Arc::from("forward_a"),
+            peer: Some(([192, 0, 2, 1], peer).into()),
+            transport: Some("udp"),
+        };
+        let first = shared_origin_attachment(origin(53));
+        let second = shared_origin_attachment(origin(53));
+        let other = shared_origin_attachment(origin(5353));
+        assert_eq!(first, second, "equal origins share one allocation");
+        assert_ne!(first, other);
+        assert_eq!(
+            second.downcast_ref::<atomdns_sequence_core::ResponseOrigin>(),
+            Some(&origin(53))
+        );
+        let weak = first.downgrade();
+        drop((first, second));
+        assert!(weak.upgrade().is_none(), "the table keeps no entry alive");
+    }
 
     #[test]
     fn stopped_owner_keeps_reads_for_an_already_captured_generation() {

@@ -64,6 +64,8 @@ const DURATION_BUCKET_UPPER_BOUNDS_MICROS: [u64; 15] = [
 ];
 const DURATION_HISTOGRAM_BUCKET_COUNT: usize = DURATION_BUCKET_UPPER_BOUNDS_MICROS.len() + 1;
 const INITIAL_AUDIT_RECORD_CAPACITY: usize = 1_024;
+/// Rows kept in the slowest-queries list (`/api/v2/audit/rank/slowest`).
+const SLOWEST_RECORDS: usize = 300;
 const MAX_NATIVE_REQUEST_ID: u64 = u64::MAX;
 
 struct NativeRequestIdAllocator {
@@ -1484,14 +1486,22 @@ impl QueryObserver {
                 return;
             }
             let record = Arc::new(state.retention.retain(record));
-            state.slowest_records.push(Arc::clone(&record));
-            state.slowest_records.sort_by(|left, right| {
+            // The list stays sorted slowest first, so one binary-search insert
+            // replaces re-sorting all 300 rows on every query. The position is
+            // after equal rows, as the former push + stable sort placed it.
+            let slowest_first = |left: &RetainedAuditRecord, right: &RetainedAuditRecord| {
                 right
                     .elapsed
                     .cmp(&left.elapsed)
                     .then_with(|| right.trace_id.cmp(&left.trace_id))
-            });
-            state.slowest_records.truncate(300);
+            };
+            let position = state
+                .slowest_records
+                .partition_point(|row| slowest_first(row, &record).is_le());
+            if position < SLOWEST_RECORDS {
+                state.slowest_records.insert(position, Arc::clone(&record));
+                state.slowest_records.truncate(SLOWEST_RECORDS);
+            }
             if state.audit_records.len() == state.audit_capacity {
                 if let Some(evicted) = state.audit_records.pop_front() {
                     state.audit_elapsed_micros = state
