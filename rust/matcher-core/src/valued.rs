@@ -2,10 +2,10 @@ use std::collections::{BTreeSet, HashMap};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use regex::Regex;
+use regex::{Regex, RegexSet, RegexSetBuilder};
 
-use crate::compact::{CompactIndex, suffix_key};
-use crate::normalize::{NonAsciiRule, normalize};
+use crate::compact::{CompactIndex, domain_canonical};
+use crate::normalize::{NonAsciiRule, normalize, with_normalized_ascii};
 use crate::regex::compile_go_compatible;
 
 /// One domain rule and the result metadata associated with it.
@@ -195,6 +195,10 @@ impl AccPool {
     }
 }
 
+/// Compilation size cap for the combined overlap `RegexSet` (1 MiB).
+/// Rule sets exceeding this budget fall back to linear per-rule evaluation.
+const OVERLAP_REGEX_SET_SIZE_LIMIT: usize = 1 << 20;
+
 enum OverlapRule {
     Keyword {
         pattern: String,
@@ -206,12 +210,62 @@ enum OverlapRule {
     },
 }
 
-/// Immutable valued domain matcher used by the later Go mapper adapter.
+enum Overlaps {
+    Empty,
+    Set {
+        set: RegexSet,
+        results: Box<[Arc<ValuedMatchResult>]>,
+    },
+    Linear(Vec<OverlapRule>),
+}
+
+fn compile_overlaps(overlaps: Vec<OverlapRule>, size_limit: usize) -> Overlaps {
+    if overlaps.is_empty() {
+        return Overlaps::Empty;
+    }
+    let mut patterns = Vec::with_capacity(overlaps.len());
+    let mut total_pattern_bytes = 0_usize;
+    let mut within_budget = true;
+    for rule in &overlaps {
+        let pat = match rule {
+            OverlapRule::Keyword { pattern, .. } => {
+                if pattern.len() > size_limit {
+                    within_budget = false;
+                    break;
+                }
+                regex::escape(pattern)
+            }
+            OverlapRule::Regexp { matcher, .. } => matcher.as_str().to_owned(),
+        };
+        total_pattern_bytes = total_pattern_bytes.saturating_add(pat.len());
+        if total_pattern_bytes > size_limit {
+            within_budget = false;
+            break;
+        }
+        patterns.push(pat);
+    }
+    if within_budget
+        && let Ok(set) = RegexSetBuilder::new(&patterns)
+            .size_limit(size_limit)
+            .build()
+    {
+        let results: Box<[Arc<ValuedMatchResult>]> = overlaps
+            .into_iter()
+            .map(|rule| match rule {
+                OverlapRule::Keyword { result, .. } | OverlapRule::Regexp { result, .. } => result,
+            })
+            .collect();
+        return Overlaps::Set { set, results };
+    }
+    Overlaps::Linear(overlaps)
+}
+
+/// Immutable valued domain matcher used by `domain_mapper`.
 pub struct ValuedDomainMatcher {
     full: CompactIndex,
     domain: CompactIndex,
     results: Vec<Arc<ValuedMatchResult>>,
-    overlaps: Vec<OverlapRule>,
+    overlaps: Overlaps,
     rule_count: usize,
     pooled_result_count: usize,
 }
@@ -233,6 +287,26 @@ impl ValuedDomainMatcher {
 
     /// [`build`](Self::build) over rules that borrow their text.
     pub fn build_refs(rules: &[ValuedRuleRef<'_>]) -> Result<Self, ValuedBuildError> {
+        Self::build_refs_inner(rules, None, None, OVERLAP_REGEX_SET_SIZE_LIMIT)
+    }
+
+    #[cfg(test)]
+    fn build_refs_with_options(
+        rules: &[ValuedRuleRef<'_>],
+        seed: Option<u64>,
+        force_constant_hash: Option<u64>,
+        overlap_size_limit: usize,
+    ) -> Result<Self, ValuedBuildError> {
+        Self::build_refs_inner(rules, seed, force_constant_hash, overlap_size_limit)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn build_refs_inner(
+        rules: &[ValuedRuleRef<'_>],
+        #[cfg_attr(not(test), allow(unused_variables))] index_seed: Option<u64>,
+        #[cfg_attr(not(test), allow(unused_variables))] force_constant_hash: Option<u64>,
+        overlap_size_limit: usize,
+    ) -> Result<Self, ValuedBuildError> {
         // Unique rule strings in first-occurrence order with their merged own
         // results; `slot` finds a rule string's position.
         let mut accumulated = AccPool::new();
@@ -327,9 +401,12 @@ impl ValuedDomainMatcher {
                 }
             }
             // A rule that differs only by the trailing dot replaces the
-            // earlier one, as in the reference's map.
+            // earlier one, as in the reference's map. Because
+            // `full_key(s) == normalize(s) + "."`, storing `normalize(&lowered)`
+            // preserves the exact equivalence classes without needing a trailing
+            // dot allocation on lookup.
             full.push((
-                full_key(&lowered),
+                normalize(&lowered),
                 intern_result(&mut pool, &mut results, accumulated.result(merged)),
             ));
         }
@@ -337,7 +414,8 @@ impl ValuedDomainMatcher {
 
         let unique_rules = entries.len();
         let mut domain = Vec::new();
-        let mut overlaps = Vec::new();
+        let mut domain_root: Option<usize> = None;
+        let mut raw_overlaps = Vec::new();
         let mut interned: HashMap<u32, usize> = HashMap::new();
         for (key, effective) in entries {
             let (kind, pattern) = parse_rule(key)?;
@@ -349,11 +427,23 @@ impl ValuedDomainMatcher {
             });
             match kind {
                 RuleKind::Full => unreachable!("handled above"),
-                RuleKind::Domain => domain.push((suffix_key(&normalize(pattern)), result)),
-                RuleKind::Keyword => overlaps.push(OverlapRule::Keyword {
-                    pattern: normalize(pattern),
-                    result: Arc::clone(&results[result]),
-                }),
+                RuleKind::Domain => {
+                    let norm = normalize(pattern);
+                    match domain_canonical(&norm) {
+                        Some(canon) => domain.push((canon.to_owned(), result)),
+                        None => domain_root = Some(result),
+                    }
+                }
+                RuleKind::Keyword => {
+                    // The reference ignores a keyword that normalizes to nothing.
+                    let norm = normalize(pattern);
+                    if !norm.is_empty() {
+                        raw_overlaps.push(OverlapRule::Keyword {
+                            pattern: norm,
+                            result: Arc::clone(&results[result]),
+                        });
+                    }
+                }
                 RuleKind::Regexp => {
                     let matcher = compile_go_compatible(pattern).map_err(|error| match error {
                         crate::RegexBuildError::Unsupported { .. } => {
@@ -367,7 +457,7 @@ impl ValuedDomainMatcher {
                             error: other.to_string(),
                         },
                     })?;
-                    overlaps.push(OverlapRule::Regexp {
+                    raw_overlaps.push(OverlapRule::Regexp {
                         matcher,
                         result: Arc::clone(&results[result]),
                     });
@@ -384,18 +474,59 @@ impl ValuedDomainMatcher {
         CompactIndex::sort_dedup(&mut domain);
         let mut remap = HashMap::new();
         let mut live_results = Vec::new();
-        for (_, id) in full.iter_mut().chain(&mut domain) {
+        let mut remap_id = |id: &mut usize| {
             *id = *remap.entry(*id).or_insert_with(|| {
                 let next = live_results.len();
                 live_results.push(Arc::clone(&results[*id]));
                 next
             });
+        };
+        for (_, id) in full.iter_mut().chain(&mut domain) {
+            remap_id(id);
+        }
+        if let Some(root_id) = domain_root.as_mut() {
+            remap_id(root_id);
         }
         drop(results);
 
+        #[cfg(test)]
+        let (full_index, domain_index) = if let Some(seed) = index_seed {
+            (
+                CompactIndex::build_deduped_with_options(full, None, seed, force_constant_hash),
+                CompactIndex::build_deduped_with_options(
+                    domain,
+                    domain_root,
+                    seed,
+                    force_constant_hash,
+                ),
+            )
+        } else if force_constant_hash.is_some() {
+            (
+                CompactIndex::build_deduped_with_options(full, None, 0, force_constant_hash),
+                CompactIndex::build_deduped_with_options(
+                    domain,
+                    domain_root,
+                    0,
+                    force_constant_hash,
+                ),
+            )
+        } else {
+            (
+                CompactIndex::build_deduped(full, None),
+                CompactIndex::build_deduped(domain, domain_root),
+            )
+        };
+        #[cfg(not(test))]
+        let (full_index, domain_index) = (
+            CompactIndex::build_deduped(full, None),
+            CompactIndex::build_deduped(domain, domain_root),
+        );
+
+        let overlaps = compile_overlaps(raw_overlaps, overlap_size_limit);
+
         Ok(Self {
-            full: CompactIndex::build(full),
-            domain: CompactIndex::build(domain),
+            full: full_index,
+            domain: domain_index,
             results: live_results,
             overlaps,
             rule_count: unique_rules - full_rules + full_group_count,
@@ -432,46 +563,53 @@ impl ValuedDomainMatcher {
     /// per-query string and mark-list allocations.
     #[must_use]
     pub fn match_shared(&self, name: &str) -> Option<Arc<ValuedMatchResult>> {
-        if !name.is_ascii() {
+        if !name.is_ascii() || self.rule_count == 0 {
             return None;
         }
-        // One buffer for both keys: the `full:` key is always the normalized
-        // name plus one dot (`full_key(name) == normalize(name) + "."`).
-        let mut full = normalize(name);
-        full.push('.');
-        let normalized = &full[..full.len() - 1];
-        let mut merged = self
-            .full
-            .get(full.as_bytes())
-            .map(|id| Arc::clone(&self.results[id]));
+        with_normalized_ascii(name, |normalized| {
+            let mut merged = self
+                .full
+                .get(normalized.as_bytes())
+                .map(|id| Arc::clone(&self.results[id]));
 
-        if let Some(id) = self.domain.suffix(&suffix_key(normalized)) {
-            merged = Some(merge_shared(merged, &self.results[id]));
-        }
-
-        for overlap in &self.overlaps {
-            let matches = match overlap {
-                // The reference ignores a keyword that normalizes to nothing.
-                OverlapRule::Keyword { pattern, .. } => {
-                    !pattern.is_empty() && normalized.contains(pattern)
-                }
-                OverlapRule::Regexp { matcher, .. } => matcher.is_match(normalized),
-            };
-            if matches {
-                let result = match overlap {
-                    OverlapRule::Keyword { result, .. } | OverlapRule::Regexp { result, .. } => {
-                        result
-                    }
-                };
-                merged = Some(merge_shared(merged, result));
+            if let Some(id) = self.domain.suffix_normalized(normalized) {
+                merged = Some(merge_shared(merged, &self.results[id]));
             }
-        }
 
-        merged
+            match &self.overlaps {
+                Overlaps::Empty => {}
+                Overlaps::Set { set, results } => {
+                    if set.is_match(normalized) {
+                        for idx in set.matches(normalized) {
+                            merged = Some(merge_shared(merged, &results[idx]));
+                        }
+                    }
+                }
+                Overlaps::Linear(rules) => {
+                    for overlap in rules {
+                        let (matches, result) = match overlap {
+                            OverlapRule::Keyword { pattern, result } => {
+                                (normalized.contains(pattern.as_str()), result)
+                            }
+                            OverlapRule::Regexp { matcher, result } => {
+                                (matcher.is_match(normalized), result)
+                            }
+                        };
+                        if matches {
+                            merged = Some(merge_shared(merged, result));
+                        }
+                    }
+                }
+            }
+
+            merged
+        })
     }
 }
 
 /// The `full:` lookup key: ASCII-lowercased, with one trailing dot ensured.
+/// Retained for unit and differential tests verifying the dot-stripping bijection.
+#[cfg(test)]
 fn full_key(name: &str) -> String {
     let mut key = name.to_ascii_lowercase();
     if !key.ends_with('.') {
@@ -1145,5 +1283,569 @@ mod tests {
         assert_eq!(both.ctx_marks.as_ref(), &[10, 30]);
         assert_eq!(both.joined_tags.as_ref(), "base|extra");
         assert_eq!(both.joined_sources.as_ref(), "src-base|src-extra");
+    }
+
+    #[test]
+    fn overwritten_root_domain_aliases_do_not_keep_dead_payloads() {
+        // `domain:.` has tail `""` so it inherits `domain:`, giving it a distinct
+        // merged payload (`3`). Placing `domain:` second overwrites the root slot
+        // with payload `2`, so `domain:.`'s payload must not stay live in `results`.
+        let matcher = ValuedDomainMatcher::build(&[
+            ValuedRule::new("domain:.", 1, [], "old-root", "src-old"),
+            ValuedRule::new("domain:", 2, [], "new-root", "src-new"),
+        ])
+        .expect("valid root aliases");
+        assert_eq!(matcher.results.len(), 1);
+        for q in ["", ".", "anything.example."] {
+            let res = matcher.match_shared(q).expect("root hit");
+            assert_eq!(res.fast_marks, 2, "{q:?}");
+            assert_eq!(res.joined_tags.as_ref(), "new-root", "{q:?}");
+        }
+    }
+
+    /// Reference sorted-array + linear-overlap `ValuedDomainMatcher` retained
+    /// strictly for differential tests.
+    struct ReferenceValuedDomainMatcher {
+        full: crate::compact::ReferenceCompactIndex,
+        domain: crate::compact::ReferenceCompactIndex,
+        results: Vec<std::sync::Arc<super::ValuedMatchResult>>,
+        overlaps: Vec<super::OverlapRule>,
+    }
+
+    impl ReferenceValuedDomainMatcher {
+        #[allow(clippy::too_many_lines)]
+        fn build(rules: &[ValuedRule]) -> Self {
+            use super::{
+                AccPool, DomainIndex, OverlapRule, RuleKind, ValuedRuleRef, full_key,
+                inherited_from, intern_result, pair_mut, parse_rule,
+            };
+            use crate::compact::{CompactIndex, ReferenceCompactIndex, suffix_key};
+            use crate::normalize::normalize;
+            use crate::regex::compile_go_compatible;
+            use std::collections::HashMap;
+            use std::sync::Arc;
+
+            let refs: Vec<ValuedRuleRef<'_>> = rules.iter().map(ValuedRuleRef::from).collect();
+            let mut accumulated = AccPool::new();
+            let mut record_ids: HashMap<(u64, &[u32], &str, &str), u32> = HashMap::new();
+            let mut entries: Vec<(&str, u32)> = Vec::with_capacity(refs.len());
+            let mut slot: HashMap<&str, usize> = HashMap::with_capacity(refs.len());
+            let mut full_own: HashMap<String, u32> = HashMap::new();
+            for rule in &refs {
+                let (kind, pattern) = parse_rule(rule.rule).unwrap();
+                let record = *record_ids
+                    .entry((
+                        rule.fast_marks,
+                        rule.ctx_marks,
+                        rule.joined_tags,
+                        rule.joined_sources,
+                    ))
+                    .or_insert_with(|| accumulated.of_rule(rule));
+                if kind == RuleKind::Full {
+                    let own = full_own.entry(pattern.to_ascii_lowercase()).or_insert(0);
+                    *own = accumulated.merge(*own, record);
+                }
+                let at = *slot.entry(rule.rule).or_insert_with(|| {
+                    entries.push((rule.rule, 0));
+                    entries.len() - 1
+                });
+                entries[at].1 = accumulated.merge(entries[at].1, record);
+            }
+            let index = DomainIndex::new(&entries);
+            let mut by_depth: Vec<(usize, bool, usize)> = Vec::with_capacity(entries.len());
+            for (at, (key, _)) in entries.iter().enumerate() {
+                let (kind, pattern) = parse_rule(key).unwrap();
+                if kind != RuleKind::Full {
+                    by_depth.push((pattern.len(), kind != RuleKind::Domain, at));
+                }
+            }
+            by_depth.sort_unstable();
+            for (_, _, at) in by_depth {
+                if let Some(ancestor) = inherited_from(entries[at].0, &index).unwrap() {
+                    let (inherited, result) = pair_mut(&mut entries, ancestor, at);
+                    *result = accumulated.merge(*result, *inherited);
+                }
+            }
+
+            let mut pool = HashMap::new();
+            let mut results = Vec::new();
+            let mut full = Vec::new();
+            let mut full_groups: Vec<(String, Vec<&str>)> = Vec::new();
+            let mut full_group_index: HashMap<String, usize> = HashMap::new();
+            for (key, _) in &entries {
+                let (kind, pattern) = parse_rule(key).unwrap();
+                if kind == RuleKind::Full {
+                    let lowered = pattern.to_ascii_lowercase();
+                    let slot = *full_group_index.entry(lowered.clone()).or_insert_with(|| {
+                        full_groups.push((lowered, Vec::new()));
+                        full_groups.len() - 1
+                    });
+                    full_groups[slot].1.push(key);
+                }
+            }
+            for (lowered, keys) in full_groups {
+                let mut merged = full_own.remove(&lowered).unwrap_or(0);
+                for key in keys {
+                    if let Some(ancestor) = inherited_from(key, &index).unwrap() {
+                        merged = accumulated.merge(merged, entries[ancestor].1);
+                    }
+                }
+                full.push((
+                    full_key(&lowered),
+                    intern_result(&mut pool, &mut results, accumulated.result(merged)),
+                ));
+            }
+            let mut domain = Vec::new();
+            let mut overlaps = Vec::new();
+            let mut interned: HashMap<u32, usize> = HashMap::new();
+            for (key, effective) in entries {
+                let (kind, pattern) = parse_rule(key).unwrap();
+                if kind == RuleKind::Full {
+                    continue;
+                }
+                let result = *interned.entry(effective).or_insert_with(|| {
+                    intern_result(&mut pool, &mut results, accumulated.result(effective))
+                });
+                match kind {
+                    RuleKind::Full => unreachable!(),
+                    RuleKind::Domain => domain.push((suffix_key(&normalize(pattern)), result)),
+                    RuleKind::Keyword => overlaps.push(OverlapRule::Keyword {
+                        pattern: normalize(pattern),
+                        result: Arc::clone(&results[result]),
+                    }),
+                    RuleKind::Regexp => overlaps.push(OverlapRule::Regexp {
+                        matcher: compile_go_compatible(pattern).unwrap(),
+                        result: Arc::clone(&results[result]),
+                    }),
+                }
+            }
+            CompactIndex::sort_dedup(&mut full);
+            CompactIndex::sort_dedup(&mut domain);
+            let mut remap = HashMap::new();
+            let mut live_results = Vec::new();
+            for (_, id) in full.iter_mut().chain(&mut domain) {
+                *id = *remap.entry(*id).or_insert_with(|| {
+                    let next = live_results.len();
+                    live_results.push(Arc::clone(&results[*id]));
+                    next
+                });
+            }
+            Self {
+                full: ReferenceCompactIndex::build(full),
+                domain: ReferenceCompactIndex::build(domain),
+                results: live_results,
+                overlaps,
+            }
+        }
+
+        fn match_shared(&self, name: &str) -> Option<std::sync::Arc<super::ValuedMatchResult>> {
+            use super::{OverlapRule, merge_shared};
+            use crate::compact::suffix_key;
+            use crate::normalize::normalize;
+            use std::sync::Arc;
+
+            if !name.is_ascii() {
+                return None;
+            }
+            let mut full = normalize(name);
+            full.push('.');
+            let normalized = &full[..full.len() - 1];
+            let mut merged = self
+                .full
+                .get(full.as_bytes())
+                .map(|id| Arc::clone(&self.results[id]));
+            if let Some(id) = self.domain.suffix(&suffix_key(normalized)) {
+                merged = Some(merge_shared(merged, &self.results[id]));
+            }
+            for overlap in &self.overlaps {
+                let matches = match overlap {
+                    OverlapRule::Keyword { pattern, .. } => {
+                        !pattern.is_empty() && normalized.contains(pattern)
+                    }
+                    OverlapRule::Regexp { matcher, .. } => matcher.is_match(normalized),
+                };
+                if matches {
+                    let result = match overlap {
+                        OverlapRule::Keyword { result, .. }
+                        | OverlapRule::Regexp { result, .. } => result,
+                    };
+                    merged = Some(merge_shared(merged, result));
+                }
+            }
+            merged
+        }
+    }
+
+    struct SplitMix64(u64);
+
+    impl SplitMix64 {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            z ^ (z >> 31)
+        }
+
+        fn usize(&mut self, bound: usize) -> usize {
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                (self.next() as usize) % bound
+            }
+        }
+    }
+
+    fn random_label(rng: &mut SplitMix64, max_len: usize) -> String {
+        const ALPHABET: &[u8] = b"abcdefgh0123-AB";
+        let len = 1 + rng.usize(max_len);
+        let mut s = String::with_capacity(len);
+        for _ in 0..len {
+            s.push(char::from(ALPHABET[rng.usize(ALPHABET.len())]));
+        }
+        s
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn differential_100k_queries_against_reference_valued_matcher() {
+        use std::sync::Arc;
+
+        const SEED: u64 = 0x51a9_0002_2026_1125;
+        const INDEX_SEED: u64 = 0x7777_8888_9999_aaaa;
+        let mut rng = SplitMix64(SEED);
+        let tlds = ["test", "example", "invalid", "arpa", "net"];
+
+        let mut rules: Vec<ValuedRule> = Vec::new();
+        let mut domain_bases: Vec<String> = Vec::new();
+        let mut full_bases: Vec<String> = Vec::new();
+
+        for i in 0..350_usize {
+            let l1 = random_label(&mut rng, 8);
+            let l2 = tlds[rng.usize(tlds.len())];
+            let base = if rng.usize(4) == 0 {
+                format!("{}.{l1}.{l2}", random_label(&mut rng, 5))
+            } else {
+                format!("{l1}.{l2}")
+            };
+            let mark = 1_u64 << (i % 16);
+            let ctx = if i % 5 == 0 {
+                vec![u32::try_from(i % 7).unwrap() + 1]
+            } else {
+                vec![]
+            };
+            let tag = format!("tag{}", i % 9);
+            let src = format!("src{}", i % 7);
+
+            if rng.usize(5) == 0 {
+                full_bases.push(base.clone());
+                let suffix = ["", ".", ".."][rng.usize(3)];
+                rules.push(ValuedRule::new(
+                    format!("full:{base}{suffix}"),
+                    mark,
+                    ctx,
+                    tag,
+                    src,
+                ));
+            } else {
+                domain_bases.push(base.clone());
+                let prefix = ["", ".", ".."][rng.usize(3)];
+                let suffix = ["", ".", "..", "..."][rng.usize(4)];
+                rules.push(ValuedRule::new(
+                    format!("domain:{prefix}{base}{suffix}"),
+                    mark,
+                    ctx,
+                    tag,
+                    src,
+                ));
+            }
+        }
+
+        // Add aliases, case overwrites, inheritance chains, empty-label quirks,
+        // and interleaved keyword + regexp overlaps.
+        rules.extend([
+            ValuedRule::new(
+                "domain:shared.example",
+                1 << 20,
+                [10],
+                "dom-shared",
+                "src-dom",
+            ),
+            ValuedRule::new(
+                "domain:SHARED.EXAMPLE.",
+                1 << 21,
+                [11],
+                "dom-winner",
+                "src-win",
+            ),
+            ValuedRule::new(
+                "domain:child.shared.example",
+                1 << 22,
+                [12],
+                "dom-child",
+                "src-c",
+            ),
+            ValuedRule::new("full:exact.shared.example", 1 << 23, [], "full-a", "src-fa"),
+            ValuedRule::new("full:EXACT.shared.example", 1 << 24, [], "full-b", "src-fb"),
+            ValuedRule::new("full:trail.example", 1 << 25, [], "trail-old", "src-to"),
+            ValuedRule::new("full:trail.example.", 1 << 26, [], "trail-new", "src-tn"),
+            ValuedRule::new("full:double.example..", 1 << 27, [], "dbl", "src-dbl"),
+            ValuedRule::new("domain:a..b.test", 1 << 28, [], "empty-lbl", "src-el"),
+            ValuedRule::new("domain:...", 1 << 29, [], "one-empty", "src-oe"),
+            ValuedRule::new("keyword:", 1 << 30, [], "ignored-empty", "src-ig"),
+            ValuedRule::new("keyword:.", 1 << 30, [], "ignored-dot", "src-igd"),
+            ValuedRule::new("keyword:alpha-kw", 1 << 31, [20], "kw-alpha", "src-kwa"),
+            ValuedRule::new(
+                r"regexp:^srv[0-9]+\.example$",
+                1 << 32,
+                [21],
+                "re-srv",
+                "src-res",
+            ),
+            ValuedRule::new("keyword:beta-kw", 1 << 33, [22], "kw-beta", "src-kwb"),
+            ValuedRule::new(r"regexp:^[^.]+$", 1 << 34, [], "re-single", "src-rs"),
+            ValuedRule::new(r"regexp:\.lan$", 1 << 35, [], "re-lan", "src-rl"),
+            ValuedRule::new("keyword:alpha", 1 << 36, [], "kw-short", "src-kws"),
+        ]);
+
+        let refs: Vec<super::ValuedRuleRef<'_>> = rules.iter().map(Into::into).collect();
+        let matcher = ValuedDomainMatcher::build_refs_with_options(
+            &refs,
+            Some(INDEX_SEED),
+            None,
+            super::OVERLAP_REGEX_SET_SIZE_LIMIT,
+        )
+        .expect("valid generated rules");
+        assert!(matches!(matcher.overlaps, super::Overlaps::Set { .. }));
+        let reference = ReferenceValuedDomainMatcher::build(&rules);
+
+        // Verify Arc::ptr_eq sharing on single-source hits across distinct queries.
+        let s1 = matcher.match_shared("x1.shared.example.").unwrap();
+        let s2 = matcher.match_shared("x2.shared.example.").unwrap();
+        assert!(Arc::ptr_eq(&s1, &s2));
+        let k1 = matcher.match_shared("p1.beta-kw.invalid.").unwrap();
+        let k2 = matcher.match_shared("p2.beta-kw.invalid.").unwrap();
+        assert!(Arc::ptr_eq(&k1, &k2));
+        let r1 = matcher.match_shared("srv1.example.").unwrap();
+        let r2 = matcher.match_shared("srv2.example.").unwrap();
+        assert!(Arc::ptr_eq(&r1, &r2));
+
+        for case_idx in 0..100_000_usize {
+            let query = match rng.usize(9) {
+                // Exact/suffix hit on a real domain rule with random prefix and trailing dots.
+                0 | 1 => {
+                    let base = &domain_bases[rng.usize(domain_bases.len())];
+                    let prefix = if rng.usize(2) == 0 {
+                        format!("{}.", random_label(&mut rng, 6))
+                    } else {
+                        String::new()
+                    };
+                    let trail = ["", ".", ".."][rng.usize(3)];
+                    format!("{prefix}{base}{trail}")
+                }
+                // Near-miss: 1-byte mutation of a real domain rule.
+                2 => {
+                    let mut bytes = domain_bases[rng.usize(domain_bases.len())]
+                        .clone()
+                        .into_bytes();
+                    let pos = rng.usize(bytes.len());
+                    bytes[pos] = if bytes[pos] == b'z' { b'q' } else { b'z' };
+                    let trail = ["", "."][rng.usize(2)];
+                    format!("{}{trail}", String::from_utf8(bytes).unwrap())
+                }
+                // Full rule hit or near-miss.
+                3 => {
+                    let base = &full_bases[rng.usize(full_bases.len())];
+                    match rng.usize(3) {
+                        0 => format!("{base}."),
+                        1 => format!("sub.{base}."),
+                        _ => base.to_ascii_uppercase(),
+                    }
+                }
+                // Multi-overlap combinations (domain + keyword + regexp).
+                4 => match rng.usize(5) {
+                    0 => "alpha-kw.beta-kw.shared.example.".to_owned(),
+                    1 => format!("srv{}.example.", rng.usize(999)),
+                    2 => format!("alpha-kw.{}.lan.", random_label(&mut rng, 5)),
+                    3 => format!("singlelabel{}", rng.usize(100)),
+                    _ => format!("x.alpha.{}.test.", random_label(&mut rng, 4)),
+                },
+                // Quirks & aliases.
+                5 => {
+                    let quirks = [
+                        "",
+                        ".",
+                        "..",
+                        "...",
+                        "....",
+                        "exact.shared.example",
+                        "EXACT.SHARED.EXAMPLE.",
+                        "child.shared.example.",
+                        "trail.example",
+                        "trail.example.",
+                        "double.example.",
+                        "double.example..",
+                        "a..b.test",
+                        "x.a..b.test.",
+                        "..a..b.test",
+                    ];
+                    quirks[rng.usize(quirks.len())].to_owned()
+                }
+                // Random domain.
+                _ => {
+                    let depth = 1 + rng.usize(4);
+                    let mut parts = Vec::with_capacity(depth);
+                    for _ in 0..depth - 1 {
+                        parts.push(random_label(&mut rng, 7));
+                    }
+                    parts.push(tlds[rng.usize(tlds.len())].to_owned());
+                    let trail = ["", "."][rng.usize(2)];
+                    format!("{}{trail}", parts.join("."))
+                }
+            };
+
+            let got = matcher.match_shared(&query);
+            let want = reference.match_shared(&query);
+            assert_eq!(
+                got, want,
+                "ValuedDomainMatcher diff mismatch at case={case_idx} seed={SEED} index_seed={INDEX_SEED} query={query:?}"
+            );
+        }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn wide_fallback_and_linear_overlap_fallback_and_worst_case_collisions_match_reference() {
+        // 1. Wide fallback triggered by >16,382 distinct results (16,400 distinct ctx_marks).
+        let many_rules: Vec<ValuedRule> = (0..16_400_u32)
+            .map(|i| ValuedRule::new(format!("domain:d{i}.example"), 1, [i + 1], "t", "s"))
+            .collect();
+        let wide_matcher = ValuedDomainMatcher::build(&many_rules).expect("wide matcher");
+        assert!(wide_matcher.domain.is_wide());
+        let wide_ref = ReferenceValuedDomainMatcher::build(&many_rules);
+        for i in [0_u32, 1, 16_381, 16_382, 16_383, 16_399] {
+            let q = format!("sub.d{i}.example.");
+            assert_eq!(
+                wide_matcher.match_shared(&q),
+                wide_ref.match_shared(&q),
+                "wide by result count {q:?}"
+            );
+        }
+        assert_eq!(
+            wide_matcher.match_shared("sub.absent.example."),
+            wide_ref.match_shared("sub.absent.example.")
+        );
+
+        // 2. Wide fallback triggered by >1023-byte rule key.
+        let long_domain = format!("{}example", "a.".repeat(600));
+        let long_rules = vec![
+            ValuedRule::new(format!("domain:{long_domain}"), 1, [1], "long", "src-long"),
+            ValuedRule::new(
+                format!("full:x.{long_domain}"),
+                2,
+                [2],
+                "flong",
+                "src-flong",
+            ),
+            ValuedRule::new("domain:short.test", 4, [], "short", "src-short"),
+        ];
+        let long_matcher = ValuedDomainMatcher::build(&long_rules).expect("long wide matcher");
+        assert!(long_matcher.domain.is_wide());
+        assert!(long_matcher.full.is_wide());
+        let long_ref = ReferenceValuedDomainMatcher::build(&long_rules);
+        for q in [
+            format!("x.{long_domain}."),
+            format!("y.{long_domain}."),
+            "z.short.test.".to_owned(),
+            "miss.invalid.".to_owned(),
+        ] {
+            assert_eq!(
+                long_matcher.match_shared(&q),
+                long_ref.match_shared(&q),
+                "wide by key length {q:?}"
+            );
+        }
+
+        // 3. Overlaps::Linear fallback triggered by exceeding the 1 MiB RegexSet size limit.
+        // Each pattern individually compiles well under the default 10 MiB Regex limit
+        // (and within Go's MAX_REPEAT = 1000 cap), while 60 combined bounded-repetition
+        // regexes exceed 1 MiB in RegexSetBuilder.
+        let mut heavy_rules = vec![ValuedRule::new("domain:example.test", 1, [], "base", "s0")];
+        for i in 0..60_usize {
+            heavy_rules.push(ValuedRule::new(
+                format!(r"regexp:^r{i:02}-[a-z0-9]{{1,800}}-end$"),
+                1_u64 << ((i % 20) + 1),
+                [],
+                format!("re{i}"),
+                format!("sre{i}"),
+            ));
+            heavy_rules.push(ValuedRule::new(
+                format!("keyword:kw{i:02}-hit"),
+                1_u64 << ((i % 20) + 21),
+                [],
+                format!("kw{i}"),
+                format!("skw{i}"),
+            ));
+        }
+        let heavy_matcher = ValuedDomainMatcher::build(&heavy_rules).expect("linear fallback");
+        assert!(
+            matches!(heavy_matcher.overlaps, super::Overlaps::Linear(_)),
+            "expected Overlaps::Linear fallback when RegexSet exceeds 1 MiB"
+        );
+        let heavy_ref = ReferenceValuedDomainMatcher::build(&heavy_rules);
+        for q in [
+            "r00-abc123-end",
+            "r39-xyz-end",
+            "kw05-hit.example.test.",
+            "r12-kw12-hit-end",
+            "plain.example.test.",
+            "no-match.invalid.",
+        ] {
+            assert_eq!(
+                heavy_matcher.match_shared(q),
+                heavy_ref.match_shared(q),
+                "linear overlap fallback {q:?}"
+            );
+        }
+
+        // 4. Worst-case single-slot hash collision in ValuedDomainMatcher.
+        let mut coll_rules = Vec::new();
+        for i in 0..200_usize {
+            coll_rules.push(ValuedRule::new(
+                format!("domain:c{i:03}.example"),
+                1_u64 << (i % 16),
+                [],
+                format!("t{}", i % 5),
+                "sc",
+            ));
+            coll_rules.push(ValuedRule::new(
+                format!("full:f{i:03}.example"),
+                1_u64 << ((i % 16) + 16),
+                [],
+                format!("ft{}", i % 5),
+                "sf",
+            ));
+        }
+        let coll_refs: Vec<super::ValuedRuleRef<'_>> = coll_rules.iter().map(Into::into).collect();
+        let coll_matcher = ValuedDomainMatcher::build_refs_with_options(
+            &coll_refs,
+            Some(0),
+            Some(u64::MAX),
+            super::OVERLAP_REGEX_SET_SIZE_LIMIT,
+        )
+        .expect("collision matcher");
+        let coll_ref = ReferenceValuedDomainMatcher::build(&coll_rules);
+        for i in 0..250_usize {
+            for q in [
+                format!("sub.c{i:03}.example."),
+                format!("f{i:03}.example."),
+                format!("miss{i:03}.invalid."),
+            ] {
+                assert_eq!(
+                    coll_matcher.match_shared(&q),
+                    coll_ref.match_shared(&q),
+                    "collision case {q:?}"
+                );
+            }
+        }
     }
 }

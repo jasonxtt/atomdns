@@ -1163,6 +1163,10 @@ impl LearnerSlot {
         true
     }
 
+    fn is_attached(&self) -> bool {
+        self.learner.borrow().is_some()
+    }
+
     fn lookup(&self, name: &str) -> Option<crate::route_learner::LearnedHit> {
         self.learner.borrow().as_ref()?.lookup(name)
     }
@@ -1184,6 +1188,11 @@ pub(crate) fn append_joined(joined: &str, value: &str) -> String {
     }
     out
 }
+
+/// Stack buffer size for [`presentation_name_with`]. Any RFC-valid wire name
+/// (<= 255 bytes) expands to at most `255 * 4 = 1020` bytes even if every byte
+/// needs `\DDD` escaping, so normal queries never heap-allocate.
+const STACK_PRESENTATION_MAX: usize = 1024;
 
 /// The query name in DNS presentation form, which is what the reference host
 /// matches on: labels joined by dots with a trailing dot, the bytes `.`, space,
@@ -1218,6 +1227,80 @@ pub(crate) fn presentation_name(wire: &[u8]) -> Option<String> {
             }
         }
         out.push('.');
+        position += length;
+    }
+}
+
+/// Formats `wire` into DNS presentation form on a stack buffer when it fits,
+/// falling back to [`presentation_name`] only for oversized synthetic inputs.
+/// Output (including `None` for malformed wire names) is byte-for-byte
+/// identical to [`presentation_name`].
+fn presentation_name_with<R>(wire: &[u8], f: impl FnOnce(Option<&str>) -> R) -> R {
+    let mut buf = [0_u8; STACK_PRESENTATION_MAX];
+    let mut position = 0_usize;
+    let mut out = 0_usize;
+    loop {
+        let Some(&raw_len) = wire.get(position) else {
+            return f(None);
+        };
+        let length = usize::from(raw_len);
+        position += 1;
+        if length == 0 {
+            if position != wire.len() {
+                return f(None);
+            }
+            if out == 0 {
+                buf[0] = b'.';
+                out = 1;
+            }
+            let text =
+                std::str::from_utf8(&buf[..out]).expect("DNS presentation output is pure ASCII");
+            return f(Some(text));
+        }
+        if length > 63 {
+            return f(None);
+        }
+        let Some(label) = wire.get(position..position + length) else {
+            return f(None);
+        };
+        for &byte in label {
+            match byte {
+                b'.' | b' ' | b'\'' | b'@' | b';' | b'(' | b')' | b'"' | b'\\' => {
+                    if out + 2 > buf.len() {
+                        let owned = presentation_name(wire);
+                        return f(owned.as_deref());
+                    }
+                    buf[out] = b'\\';
+                    buf[out + 1] = byte;
+                    out += 2;
+                }
+                0..b' ' | 0x7f.. => {
+                    if out + 4 > buf.len() {
+                        let owned = presentation_name(wire);
+                        return f(owned.as_deref());
+                    }
+                    buf[out] = b'\\';
+                    buf[out + 1] = b'0' + (byte / 100);
+                    buf[out + 2] = b'0' + ((byte / 10) % 10);
+                    buf[out + 3] = b'0' + (byte % 10);
+                    out += 4;
+                }
+                other => {
+                    if out + 1 > buf.len() {
+                        let owned = presentation_name(wire);
+                        return f(owned.as_deref());
+                    }
+                    buf[out] = other;
+                    out += 1;
+                }
+            }
+        }
+        if out + 1 > buf.len() {
+            let owned = presentation_name(wire);
+            return f(owned.as_deref());
+        }
+        buf[out] = b'.';
+        out += 1;
         position += length;
     }
 }
@@ -1287,6 +1370,24 @@ impl DomainMapperConfig {
         &self.default_tag
     }
 
+    fn has_no_defaults(&self) -> bool {
+        self.default_mark == 0 && self.default_ctx_marks.is_empty() && self.default_tag.is_empty()
+    }
+
+    fn default_outcome(&self) -> EvalOutcome {
+        EvalOutcome {
+            fast_flags: if self.default_mark == 0 {
+                0
+            } else {
+                1 << self.default_mark
+            },
+            ctx_marks: Arc::clone(&self.default_ctx_marks),
+            domain_set: (!self.default_tag.is_empty()).then(|| Arc::clone(&self.default_tag)),
+            matched_rule_source: None,
+            matched: false,
+        }
+    }
+
     /// The number of unique rules in the current generation.
     #[must_use]
     pub fn rule_count(&self) -> usize {
@@ -1298,24 +1399,30 @@ impl DomainMapperConfig {
     /// other non-hostname labels included); a malformed one is a miss.
     #[must_use]
     pub fn evaluate_wire(&self, qname_wire: &[u8]) -> MapperOutcome {
-        let name = presentation_name(qname_wire);
-        self.evaluate(name.as_deref())
+        let matcher = self.matcher.get();
+        if matcher.is_empty() && !self.learner.is_attached() {
+            return self.default_outcome().into_public();
+        }
+        presentation_name_with(qname_wire, |name| {
+            self.evaluate_loaded(&matcher, name).0.into_public()
+        })
     }
 
     /// Evaluates a presentation-form query name (no trailing dot required).
     #[must_use]
     pub fn evaluate(&self, name: Option<&str>) -> MapperOutcome {
-        self.evaluate_with_overlay(name).0.into_public()
+        let matcher = self.matcher.get();
+        self.evaluate_loaded(&matcher, name).0.into_public()
     }
 
-    fn evaluate_with_overlay(
+    fn evaluate_loaded(
         &self,
+        matcher: &ValuedDomainMatcher,
         name: Option<&str>,
     ) -> (
         EvalOutcome,
         Option<atomdns_sequence_core::RoutingLabelOverlay>,
     ) {
-        let matcher = self.matcher.get();
         let hot = name.and_then(|name| self.learner.lookup(name));
         let overlay = self.learner.learner.borrow().as_ref().map(|learner| {
             atomdns_sequence_core::RoutingLabelOverlay {
@@ -1356,20 +1463,7 @@ impl DomainMapperConfig {
                 overlay,
             );
         }
-        (
-            EvalOutcome {
-                fast_flags: if self.default_mark == 0 {
-                    0
-                } else {
-                    1 << self.default_mark
-                },
-                ctx_marks: Arc::clone(&self.default_ctx_marks),
-                domain_set: (!self.default_tag.is_empty()).then(|| Arc::clone(&self.default_tag)),
-                matched_rule_source: None,
-                matched: false,
-            },
-            overlay,
-        )
+        (self.default_outcome(), overlay)
     }
 
     pub(super) fn executor(&self) -> Box<dyn Executor> {
@@ -1383,10 +1477,12 @@ struct MapperExecutor {
     config: DomainMapperConfig,
 }
 
-impl Executor for MapperExecutor {
-    fn execute(&self, state: &mut ExecutionState) -> Result<ExecutorOutcome, ExecutorError> {
-        let name = presentation_name(&state.query.question.qname_wire);
-        let (outcome, overlay) = self.config.evaluate_with_overlay(name.as_deref());
+impl MapperExecutor {
+    fn apply_outcome(
+        state: &mut ExecutionState,
+        outcome: EvalOutcome,
+        overlay: Option<atomdns_sequence_core::RoutingLabelOverlay>,
+    ) {
         if outcome.fast_flags != 0 {
             state.apply_mutation(StateMutation::SetFastFlags(
                 state.fast_flags | outcome.fast_flags,
@@ -1412,6 +1508,25 @@ impl Executor for MapperExecutor {
         if overlay.is_some() {
             state.domain_set_overlay = overlay;
         }
+    }
+}
+
+impl Executor for MapperExecutor {
+    fn execute(&self, state: &mut ExecutionState) -> Result<ExecutorOutcome, ExecutorError> {
+        // Read the live matcher generation and learner binding on every query
+        // so hot-rebuilt rules or attached learners take effect immediately.
+        let matcher = self.config.matcher.get();
+        if matcher.is_empty() && !self.config.learner.is_attached() {
+            if self.config.has_no_defaults() {
+                return Ok(ExecutorOutcome::Continue);
+            }
+            Self::apply_outcome(state, self.config.default_outcome(), None);
+            return Ok(ExecutorOutcome::Continue);
+        }
+        let (outcome, overlay) = presentation_name_with(&state.query.question.qname_wire, |name| {
+            self.config.evaluate_loaded(&matcher, name)
+        });
+        Self::apply_outcome(state, outcome, overlay);
         Ok(ExecutorOutcome::Continue)
     }
 }
@@ -2008,5 +2123,246 @@ mod tests {
         assert_eq!(lenient[0].format, Format::Dat);
         assert!(strict(r#"{"format":1}"#).is_err());
         assert_eq!(strict(r#"{"format":null}"#).unwrap().format, Format::Auto);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn presentation_name_with_matches_heap_presentation_name_byte_for_byte() {
+        struct SplitMix64(u64);
+        impl SplitMix64 {
+            fn next(&mut self) -> u64 {
+                self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+                let mut z = self.0;
+                z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+                z ^ (z >> 31)
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            fn usize(&mut self, bound: usize) -> usize {
+                (self.next() as usize) % bound
+            }
+        }
+
+        const SEED: u64 = 0x51a9_0003_2026_1125;
+        let mut rng = SplitMix64(SEED);
+
+        // Explicit edge cases: root, empty, malformed pointers, truncation, trailing bytes,
+        // every backslash-escaped byte, control/non-ASCII bytes, max 255-byte wire name,
+        // and an oversized synthetic wire name (>1024 escaped bytes) exercising heap fallback.
+        let mut edge_cases: Vec<Vec<u8>> = vec![
+            vec![],
+            vec![0],
+            vec![0, 0],
+            vec![1, b'a'],
+            vec![3, b'w', b'w', b'w', 0, 1],
+            vec![0xc0, 0x0c],
+            vec![3, b'a', b'b', b'c', 0xc0, 0x00],
+            vec![64, b'a'],
+            vec![63, b'a', 0],
+            vec![9, b'.', b' ', b'\'', b'@', b';', b'(', b')', b'"', b'\\', 0],
+            vec![6, 0x00, 0x01, 0x1f, 0x7f, 0x80, 0xff, 0],
+        ];
+        // Max valid 255-byte wire name (4 labels: 63+63+63+61 + 4 length bytes + 1 root = 255),
+        // filled with 0x00 bytes so every byte expands to `\000` (1004 bytes <= 1024 stack).
+        let mut max_255 = Vec::with_capacity(255);
+        for len in [63_u8, 63, 63, 61] {
+            max_255.push(len);
+            max_255.extend(std::iter::repeat_n(0_u8, usize::from(len)));
+        }
+        max_255.push(0);
+        assert_eq!(max_255.len(), 255);
+        edge_cases.push(max_255);
+
+        // Synthetic oversized wire name expanding beyond STACK_PRESENTATION_MAX (1024 bytes).
+        let mut oversized = Vec::new();
+        for _ in 0..6 {
+            oversized.push(60);
+            oversized.extend(std::iter::repeat_n(0xff_u8, 60));
+        }
+        oversized.push(0);
+        edge_cases.push(oversized);
+
+        for (i, wire) in edge_cases.iter().enumerate() {
+            let stack = presentation_name_with(wire, |s| s.map(str::to_owned));
+            let heap = presentation_name(wire);
+            assert_eq!(stack, heap, "edge case {i} wire={wire:?}");
+        }
+
+        // 20,000 deterministic random valid + malformed wire names.
+        for case_idx in 0..20_000_usize {
+            let wire = match rng.usize(6) {
+                // Normal ASCII hostname wire.
+                0 | 1 => {
+                    let labels = 1 + rng.usize(5);
+                    let mut w = Vec::new();
+                    for _ in 0..labels {
+                        let len = 1 + rng.usize(12);
+                        w.push(u8::try_from(len).unwrap());
+                        for _ in 0..len {
+                            let b = b"abcdefghijklmnopqrstuvwxyz0123456789-_AB"[rng.usize(40)];
+                            w.push(b);
+                        }
+                    }
+                    w.push(0);
+                    w
+                }
+                // Valid wire with full 0x00..=0xff byte alphabet (escapes and `\DDD`).
+                2 | 3 => {
+                    let labels = 1 + rng.usize(4);
+                    let mut w = Vec::new();
+                    for _ in 0..labels {
+                        let len = 1 + rng.usize(30);
+                        w.push(u8::try_from(len).unwrap());
+                        for _ in 0..len {
+                            #[allow(clippy::cast_possible_truncation)]
+                            w.push(rng.next() as u8);
+                        }
+                    }
+                    w.push(0);
+                    w
+                }
+                // Malformed: compression pointer, length > 63, truncated, or trailing bytes.
+                _ => {
+                    let len = rng.usize(40);
+                    let mut w = Vec::with_capacity(len);
+                    for _ in 0..len {
+                        #[allow(clippy::cast_possible_truncation)]
+                        w.push(rng.next() as u8);
+                    }
+                    w
+                }
+            };
+            let stack = presentation_name_with(&wire, |s| s.map(str::to_owned));
+            let heap = presentation_name(&wire);
+            assert_eq!(
+                stack, heap,
+                "presentation_name diff mismatch case={case_idx} seed={SEED} wire={wire:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_mapper_fast_path_reflects_live_replacement_learner_and_defaults() {
+        use atomdns_dns_core::parse_query;
+        use atomdns_matcher_core::ValuedRule;
+        use std::time::Duration;
+
+        let make_state = |qname_wire: &[u8]| -> ExecutionState {
+            let mut pkt = vec![0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
+            pkt.extend_from_slice(qname_wire);
+            pkt.extend_from_slice(&[0, 1, 0, 1]);
+            let (header, question) = parse_query(&pkt).expect("valid query");
+            ExecutionState::new(header, question)
+        };
+        let qname_wire = b"\x03www\x07example\x04test\x00";
+
+        // 1. Empty mapper with no learner and no defaults: live hot-replace empty -> populated -> empty.
+        let empty_matcher = ValuedDomainMatcher::build(&[]).expect("empty");
+        let spec = MapperSpec {
+            tag: "special_test".to_owned(),
+            path: "$".to_owned(),
+            default_mark: 0,
+            default_ctx_mark: 0,
+            default_tag: String::new(),
+            rules: Vec::new(),
+        };
+        let config = spec.config(empty_matcher);
+        let exec = config.executor();
+
+        let mut s0 = make_state(qname_wire);
+        exec.execute(&mut s0).unwrap();
+        assert_eq!(s0.fast_flags, 0);
+        assert!(s0.routing.domain_set.is_none());
+        assert!(s0.routing.matched_rule_source.is_none());
+        assert!(!config.evaluate_wire(qname_wire).matched);
+
+        // Hot-replace with a non-empty matcher: the very next query must match immediately.
+        let populated = ValuedDomainMatcher::build(&[ValuedRule::new(
+            "domain:example.test",
+            1_u64 << 6, // rule mark 7 -> fast flag 7
+            [42],
+            "hot-tag",
+            "hot-source",
+        )])
+        .expect("populated");
+        config.matcher.replace(Rc::new(populated));
+
+        let mut s1 = make_state(qname_wire);
+        exec.execute(&mut s1).unwrap();
+        assert_eq!(s1.fast_flags, 1_u64 << 7);
+        assert!(s1.marks.contains(&42));
+        assert_eq!(s1.routing.domain_set.as_deref(), Some("hot-tag"));
+        assert_eq!(
+            s1.routing.matched_rule_source.as_deref(),
+            Some("hot-source")
+        );
+        assert!(config.evaluate_wire(qname_wire).matched);
+
+        // Hot-replace back to empty: the very next query must stop matching immediately.
+        config
+            .matcher
+            .replace(Rc::new(ValuedDomainMatcher::build(&[]).expect("empty")));
+        let mut s2 = make_state(qname_wire);
+        exec.execute(&mut s2).unwrap();
+        assert_eq!(s2.fast_flags, 0);
+        assert!(s2.routing.domain_set.is_none());
+        assert!(!config.evaluate_wire(qname_wire).matched);
+
+        // 2. Empty matcher WITH an attached RouteLearner must not skip lookup or overlay.
+        let learner = Rc::new(crate::route_learner::RouteLearner::new(
+            "rl",
+            crate::route_learner::Settings {
+                target_mapper: "special_test".to_owned(),
+                file: std::env::temp_dir().join("step9-unused-rl.json"),
+                write_interval: Duration::from_secs(3600),
+                categories: vec![crate::route_learner::CategorySpec {
+                    tag: "direct".to_owned(),
+                    mark: 11,
+                    label: "learned-direct".to_owned(),
+                    source: "learned-src".to_owned(),
+                    ttl: 3600,
+                    max_entries: 100,
+                    enabled: true,
+                }],
+            },
+        ));
+        learner.learn(&[0], "reason", qname_wire);
+        assert!(config.learner.set(learner, ""));
+
+        let mut s3 = make_state(qname_wire);
+        exec.execute(&mut s3).unwrap();
+        assert_eq!(s3.fast_flags, 1_u64 << 11);
+        assert_eq!(s3.routing.domain_set.as_deref(), Some("learned-direct"));
+        assert_eq!(
+            s3.routing.matched_rule_source.as_deref(),
+            Some("learned-src")
+        );
+        assert!(s3.domain_set_overlay.is_some());
+        let wire_out = config.evaluate_wire(qname_wire);
+        assert!(wire_out.matched);
+        assert_eq!(wire_out.fast_flags, 1_u64 << 11);
+
+        // 3. Empty matcher WITH default mark/ctx_mark/tag must still apply all defaults.
+        let def_spec = MapperSpec {
+            tag: "default_test".to_owned(),
+            path: "$".to_owned(),
+            default_mark: 17,
+            default_ctx_mark: 99,
+            default_tag: "unmatched".to_owned(),
+            rules: Vec::new(),
+        };
+        let def_cfg = def_spec.config(ValuedDomainMatcher::build(&[]).expect("empty"));
+        let def_exec = def_cfg.executor();
+        let mut s4 = make_state(qname_wire);
+        def_exec.execute(&mut s4).unwrap();
+        assert_eq!(s4.fast_flags, 1_u64 << 17);
+        assert!(s4.marks.contains(&99));
+        assert_eq!(s4.routing.domain_set.as_deref(), Some("unmatched"));
+        assert!(s4.routing.matched_rule_source.is_none());
+        let def_out = def_cfg.evaluate_wire(qname_wire);
+        assert!(!def_out.matched);
+        assert_eq!(def_out.fast_flags, 1_u64 << 17);
+        assert_eq!(def_out.ctx_marks, vec![99]);
+        assert_eq!(def_out.domain_set.as_deref(), Some("unmatched"));
     }
 }

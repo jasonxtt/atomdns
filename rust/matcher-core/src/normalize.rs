@@ -12,6 +12,11 @@ impl Display for NonAsciiRule {
 
 impl std::error::Error for NonAsciiRule {}
 
+/// Stack buffer size for per-query ASCII domain normalization.
+/// Covers every valid DNS name (max 253 bytes) without heap allocation;
+/// longer synthetic inputs fall back to heap allocation.
+const STACK_NORMALIZE_MAX: usize = 512;
+
 /// Normalise a domain string to match Go's `NormalizeDomain`:
 /// lowercase + strip a single trailing dot.
 ///
@@ -28,6 +33,27 @@ impl std::error::Error for NonAsciiRule {}
 pub fn normalize(s: &str) -> String {
     let trimmed = s.strip_suffix('.').unwrap_or(s);
     trimmed.to_ascii_lowercase()
+}
+
+/// Runs `f` on the normalized form of an ASCII domain string without heap
+/// allocation when it fits on the stack. Callers must ensure `s.is_ascii()`.
+pub(crate) fn with_normalized_ascii<R>(s: &str, f: impl FnOnce(&str) -> R) -> R {
+    let trimmed = s.strip_suffix('.').unwrap_or(s);
+    if !trimmed.bytes().any(|b| b.is_ascii_uppercase()) {
+        return f(trimmed);
+    }
+    if trimmed.len() <= STACK_NORMALIZE_MAX {
+        let mut buf = [0_u8; STACK_NORMALIZE_MAX];
+        for (dst, &src) in buf.iter_mut().zip(trimmed.as_bytes()) {
+            *dst = src.to_ascii_lowercase();
+        }
+        let normalized = std::str::from_utf8(&buf[..trimmed.len()])
+            .expect("ASCII bytes remain valid UTF-8 after to_ascii_lowercase");
+        f(normalized)
+    } else {
+        let owned = trimmed.to_ascii_lowercase();
+        f(&owned)
+    }
 }
 
 #[cfg(test)]
