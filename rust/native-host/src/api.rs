@@ -9,7 +9,7 @@
 use std::cell::Cell;
 use std::fmt;
 use std::io;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -24,6 +24,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 
+use atomdns_dns_core::render_wire_name_into;
 use atomdns_upstream_core::TransportCancellation;
 
 use crate::cache::{CacheCatalog, NativeCacheAdapter};
@@ -31,8 +32,9 @@ use crate::config::{CacheKind, CompiledConfig};
 use crate::managed::ManagedDomainSet;
 use crate::observer::{
     AnswerDetailsStatus, AuditClock, AuditReadSnapshot, AuditRecord, AuditStatsSnapshot,
-    AuditTimingSnapshot, QueryObserver, ResponseState, RetainedAuditRecord, UpstreamAttemptOutcome,
-    UpstreamDiagnostics,
+    AuditTimingSnapshot, CompactPayload, QueryObserver, ResponseState, RetainedAuditRecord,
+    RetainedResponse, UpstreamAttemptOutcome, UpstreamDiagnostics, for_each_packed_record,
+    format_packed_answer_data_into,
 };
 use crate::udp::{drain_tasks, reap_one_task};
 
@@ -2103,41 +2105,43 @@ fn parse_bool_like(value: &str) -> bool {
     matches!(value, "1" | "t" | "T" | "TRUE" | "true" | "True")
 }
 
-fn normalized_ip(value: &str) -> Option<String> {
+fn normalized_ip_addr(value: &str) -> Option<IpAddr> {
     let address = if let Ok(address) = value.parse::<SocketAddr>() {
         address.ip()
-    } else if let Ok(address) = value.parse::<std::net::IpAddr>() {
+    } else if let Ok(address) = value.parse::<IpAddr>() {
         address
     } else {
         value
             .strip_prefix('[')
             .and_then(|value| value.strip_suffix(']'))
-            .and_then(|value| value.parse::<std::net::IpAddr>().ok())?
+            .and_then(|value| value.parse::<IpAddr>().ok())?
     };
-    let address = match address {
-        std::net::IpAddr::V4(address) => std::net::IpAddr::V4(address),
-        std::net::IpAddr::V6(address) => canonical_ip(std::net::IpAddr::V6(address)),
-    };
-    Some(address.to_string())
+    Some(canonical_ip(address))
 }
 
-fn canonical_ip(address: std::net::IpAddr) -> std::net::IpAddr {
+#[cfg(test)]
+fn normalized_ip(value: &str) -> Option<String> {
+    normalized_ip_addr(value).map(|address| address.to_string())
+}
+
+fn canonical_ip(address: IpAddr) -> IpAddr {
     match address {
-        std::net::IpAddr::V4(address) => std::net::IpAddr::V4(address),
-        std::net::IpAddr::V6(address) => {
+        IpAddr::V4(address) => IpAddr::V4(address),
+        IpAddr::V6(address) => {
             let segments = address.segments();
             if segments[..5] == [0, 0, 0, 0, 0] && segments[5] == 0xffff {
                 let octets = address.octets();
-                std::net::IpAddr::V4(std::net::Ipv4Addr::new(
+                IpAddr::V4(Ipv4Addr::new(
                     octets[12], octets[13], octets[14], octets[15],
                 ))
             } else {
-                std::net::IpAddr::V6(address)
+                IpAddr::V6(address)
             }
         }
     }
 }
 
+#[cfg(test)]
 fn text_matches(value: &str, query: &str, exact: bool) -> bool {
     if exact {
         value == query
@@ -2154,7 +2158,339 @@ fn projected_query_name(record: &RetainedAuditRecord) -> &str {
     }
 }
 
-fn audit_record_matches(record: &RetainedAuditRecord, filter: &AuditFilter) -> bool {
+fn format_ipv4_stack(ip: [u8; 4], buf: &mut [u8; 15]) -> &str {
+    let mut pos = 0;
+    for (index, &octet) in ip.iter().enumerate() {
+        if index > 0 {
+            buf[pos] = b'.';
+            pos += 1;
+        }
+        if octet >= 100 {
+            buf[pos] = b'0' + (octet / 100);
+            buf[pos + 1] = b'0' + ((octet / 10) % 10);
+            buf[pos + 2] = b'0' + (octet % 10);
+            pos += 3;
+        } else if octet >= 10 {
+            buf[pos] = b'0' + (octet / 10);
+            buf[pos + 1] = b'0' + (octet % 10);
+            pos += 2;
+        } else {
+            buf[pos] = b'0' + octet;
+            pos += 1;
+        }
+    }
+    std::str::from_utf8(&buf[..pos]).expect("ASCII decimal IPv4")
+}
+
+struct CompiledQuery<'a> {
+    raw: &'a str,
+    lower: String,
+    exact: bool,
+    ip_query: Option<IpAddr>,
+    can_match_ipv4_text: bool,
+    can_match_ipv6_text: bool,
+}
+
+impl<'a> CompiledQuery<'a> {
+    fn new(raw: &'a str, exact: bool) -> Self {
+        let lower = if exact {
+            String::new()
+        } else {
+            raw.to_lowercase()
+        };
+        let ip_query = normalized_ip_addr(raw);
+        let needle = if exact { raw } else { lower.as_str() };
+        // `Ipv4Addr::to_string` emits only ASCII digits and '.', max 15 bytes.
+        let can_match_ipv4_text =
+            needle.len() <= 15 && needle.bytes().all(|b| b.is_ascii_digit() || b == b'.');
+        // `Ipv6Addr::to_string` emits only lowercase ASCII hex, ':', and '.', max 45 bytes.
+        let can_match_ipv6_text = needle.len() <= 45
+            && needle.bytes().all(|b| {
+                b.is_ascii_digit() || (b'a'..=b'f').contains(&b) || b == b':' || b == b'.'
+            });
+        Self {
+            raw,
+            lower,
+            exact,
+            ip_query,
+            can_match_ipv4_text,
+            can_match_ipv6_text,
+        }
+    }
+
+    fn matches_lowercase_ascii(&self, value: &str) -> bool {
+        if self.exact {
+            value == self.raw
+        } else {
+            value.contains(&self.lower)
+        }
+    }
+
+    fn matches_str(&self, value: &str, scratch: &mut String) -> bool {
+        if let Some(ip) = self.ip_query
+            && normalized_ip_addr(value) == Some(ip)
+        {
+            return true;
+        }
+        if self.exact {
+            return value == self.raw;
+        }
+        if value.is_ascii() {
+            scratch.clear();
+            scratch.push_str(value);
+            scratch.make_ascii_lowercase();
+            scratch.contains(&self.lower)
+        } else {
+            value.to_lowercase().contains(&self.lower)
+        }
+    }
+
+    fn matches_owned_text(&self, text: &mut str) -> bool {
+        if let Some(ip) = self.ip_query
+            && normalized_ip_addr(text) == Some(ip)
+        {
+            return true;
+        }
+        if self.exact {
+            return text == self.raw;
+        }
+        if text.is_ascii() {
+            text.make_ascii_lowercase();
+            text.contains(&self.lower)
+        } else {
+            text.to_lowercase().contains(&self.lower)
+        }
+    }
+
+    fn matches_ipv4(&self, octets: [u8; 4]) -> bool {
+        if let Some(target) = self.ip_query
+            && IpAddr::V4(Ipv4Addr::from(octets)) == target
+        {
+            return true;
+        }
+        if !self.can_match_ipv4_text {
+            return false;
+        }
+        let mut buf = [0_u8; 15];
+        self.matches_lowercase_ascii(format_ipv4_stack(octets, &mut buf))
+    }
+
+    fn matches_ipv6(&self, octets: [u8; 16], scratch: &mut String) -> bool {
+        use std::fmt::Write;
+        let v6 = Ipv6Addr::from(octets);
+        if let Some(target) = self.ip_query
+            && canonical_ip(IpAddr::V6(v6)) == target
+        {
+            return true;
+        }
+        if !self.can_match_ipv6_text {
+            return false;
+        }
+        scratch.clear();
+        let _ = write!(scratch, "{v6}");
+        self.matches_lowercase_ascii(scratch)
+    }
+
+    fn matches_canonical_ip(&self, ip: IpAddr, scratch: &mut String) -> bool {
+        match ip {
+            IpAddr::V4(v4) => self.matches_ipv4(v4.octets()),
+            IpAddr::V6(v6) => self.matches_ipv6(v6.octets(), scratch),
+        }
+    }
+
+    fn matches_response(&self, response: &RetainedResponse, scratch: &mut String) -> bool {
+        match response {
+            RetainedResponse::Empty { .. } | RetainedResponse::DecodeError { .. } => false,
+            RetainedResponse::SingleA { ip, .. } => self.matches_ipv4(*ip),
+            RetainedResponse::Shared(compact) => match &compact.payload {
+                CompactPayload::SingleAaaa { ip, .. } => self.matches_ipv6(*ip, scratch),
+                CompactPayload::TwoA { ip1, ip2, .. } => {
+                    self.matches_ipv4(*ip1) || self.matches_ipv4(*ip2)
+                }
+                CompactPayload::Packed(blob) => {
+                    for_each_packed_record(blob, |rrtype, _, payload| match rrtype {
+                        1 => <[u8; 4]>::try_from(payload)
+                            .is_ok_and(|octets| self.matches_ipv4(octets)),
+                        28 => <[u8; 16]>::try_from(payload)
+                            .is_ok_and(|octets| self.matches_ipv6(octets, scratch)),
+                        _ => {
+                            scratch.clear();
+                            format_packed_answer_data_into(rrtype, payload, scratch);
+                            self.matches_owned_text(scratch)
+                        }
+                    })
+                }
+                CompactPayload::Verbatim(details) => details
+                    .answers
+                    .iter()
+                    .any(|answer| self.matches_str(&answer.data, scratch)),
+            },
+        }
+    }
+}
+
+struct CompiledAuditFilter<'a> {
+    q: Option<CompiledQuery<'a>>,
+    domain: Option<&'a str>,
+    client_ips: Option<Vec<IpAddr>>,
+    answer_ip: Option<Option<IpAddr>>,
+    cname: Option<&'a str>,
+    domain_set: Option<&'a str>,
+    effective_tag: Option<&'a str>,
+    exact_domain: Option<&'a str>,
+}
+
+impl<'a> CompiledAuditFilter<'a> {
+    fn compile(filter: &'a AuditFilter) -> Self {
+        Self {
+            q: filter
+                .q
+                .as_deref()
+                .map(|query| CompiledQuery::new(query, filter.exact)),
+            domain: filter.domain.as_deref(),
+            client_ips: (!filter.client_ips.is_empty()).then(|| {
+                filter
+                    .client_ips
+                    .iter()
+                    .filter_map(|candidate| normalized_ip_addr(candidate))
+                    .collect()
+            }),
+            answer_ip: filter.answer_ip.as_deref().map(normalized_ip_addr),
+            cname: filter.cname.as_deref(),
+            domain_set: filter.domain_set.as_deref(),
+            effective_tag: filter.effective_tag.as_deref(),
+            exact_domain: filter.exact_domain.as_deref(),
+        }
+    }
+
+    fn matches(&self, record: &RetainedAuditRecord, scratch: &mut String) -> bool {
+        let common = record.common();
+        if let Some(domain_set) = self.domain_set
+            && common.domain_set.as_deref() != Some(domain_set)
+        {
+            return false;
+        }
+        if let Some(effective_tag) = self.effective_tag
+            && common.effective_tag.as_deref() != Some(effective_tag)
+        {
+            return false;
+        }
+        if let Some(exact_domain) = self.exact_domain
+            && projected_query_name(record) != exact_domain
+        {
+            return false;
+        }
+        if let Some(domain) = self.domain
+            && !projected_query_name(record).contains(domain)
+        {
+            return false;
+        }
+        if let Some(client_ips) = &self.client_ips {
+            let record_ip = canonical_ip(record.client_addr().ip());
+            if !client_ips.contains(&record_ip) {
+                return false;
+            }
+        }
+        if let Some(answer_ip) = self.answer_ip {
+            let Some(target) = answer_ip else {
+                return false;
+            };
+            if !response_matches_answer_ip(record.response(), target) {
+                return false;
+            }
+        }
+        if let Some(cname) = self.cname
+            && !response_matches_cname(record.response(), cname, scratch)
+        {
+            return false;
+        }
+        if let Some(query) = &self.q {
+            use std::fmt::Write;
+            if query.matches_str(projected_query_name(record), scratch) {
+                return true;
+            }
+            if query.matches_canonical_ip(canonical_ip(record.client_addr().ip()), scratch) {
+                return true;
+            }
+            scratch.clear();
+            let _ = write!(scratch, "{}", record.trace_id);
+            if query.matches_owned_text(scratch) {
+                return true;
+            }
+            for optional in [
+                common.domain_set.as_deref(),
+                common.effective_tag.as_deref(),
+                common.matched_rule_source.as_deref(),
+                common.selected_upstream.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if query.matches_str(optional, scratch) {
+                    return true;
+                }
+            }
+            return query.matches_response(record.response(), scratch);
+        }
+        true
+    }
+}
+
+fn response_matches_answer_ip(response: &RetainedResponse, target: IpAddr) -> bool {
+    match response {
+        RetainedResponse::Empty { .. } | RetainedResponse::DecodeError { .. } => false,
+        RetainedResponse::SingleA { ip, .. } => IpAddr::V4(Ipv4Addr::from(*ip)) == target,
+        RetainedResponse::Shared(compact) => match &compact.payload {
+            CompactPayload::SingleAaaa { ip, .. } => {
+                canonical_ip(IpAddr::V6(Ipv6Addr::from(*ip))) == target
+            }
+            CompactPayload::TwoA { ip1, ip2, .. } => {
+                IpAddr::V4(Ipv4Addr::from(*ip1)) == target
+                    || IpAddr::V4(Ipv4Addr::from(*ip2)) == target
+            }
+            CompactPayload::Packed(blob) => {
+                for_each_packed_record(blob, |rrtype, _, payload| match rrtype {
+                    1 => <[u8; 4]>::try_from(payload)
+                        .is_ok_and(|octets| IpAddr::V4(Ipv4Addr::from(octets)) == target),
+                    28 => <[u8; 16]>::try_from(payload).is_ok_and(|octets| {
+                        canonical_ip(IpAddr::V6(Ipv6Addr::from(octets))) == target
+                    }),
+                    _ => false,
+                })
+            }
+            CompactPayload::Verbatim(details) => details.answers.iter().any(|answer| {
+                matches!(answer.rrtype, 1 | 28) && normalized_ip_addr(&answer.data) == Some(target)
+            }),
+        },
+    }
+}
+
+fn response_matches_cname(response: &RetainedResponse, cname: &str, scratch: &mut String) -> bool {
+    let RetainedResponse::Shared(compact) = response else {
+        return false;
+    };
+    match &compact.payload {
+        CompactPayload::SingleAaaa { .. } | CompactPayload::TwoA { .. } => false,
+        CompactPayload::Packed(blob) => for_each_packed_record(blob, |rrtype, _, payload| {
+            if rrtype != 5 {
+                return false;
+            }
+            scratch.clear();
+            render_wire_name_into(payload, scratch);
+            scratch.contains(cname)
+        }),
+        CompactPayload::Verbatim(details) => details
+            .answers
+            .iter()
+            .any(|answer| answer.rrtype == 5 && answer.data.contains(cname)),
+    }
+}
+
+/// Preserved pre-Step-5 filter reference over expanded `ResponseDetails` for
+/// differential verification.
+#[cfg(test)]
+fn reference_audit_record_matches(record: &RetainedAuditRecord, filter: &AuditFilter) -> bool {
+    let response_details = record.response().to_response_details();
     let query_match = filter.q.as_ref().is_none_or(|query| {
         let exact = filter.exact;
         let ip_query = normalized_ip(query);
@@ -2172,8 +2508,7 @@ fn audit_record_matches(record: &RetainedAuditRecord, filter: &AuditFilter) -> b
         .chain(common.matched_rule_source.as_deref())
         .chain(common.selected_upstream.as_deref())
         .chain(
-            record
-                .response_details
+            response_details
                 .answers
                 .iter()
                 .map(|answer| answer.data.as_str()),
@@ -2200,15 +2535,14 @@ fn audit_record_matches(record: &RetainedAuditRecord, filter: &AuditFilter) -> b
     };
     let answer_ip_match = filter.answer_ip.as_ref().is_none_or(|ip| {
         normalized_ip(ip).is_some_and(|ip| {
-            record.response_details.answers.iter().any(|answer| {
+            response_details.answers.iter().any(|answer| {
                 matches!(answer.rrtype, 1 | 28)
                     && normalized_ip(&answer.data).as_deref() == Some(&ip)
             })
         })
     });
     let cname_match = filter.cname.as_ref().is_none_or(|cname| {
-        record
-            .response_details
+        response_details
             .answers
             .iter()
             .any(|answer| answer.rrtype == 5 && answer.data.contains(cname))
@@ -2422,6 +2756,8 @@ fn rank_response(
     let records = match filter {
         None => snapshot.records,
         Some(filter) => {
+            let compiled = CompiledAuditFilter::compile(&filter);
+            let mut scratch = String::new();
             let mut records = Vec::new();
             records
                 .try_reserve(snapshot.records.len())
@@ -2430,7 +2766,7 @@ fn rank_response(
                 if index % 1024 == 0 && shutdown.is_cancelled() {
                     return Err(AuditReadFailure::Canceled);
                 }
-                if audit_record_matches(&record, &filter) {
+                if compiled.matches(&record, &mut scratch) {
                     records.push(record);
                 }
             }
@@ -2528,6 +2864,8 @@ async fn dispatch_audit_read(
             Err(()) => return Response::error(500, "audit read failed"),
         };
         if let AuditReadKind::Logs { .. } = kind {
+            let compiled = filter.as_ref().map(CompiledAuditFilter::compile);
+            let mut scratch = String::new();
             let mut records = Vec::new();
             if records.try_reserve(snapshot.records.len()).is_err() {
                 return Response::error(500, "audit read failed");
@@ -2536,9 +2874,9 @@ async fn dispatch_audit_read(
                 if index % 1024 == 0 && shutdown.is_cancelled() {
                     return Response::empty(499);
                 }
-                if filter
+                if compiled
                     .as_ref()
-                    .is_none_or(|filter| audit_record_matches(&record, filter))
+                    .is_none_or(|compiled| compiled.matches(&record, &mut scratch))
                 {
                     records.push(record);
                 }
@@ -3570,6 +3908,10 @@ fn cache_show(
 #[cfg(test)]
 #[path = "api/audit_retention_tests.rs"]
 mod audit_retention_tests;
+
+#[cfg(test)]
+#[path = "api/lazy_audit_tests.rs"]
+mod lazy_audit_tests;
 
 #[cfg(test)]
 mod tests {

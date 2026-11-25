@@ -56,7 +56,9 @@ pub use resolver::{
     build_resolver_query, parse_resolver_response,
 };
 pub use response::{
-    AnswerRecord, ResponseError, ResponseMetadata, ResponseQuestion, ResponseSection, TtlInfo,
-    age_response_ttls, clamp_response_ttls, observe_answer_addresses, observe_answer_records,
-    observe_response_metadata, observe_response_ttl, replace_response_ttls, validate_response,
+    AnswerRecord, AuditRdata, AuditWireOutcome, ResponseError, ResponseMetadata, ResponseQuestion,
+    ResponseSection, TtlInfo, age_response_ttls, clamp_response_ttls, format_raw_rdata_into,
+    format_txt_rdata_into, observe_answer_addresses, observe_answer_records,
+    observe_response_metadata, observe_response_rcode, observe_response_ttl,
+    observe_wire_for_audit, render_wire_name_into, replace_response_ttls, validate_response,
 };

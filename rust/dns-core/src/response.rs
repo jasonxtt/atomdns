@@ -68,11 +68,43 @@ pub struct AnswerRecord {
     pub data: String,
 }
 
+/// Compact validated RDATA of one Answer-section record visited during a
+/// single-pass audit wire walk.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuditRdata<'a> {
+    /// IPv4 address (type 1, 4 octets).
+    A([u8; 4]),
+    /// IPv6 address (type 28, 16 octets).
+    Aaaa([u8; 16]),
+    /// Expanded uncompressed wire name (NS/CNAME/PTR/MX, MX preference stripped).
+    ExpandedName(&'a [u8]),
+    /// Validated TXT RDATA (length-prefixed character strings).
+    Txt(&'a [u8]),
+    /// Raw RDATA of any other legal RR type (marks `raw_rdata` audit status).
+    Raw(&'a [u8]),
+}
+
+/// Outcome of a single-pass audit observation, matching the combined behavior
+/// of [`observe_response_metadata`] and [`observe_answer_records`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuditWireOutcome {
+    /// Extended RCODE when metadata validation succeeded, else header base RCODE.
+    pub rcode: u16,
+    /// First Answer/structural error matching [`observe_answer_records`].
+    pub answer_error: Option<ResponseError>,
+    /// True iff all answers succeeded and at least one used [`AuditRdata::Raw`].
+    pub has_raw: bool,
+}
+
 const DNS_HEADER_LEN: usize = 12;
 const RR_FIXED_LEN: usize = 10;
 const TYPE_OPT: u16 = 41;
 const TYPE_A: u16 = 1;
 const TYPE_AAAA: u16 = 28;
+const MAX_NAME_OCTETS: usize = 255;
+const MAX_NAME_POINTERS: usize = MAX_NAME_OCTETS.div_ceil(2) - 2;
+/// `read_name` permits non-zero labels up to 255 bytes plus the trailing root 0.
+const EXPANDED_NAME_BUF_LEN: usize = MAX_NAME_OCTETS + 1;
 
 /// Returns ordinary A and AAAA addresses from the Answer section only.
 ///
@@ -181,6 +213,216 @@ pub fn observe_response_metadata(packet: &[u8]) -> Result<ResponseMetadata, Resp
     })
 }
 
+/// Observes the effective response RCODE (including any EDNS OPT extended
+/// RCODE) in a single zero-allocation pass, matching
+/// `observe_response_metadata(packet).map(|m| m.rcode).unwrap_or(base_rcode)`
+/// on every legal and malformed packet.
+#[must_use]
+pub fn observe_response_rcode(packet: &[u8]) -> u16 {
+    let base_rcode = u16::from(packet.get(3).copied().unwrap_or_default() & 0x0f);
+    if packet.len() < DNS_HEADER_LEN || packet[2] & 0x80 == 0 {
+        return base_rcode;
+    }
+    let qdcount = usize::from(u16::from_be_bytes([packet[4], packet[5]]));
+    let ancount = usize::from(u16::from_be_bytes([packet[6], packet[7]]));
+    let nscount = usize::from(u16::from_be_bytes([packet[8], packet[9]]));
+    let arcount = usize::from(u16::from_be_bytes([packet[10], packet[11]]));
+    if ancount + nscount + arcount == 0 {
+        return base_rcode;
+    }
+
+    let mut extended_rcode = 0_u16;
+    if walk_records(packet, |record| {
+        if record.rrtype == TYPE_OPT {
+            extended_rcode = u16::from((record.ttl >> 24) as u8);
+        }
+        Ok(())
+    })
+    .is_err()
+    {
+        return base_rcode;
+    }
+    if extended_rcode == 0 {
+        return base_rcode;
+    }
+    if qdcount == 1 && !validate_single_question_metadata(packet) {
+        return base_rcode;
+    }
+    base_rcode | (extended_rcode << 4)
+}
+
+/// Single-pass audit walk extracting the effective RCODE and visiting every
+/// Answer-section record in wire order without formatting strings.
+///
+/// If an Answer record has invalid RDATA, `on_answer` stops receiving further
+/// answers while the remaining sections are still structurally validated so
+/// `rcode` and `answer_error` match calling `observe_response_metadata` and
+/// `observe_answer_records` separately on every malformed input.
+pub fn observe_wire_for_audit(
+    packet: &[u8],
+    mut on_answer: impl FnMut(u16, u32, AuditRdata<'_>),
+) -> AuditWireOutcome {
+    let base_rcode = u16::from(packet.get(3).copied().unwrap_or_default() & 0x0f);
+    if packet.len() < DNS_HEADER_LEN {
+        return AuditWireOutcome {
+            rcode: base_rcode,
+            answer_error: Some(ResponseError::TooShort),
+            has_raw: false,
+        };
+    }
+    if packet[2] & 0x80 == 0 {
+        return AuditWireOutcome {
+            rcode: base_rcode,
+            answer_error: Some(ResponseError::NotResponse),
+            has_raw: false,
+        };
+    }
+
+    let qdcount = usize::from(u16::from_be_bytes([packet[4], packet[5]]));
+    let ancount = usize::from(u16::from_be_bytes([packet[6], packet[7]]));
+    let nscount = usize::from(u16::from_be_bytes([packet[8], packet[9]]));
+    let arcount = usize::from(u16::from_be_bytes([packet[10], packet[11]]));
+
+    let mut position = DNS_HEADER_LEN;
+    for _ in 0..qdcount {
+        let Some(next) = skip_name(packet, position) else {
+            return AuditWireOutcome {
+                rcode: base_rcode,
+                answer_error: Some(ResponseError::BadName),
+                has_raw: false,
+            };
+        };
+        let Some(after) = next.checked_add(4) else {
+            return AuditWireOutcome {
+                rcode: base_rcode,
+                answer_error: Some(ResponseError::TooShort),
+                has_raw: false,
+            };
+        };
+        if after > packet.len() {
+            return AuditWireOutcome {
+                rcode: base_rcode,
+                answer_error: Some(ResponseError::TooShort),
+                has_raw: false,
+            };
+        }
+        position = after;
+    }
+
+    let mut extended_rcode = 0_u16;
+    let mut first_answer_err: Option<ResponseError> = None;
+    let mut has_raw = false;
+    let mut name_buf = [0_u8; EXPANDED_NAME_BUF_LEN];
+
+    let sections = [
+        (ResponseSection::Answer, ancount),
+        (ResponseSection::Authority, nscount),
+        (ResponseSection::Additional, arcount),
+    ];
+    for (section, count) in sections {
+        for _ in 0..count {
+            let Some(next) = skip_name(packet, position) else {
+                return AuditWireOutcome {
+                    rcode: base_rcode,
+                    answer_error: Some(first_answer_err.unwrap_or(ResponseError::BadName)),
+                    has_raw: false,
+                };
+            };
+            position = next;
+            let Some(fixed_end) = position.checked_add(RR_FIXED_LEN) else {
+                return AuditWireOutcome {
+                    rcode: base_rcode,
+                    answer_error: Some(first_answer_err.unwrap_or(ResponseError::TruncatedRecord)),
+                    has_raw: false,
+                };
+            };
+            if fixed_end > packet.len() {
+                return AuditWireOutcome {
+                    rcode: base_rcode,
+                    answer_error: Some(first_answer_err.unwrap_or(ResponseError::TruncatedRecord)),
+                    has_raw: false,
+                };
+            }
+            let rrtype = u16::from_be_bytes([packet[position], packet[position + 1]]);
+            let ttl = read_u32(packet, position + 4);
+            let data_len = usize::from(u16::from_be_bytes([
+                packet[position + 8],
+                packet[position + 9],
+            ]));
+            let Some(rdata_end) = fixed_end.checked_add(data_len) else {
+                return AuditWireOutcome {
+                    rcode: base_rcode,
+                    answer_error: Some(first_answer_err.unwrap_or(ResponseError::TruncatedRecord)),
+                    has_raw: false,
+                };
+            };
+            let Some(rdata) = packet.get(fixed_end..rdata_end) else {
+                return AuditWireOutcome {
+                    rcode: base_rcode,
+                    answer_error: Some(first_answer_err.unwrap_or(ResponseError::TruncatedRecord)),
+                    has_raw: false,
+                };
+            };
+            if rrtype == TYPE_OPT {
+                extended_rcode = u16::from((ttl >> 24) as u8);
+            }
+            if section == ResponseSection::Answer && first_answer_err.is_none() {
+                match rrtype {
+                    TYPE_A => match <[u8; 4]>::try_from(rdata) {
+                        Ok(octets) => on_answer(rrtype, ttl, AuditRdata::A(octets)),
+                        Err(_) => first_answer_err = Some(ResponseError::InvalidRecordData),
+                    },
+                    TYPE_AAAA => match <[u8; 16]>::try_from(rdata) {
+                        Ok(octets) => on_answer(rrtype, ttl, AuditRdata::Aaaa(octets)),
+                        Err(_) => first_answer_err = Some(ResponseError::InvalidRecordData),
+                    },
+                    2 | 5 | 12 | 15 => {
+                        let prefix = if rrtype == 15 { 2 } else { 0 };
+                        match expand_name_rdata(
+                            packet,
+                            fixed_end,
+                            rdata.len(),
+                            prefix,
+                            &mut name_buf,
+                        ) {
+                            Ok(name_len) => on_answer(
+                                rrtype,
+                                ttl,
+                                AuditRdata::ExpandedName(&name_buf[..name_len]),
+                            ),
+                            Err(err) => first_answer_err = Some(err),
+                        }
+                    }
+                    16 => {
+                        if validate_txt_rdata(rdata).is_ok() {
+                            on_answer(rrtype, ttl, AuditRdata::Txt(rdata));
+                        } else {
+                            first_answer_err = Some(ResponseError::InvalidRecordData);
+                        }
+                    }
+                    _ => {
+                        has_raw = true;
+                        on_answer(rrtype, ttl, AuditRdata::Raw(rdata));
+                    }
+                }
+            }
+            position = rdata_end;
+        }
+    }
+
+    let rcode =
+        if extended_rcode != 0 && (qdcount != 1 || validate_single_question_metadata(packet)) {
+            base_rcode | (extended_rcode << 4)
+        } else {
+            base_rcode
+        };
+    AuditWireOutcome {
+        rcode,
+        answer_error: first_answer_err,
+        has_raw: first_answer_err.is_none() && has_raw,
+    }
+}
+
 /// Projects every Answer-section record in wire order.
 ///
 /// The walk validates the question and all declared sections before returning
@@ -222,24 +464,15 @@ fn project_rdata(packet: &[u8], record: &RecordMetadata<'_>) -> Result<String, R
         2 | 5 | 12 => project_name_rdata(packet, record, 0),
         15 => project_name_rdata(packet, record, 2),
         16 => {
-            let mut offset = 0;
-            let mut chunks = Vec::new();
-            while offset < record.rdata.len() {
-                let length = usize::from(record.rdata[offset]);
-                offset = offset
-                    .checked_add(1)
-                    .and_then(|value| value.checked_add(length))
-                    .ok_or(ResponseError::InvalidRecordData)?;
-                let start = offset - length;
-                let chunk = record
-                    .rdata
-                    .get(start..offset)
-                    .ok_or(ResponseError::InvalidRecordData)?;
-                chunks.push(String::from_utf8_lossy(chunk).into_owned());
-            }
-            Ok(chunks.join(" "))
+            let mut out = String::new();
+            format_txt_rdata_into(record.rdata, &mut out)?;
+            Ok(out)
         }
-        _ => Ok(raw_rdata(record.rdata)),
+        _ => {
+            let mut out = String::new();
+            format_raw_rdata_into(record.rdata, &mut out);
+            Ok(out)
+        }
     }
 }
 
@@ -248,26 +481,64 @@ fn project_name_rdata(
     record: &RecordMetadata<'_>,
     prefix: usize,
 ) -> Result<String, ResponseError> {
-    let start = record
-        .rdata_offset
+    let mut buf = [0_u8; EXPANDED_NAME_BUF_LEN];
+    let name_len = expand_name_rdata(
+        packet,
+        record.rdata_offset,
+        record.rdata.len(),
+        prefix,
+        &mut buf,
+    )?;
+    let mut out = String::new();
+    render_wire_name_into(&buf[..name_len], &mut out);
+    Ok(out)
+}
+
+fn expand_name_rdata(
+    packet: &[u8],
+    rdata_offset: usize,
+    rdata_len: usize,
+    prefix: usize,
+    out: &mut [u8; EXPANDED_NAME_BUF_LEN],
+) -> Result<usize, ResponseError> {
+    let start = rdata_offset
         .checked_add(prefix)
         .ok_or(ResponseError::InvalidRecordData)?;
     let end = start
-        .checked_add(record.rdata.len().saturating_sub(prefix))
+        .checked_add(rdata_len.saturating_sub(prefix))
         .ok_or(ResponseError::InvalidRecordData)?;
-    if prefix > record.rdata.len() {
+    if prefix > rdata_len {
         return Err(ResponseError::InvalidRecordData);
     }
-    let (name_end, name) = read_name(packet, start)?;
+    let (name_end, name_len) = read_name_into_buf(packet, start, out)?;
     if name_end != end {
         return Err(ResponseError::InvalidRecordData);
     }
-    Ok(render_wire_name(&name))
+    Ok(name_len)
 }
 
-fn render_wire_name(wire: &[u8]) -> String {
+fn validate_txt_rdata(rdata: &[u8]) -> Result<(), ResponseError> {
+    let mut offset = 0;
+    while offset < rdata.len() {
+        let length = usize::from(rdata[offset]);
+        offset = offset
+            .checked_add(1)
+            .and_then(|value| value.checked_add(length))
+            .ok_or(ResponseError::InvalidRecordData)?;
+        if offset > rdata.len() {
+            return Err(ResponseError::InvalidRecordData);
+        }
+    }
+    Ok(())
+}
+
+/// Renders an expanded uncompressed DNS wire name into `out`, preserving ASCII
+/// case and escaping dots, backslashes, and non-printable bytes as `\NNN`.
+pub fn render_wire_name_into(wire: &[u8], out: &mut String) {
+    use std::fmt::Write;
+    let start = out.len();
     let mut position = 0;
-    let mut labels = Vec::new();
+    let mut any = false;
     while let Some(&length) = wire.get(position) {
         position += 1;
         if length == 0 {
@@ -275,34 +546,72 @@ fn render_wire_name(wire: &[u8]) -> String {
         }
         let length = usize::from(length);
         let Some(label) = wire.get(position..position + length) else {
-            return ".".to_owned();
+            out.truncate(start);
+            out.push('.');
+            return;
         };
-        let mut rendered = String::new();
+        if any {
+            out.push('.');
+        }
+        any = true;
         for &byte in label {
             match byte {
-                b'!'..=b'~' if byte != b'.' && byte != b'\\' => rendered.push(byte as char),
-                b'.' => rendered.push_str("\\."),
-                b'\\' => rendered.push_str("\\\\"),
-                _ => rendered.push_str(&format!("\\{byte:03}")),
+                b'!'..=b'~' if byte != b'.' && byte != b'\\' => out.push(byte as char),
+                b'.' => out.push_str("\\."),
+                b'\\' => out.push_str("\\\\"),
+                _ => {
+                    let _ = write!(out, "\\{byte:03}");
+                }
             }
         }
-        labels.push(rendered);
         position += length;
     }
-    if labels.is_empty() {
-        ".".to_owned()
-    } else {
-        format!("{}.", labels.join("."))
-    }
+    out.push('.');
 }
 
-fn raw_rdata(rdata: &[u8]) -> String {
-    let mut hex = String::with_capacity(rdata.len().saturating_mul(2));
-    for byte in rdata {
-        use std::fmt::Write;
-        let _ = write!(hex, "{byte:02x}");
+/// Formats TXT RDATA character strings separated by single spaces into `out`.
+///
+/// # Errors
+///
+/// Returns [`ResponseError::InvalidRecordData`] if any length-prefixed string
+/// overflows `rdata`.
+pub fn format_txt_rdata_into(rdata: &[u8], out: &mut String) -> Result<(), ResponseError> {
+    let mut offset = 0;
+    let mut first = true;
+    while offset < rdata.len() {
+        let length = usize::from(rdata[offset]);
+        offset = offset
+            .checked_add(1)
+            .and_then(|value| value.checked_add(length))
+            .ok_or(ResponseError::InvalidRecordData)?;
+        let start = offset - length;
+        let chunk = rdata
+            .get(start..offset)
+            .ok_or(ResponseError::InvalidRecordData)?;
+        if !first {
+            out.push(' ');
+        }
+        first = false;
+        for utf8_chunk in chunk.utf8_chunks() {
+            out.push_str(utf8_chunk.valid());
+            if !utf8_chunk.invalid().is_empty() {
+                out.push(char::REPLACEMENT_CHARACTER);
+            }
+        }
     }
-    format!("\\# {} {hex}", rdata.len())
+    Ok(())
+}
+
+/// Formats unknown/raw RDATA in RFC 3597 `\# <len> <hex>` presentation into `out`.
+pub fn format_raw_rdata_into(rdata: &[u8], out: &mut String) {
+    use std::fmt::Write;
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let _ = write!(out, "\\# {} ", rdata.len());
+    out.reserve(rdata.len().saturating_mul(2));
+    for &byte in rdata {
+        out.push(HEX[usize::from(byte >> 4)] as char);
+        out.push(HEX[usize::from(byte & 0x0f)] as char);
+    }
 }
 
 /// Reports the minimal non-OPT TTL and count, mirroring the Go oracle.
@@ -468,12 +777,25 @@ fn walk_records<'a>(
     Ok(visits)
 }
 
-/// Reads and expands one DNS name while preserving ASCII case.
-fn read_name(packet: &[u8], offset: usize) -> Result<(usize, Vec<u8>), ResponseError> {
-    const MAX_NAME_OCTETS: usize = 255;
-    const MAX_POINTERS: usize = 255_usize.div_ceil(2) - 2;
+/// Validates the single question name and QTYPE/QCLASS fields with the same
+/// pointer and length limits as [`read_name`], without allocating.
+fn validate_single_question_metadata(packet: &[u8]) -> bool {
+    let mut buf = [0_u8; EXPANDED_NAME_BUF_LEN];
+    let Ok((end, _)) = read_name_into_buf(packet, DNS_HEADER_LEN, &mut buf) else {
+        return false;
+    };
+    end.checked_add(4)
+        .is_some_and(|fields_end| fields_end <= packet.len())
+}
 
-    let mut name = Vec::with_capacity(32);
+/// Reads and expands one DNS name into a fixed stack buffer while preserving
+/// ASCII case. Returns `(wire_end, expanded_len)`.
+fn read_name_into_buf(
+    packet: &[u8],
+    offset: usize,
+    out: &mut [u8; EXPANDED_NAME_BUF_LEN],
+) -> Result<(usize, usize), ResponseError> {
+    let mut name_len = 0;
     let mut position = offset;
     let mut written_end = None;
     let mut pointers = 0;
@@ -482,24 +804,26 @@ fn read_name(packet: &[u8], offset: usize) -> Result<(usize, Vec<u8>), ResponseE
         match label & 0xc0 {
             0 => {
                 if label == 0 {
-                    name.push(0);
+                    out[name_len] = 0;
+                    name_len += 1;
                     let end = written_end
                         .unwrap_or(position.checked_add(1).ok_or(ResponseError::BadName)?);
-                    return Ok((end, name));
+                    return Ok((end, name_len));
                 }
                 let length = usize::from(label);
                 let start = position.checked_add(1).ok_or(ResponseError::BadName)?;
                 let end = start.checked_add(length).ok_or(ResponseError::BadName)?;
                 let bytes = packet.get(start..end).ok_or(ResponseError::BadName)?;
-                if name.len() + length + 1 > MAX_NAME_OCTETS {
+                if name_len + length + 1 > MAX_NAME_OCTETS {
                     return Err(ResponseError::BadName);
                 }
-                name.push(label);
-                name.extend_from_slice(bytes);
+                out[name_len] = label;
+                out[name_len + 1..name_len + 1 + length].copy_from_slice(bytes);
+                name_len += 1 + length;
                 position = end;
             }
             0xc0 => {
-                if pointers == MAX_POINTERS {
+                if pointers == MAX_NAME_POINTERS {
                     return Err(ResponseError::BadName);
                 }
                 let second = *packet.get(position + 1).ok_or(ResponseError::BadName)?;
@@ -516,6 +840,13 @@ fn read_name(packet: &[u8], offset: usize) -> Result<(usize, Vec<u8>), ResponseE
             _ => return Err(ResponseError::BadName),
         }
     }
+}
+
+/// Reads and expands one DNS name while preserving ASCII case.
+fn read_name(packet: &[u8], offset: usize) -> Result<(usize, Vec<u8>), ResponseError> {
+    let mut buf = [0_u8; EXPANDED_NAME_BUF_LEN];
+    let (end, len) = read_name_into_buf(packet, offset, &mut buf)?;
+    Ok((end, buf[..len].to_vec()))
 }
 
 /// Skip one wire name, mirroring the cache walk (see `query::skip_name`'s
@@ -1090,5 +1421,134 @@ mod tests {
             u32::from_be_bytes(packet[35..39].try_into().unwrap()),
             ttl_before
         );
+    }
+
+    #[test]
+    fn single_pass_audit_wire_matches_metadata_and_answer_records_on_edge_cases() {
+        use super::{
+            AnswerRecord, AuditRdata, format_raw_rdata_into, format_txt_rdata_into,
+            observe_response_metadata, observe_response_rcode, observe_wire_for_audit,
+            render_wire_name_into,
+        };
+
+        let render_audit = |wire: &[u8]| {
+            let mut rendered = Vec::new();
+            let outcome = observe_wire_for_audit(wire, |rrtype, ttl, rdata| {
+                let mut data = String::new();
+                match rdata {
+                    AuditRdata::A(octets) => {
+                        data = std::net::Ipv4Addr::from(octets).to_string();
+                    }
+                    AuditRdata::Aaaa(octets) => {
+                        data = std::net::Ipv6Addr::from(octets).to_string();
+                    }
+                    AuditRdata::ExpandedName(name) => render_wire_name_into(name, &mut data),
+                    AuditRdata::Txt(raw) => format_txt_rdata_into(raw, &mut data).unwrap(),
+                    AuditRdata::Raw(raw) => format_raw_rdata_into(raw, &mut data),
+                }
+                rendered.push(AnswerRecord { rrtype, ttl, data });
+            });
+            (outcome, rendered)
+        };
+
+        // 255-byte non-zero labels + trailing 0 = 256-byte expanded name.
+        let mut max_name = Vec::new();
+        for _ in 0..3 {
+            max_name.push(63);
+            max_name.extend_from_slice(&[b'a'; 63]);
+        }
+        max_name.push(62);
+        max_name.extend_from_slice(&[b'b'; 62]);
+        max_name.push(0);
+        assert_eq!(max_name.len(), 256);
+
+        // Self-pointer question with OPT extended rcode (read_name fails -> base rcode).
+        let mut self_ptr_opt = hdr(0x81, 0, 1, 0, 0, 1);
+        self_ptr_opt.extend_from_slice(&[0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01]);
+        self_ptr_opt.extend_from_slice(&opt(1232, 0x0100_0000, &[]));
+
+        // Invalid answer RDATA followed by valid OPT extended rcode (rcode keeps OPT ext!).
+        let bad_a_with_opt = resp_wire(&[rr(1, &[192, 0, 2])], &[], &[opt(1232, 0x0100_0000, &[])]);
+
+        // Invalid answer RDATA followed by truncated second answer (answer_error stays
+        // InvalidRecordData, while rcode falls back to base_rcode).
+        let mut bad_a_then_trunc = resp_wire(
+            &[rr(1, &[192, 0, 2]), a_rr(60, &[192, 0, 2, 1])],
+            &[],
+            &[opt(1232, 0x0100_0000, &[])],
+        );
+        bad_a_then_trunc.truncate(bad_a_then_trunc.len() - 12);
+
+        // TXT with empty chunks, multi-chunks, and invalid UTF-8 bytes.
+        let txt_complex = resp_wire(
+            &[
+                rr(16, &[]),
+                rr(16, &[0, 0]),
+                rr(16, &[4, 0xff, 0xfe, b'o', b'k', 2, 0xc3, 0x28]),
+            ],
+            &[],
+            &[],
+        );
+
+        // MX with 2-byte preference + compressed exchange name, NS, PTR, empty raw.
+        let mut mx_rdata = vec![0x00, 0x0a];
+        mx_rdata.extend_from_slice(&[4, b'm', b'a', b'i', b'l', 0xc0, 0x0c]);
+        let rich = resp_wire(
+            &[
+                a_rr(60, &[192, 0, 2, 1]),
+                rr(
+                    28,
+                    &[0x20, 1, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9],
+                ),
+                rr(2, &[2, b'n', b's', 0xc0, 0x0c]),
+                rr(5, &max_name),
+                rr(12, &[0]),
+                rr(15, &mx_rdata),
+                rr(65000, &[]),
+                rr(65001, &[0x00, 0xab, 0xff]),
+            ],
+            &[],
+            &[opt(1232, 0x0200_8000, &[])],
+        );
+
+        // Non-response (QR=0), short packets, empty packet.
+        let qr0 = hdr(0x01, 5, 1, 0, 0, 0);
+
+        let cases: Vec<Vec<u8>> = vec![
+            vec![],
+            vec![0x12, 0x34, 0x81],
+            vec![0x12, 0x34, 0x81, 0x83],
+            qr0,
+            self_ptr_opt,
+            bad_a_with_opt,
+            bad_a_then_trunc,
+            txt_complex,
+            rich,
+        ];
+
+        for wire in &cases {
+            let base = u16::from(wire.get(3).copied().unwrap_or_default() & 0x0f);
+            let expected_rcode = observe_response_metadata(wire)
+                .map(|m| m.rcode)
+                .unwrap_or(base);
+            assert_eq!(observe_response_rcode(wire), expected_rcode);
+
+            let (outcome, rendered) = render_audit(wire);
+            assert_eq!(outcome.rcode, expected_rcode);
+            match observe_answer_records(wire) {
+                Ok(expected_answers) => {
+                    assert_eq!(outcome.answer_error, None);
+                    assert_eq!(rendered, expected_answers);
+                    let expected_raw = expected_answers
+                        .iter()
+                        .any(|r| !matches!(r.rrtype, 1 | 2 | 5 | 12 | 15 | 16 | 28));
+                    assert_eq!(outcome.has_raw, expected_raw);
+                }
+                Err(expected_err) => {
+                    assert_eq!(outcome.answer_error, Some(expected_err));
+                    assert!(!outcome.has_raw);
+                }
+            }
+        }
     }
 }

@@ -12,8 +12,16 @@ use atomdns_sequence_core::{ExecutableId, SharedStr};
 use atomdns_upstream_core::TransportCancellation;
 
 mod retention;
+#[cfg(test)]
+pub(crate) use retention::AuditRetention;
+#[cfg(not(test))]
 use retention::AuditRetention;
-pub(crate) use retention::RetainedAuditRecord;
+#[allow(unused_imports)]
+pub(crate) use retention::{
+    AuditResponse, CompactPayload, CompactResponse, DecodeErrorCode, FLAG_AA, FLAG_RA, FLAG_TC,
+    RetainedAuditRecord, RetainedResponse, encode_flags_and_status, for_each_packed_record,
+    format_packed_answer_data_into, push_packed_record,
+};
 
 /// One final-wire Answer record retained for diagnostics.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -1055,7 +1063,7 @@ pub(crate) struct AuditReadSnapshot {
 pub(crate) struct TerminalObservation {
     pub outcome: QueryTerminalOutcome,
     pub response: ResponseState,
-    pub response_details: ResponseDetails,
+    pub response_details: AuditResponse,
     pub cache_status: CacheStatus,
     pub final_sequence: Option<SharedStr>,
     pub matched_group: Option<SharedStr>,
@@ -1076,7 +1084,7 @@ impl Default for TerminalObservation {
         Self {
             outcome: QueryTerminalOutcome::NoResponse,
             response: ResponseState::NoResponse,
-            response_details: ResponseDetails::no_response(),
+            response_details: AuditResponse::no_response(),
             cache_status: CacheStatus::Undetermined,
             final_sequence: None,
             matched_group: None,
@@ -1098,7 +1106,7 @@ impl Default for TerminalObservation {
 pub(crate) struct ExecutionCheckpoint {
     capture_audit_details: bool,
     response: ResponseState,
-    response_details: ResponseDetails,
+    response_details: AuditResponse,
     cache_status: CacheStatus,
     final_sequence: Option<SharedStr>,
     matched_group: Option<SharedStr>,
@@ -1135,7 +1143,7 @@ impl ExecutionCheckpoint {
             capture_trace_id: None,
             capture_audit_details,
             response: ResponseState::NoResponse,
-            response_details: ResponseDetails::no_response(),
+            response_details: AuditResponse::no_response(),
             cache_status: CacheStatus::Undetermined,
             final_sequence: None,
             matched_group: None,
@@ -1523,20 +1531,36 @@ impl QueryObserver {
         state.metrics.malformed_total = state.metrics.malformed_total.saturating_add(1);
     }
 
+    #[cfg(test)]
+    pub(crate) fn record_terminal_compact(
+        &self,
+        observation: TerminalObservation,
+        make_audit_record: impl FnOnce(TerminalObservation) -> (AuditRecord, AuditResponse),
+    ) {
+        self.record_terminal_on_listener(observation, true, make_audit_record);
+    }
+
     #[cfg_attr(not(test), allow(dead_code))] // Listener terminalization is wired in Slice 2.
     pub(crate) fn record_terminal(
         &self,
         observation: TerminalObservation,
         make_audit_record: impl FnOnce(TerminalObservation) -> AuditRecord,
     ) {
-        self.record_terminal_on_listener(observation, true, make_audit_record);
+        self.record_terminal_on_listener(observation, true, |observation| {
+            let mut record = make_audit_record(observation);
+            let response = AuditResponse::from_details(std::mem::replace(
+                &mut record.response_details,
+                ResponseDetails::no_response(),
+            ));
+            (record, response)
+        });
     }
 
     fn record_terminal_on_listener(
         &self,
         observation: TerminalObservation,
         listener_audit: bool,
-        make_audit_record: impl FnOnce(TerminalObservation) -> AuditRecord,
+        make_audit_record: impl FnOnce(TerminalObservation) -> (AuditRecord, AuditResponse),
     ) {
         let capture_at_terminal =
             listener_audit && self.audit_enabled.load(Ordering::SeqCst) && self.lock().capturing;
@@ -1574,12 +1598,16 @@ impl QueryObserver {
                 observation.upstream_attempts.metric_attempts(),
                 observation.elapsed,
             );
-            let record = make_audit_record(observation);
+            let (record, response_details) = make_audit_record(observation);
             self.decrement_in_flight();
             if state.audit_capacity == 0 {
                 return;
             }
-            let record = Arc::new(state.retention.retain(record));
+            let record = Arc::new(
+                state
+                    .retention
+                    .retain_with_response(record, response_details),
+            );
             // The list stays sorted slowest first, so one binary-search insert
             // replaces re-sorting all 300 rows on every query. The position is
             // after equal rows, as the former push + stable sort placed it.
@@ -1949,31 +1977,35 @@ impl AdmittedQueryGuard {
                     ResponseState::Dns { .. } | ResponseState::NoResponse => None,
                 };
                 let final_upstream = observation.final_upstream.or(derived_final_upstream);
-                AuditRecord {
-                    timestamp: context.timestamp,
-                    client_addr: context.client_addr,
-                    transport: context.transport,
-                    qname: context.qname,
-                    qtype: context.qtype,
-                    qclass: context.qclass,
-                    trace_id: context.trace_id,
-                    elapsed: observation.elapsed,
-                    terminal_outcome: observation.outcome,
-                    response: observation.response,
-                    response_details: observation.response_details,
-                    cache_status: observation.cache_status,
-                    final_sequence: observation.final_sequence,
-                    matched_group: observation.matched_group,
-                    domain_set: observation.domain_set,
-                    effective_tag: observation.effective_tag,
-                    matched_rule_source: observation.matched_rule_source,
-                    final_upstream,
-                    upstream_targets: observation.upstream_targets,
-                    selected_upstream: observation.selected_upstream,
-                    upstream_attempts: observation.upstream_attempts.into_vec(),
-                    upstream_diagnostics: observation.upstream_diagnostics,
-                    failure_provenance: observation.failure_provenance,
-                }
+                let response_details = observation.response_details;
+                (
+                    AuditRecord {
+                        timestamp: context.timestamp,
+                        client_addr: context.client_addr,
+                        transport: context.transport,
+                        qname: context.qname,
+                        qtype: context.qtype,
+                        qclass: context.qclass,
+                        trace_id: context.trace_id,
+                        elapsed: observation.elapsed,
+                        terminal_outcome: observation.outcome,
+                        response: observation.response,
+                        response_details: ResponseDetails::no_response(),
+                        cache_status: observation.cache_status,
+                        final_sequence: observation.final_sequence,
+                        matched_group: observation.matched_group,
+                        domain_set: observation.domain_set,
+                        effective_tag: observation.effective_tag,
+                        matched_rule_source: observation.matched_rule_source,
+                        final_upstream,
+                        upstream_targets: observation.upstream_targets,
+                        selected_upstream: observation.selected_upstream,
+                        upstream_attempts: observation.upstream_attempts.into_vec(),
+                        upstream_diagnostics: observation.upstream_diagnostics,
+                        failure_provenance: observation.failure_provenance,
+                    },
+                    response_details,
+                )
             });
     }
 }
@@ -2234,12 +2266,51 @@ mod tests {
                 .iter()
                 .all(|record| record.common().terminal_outcome == QueryTerminalOutcome::Canceled)
         );
-        let payload = std::sync::Arc::downgrade(&snapshot.records[0].response_details);
+        let template = std::sync::Arc::downgrade(snapshot.records[0].template_arc());
         observer.set_audit_capacity(0);
         assert!(observer.audit_snapshot().records.is_empty());
-        assert!(payload.upgrade().is_some());
+        assert!(template.upgrade().is_some());
         drop(snapshot);
-        assert!(payload.upgrade().is_none());
+        assert!(template.upgrade().is_none());
+    }
+
+    #[test]
+    fn shared_compact_response_drops_after_clear_and_snapshot_release() {
+        let observer = observer(true, 4);
+        let compact = super::AuditResponse::Compact(super::CompactResponse {
+            rcode: 0,
+            flags_and_status: super::FLAG_RA,
+            payload: super::CompactPayload::SingleAaaa {
+                ttl: 60,
+                ip: [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7],
+            },
+        });
+        for index in 0..2 {
+            observer.admit_query();
+            let mut event = observation(Duration::from_micros(50));
+            event.response_details = compact.clone();
+            let response = event.response_details.clone();
+            observer.record_terminal_on_listener(event, true, |event| {
+                (
+                    audit_record(event, &format!("aaaa-{index}.example.")),
+                    response,
+                )
+            });
+        }
+        let snapshot = observer.audit_read_snapshot().unwrap();
+        assert_eq!(snapshot.records.len(), 2);
+        let super::RetainedResponse::Shared(first) = snapshot.records[0].response() else {
+            panic!("expected shared compact response for AAAA");
+        };
+        let super::RetainedResponse::Shared(second) = snapshot.records[1].response() else {
+            panic!("expected shared compact response for AAAA");
+        };
+        assert!(std::sync::Arc::ptr_eq(first, second));
+        let weak = std::sync::Arc::downgrade(first);
+        observer.clear_audit();
+        assert!(weak.upgrade().is_some());
+        drop(snapshot);
+        assert!(weak.upgrade().is_none());
     }
 
     #[test]

@@ -9,9 +9,10 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use atomdns_dns_core::{
-    FrameMode, QueryHeader, QuestionInfo, ResponseError, frame_response, inspect_response_header,
+    AuditRdata, FrameMode, QueryHeader, QuestionInfo, frame_response, inspect_response_header,
     observe_answer_addresses, observe_answer_records, observe_response_metadata,
-    patch_response_id_ra, synthesize_response, validate_response,
+    observe_response_rcode, observe_wire_for_audit, patch_response_id_ra, synthesize_response,
+    validate_response,
 };
 use atomdns_sequence_core::{
     CancellationToken, ExecutableId, ExecutionCompletion, ExecutionControl, ExecutionError,
@@ -25,13 +26,14 @@ use crate::assembly::{ForwardAdapter, ForwardCatalog, HostOptions};
 use crate::cache::{CacheCatalog, PendingStore};
 use crate::config::{CompiledConfig, FallbackConfig, NativeTarget, PreferenceConfig};
 use crate::observer::{
-    AnswerDetailsStatus, AttemptRegistrationHook, AuditAnswer, CacheStatus, ExecutionCheckpoint,
-    FailureProvenance, LocalFailureKind, QueryTerminalOutcome, ResponseDetails, ResponseFlags,
-    ResponseSource, ResponseState as ObservedResponseState, TerminalObservation,
-    UpstreamAttemptLedger, UpstreamAttemptLedgerHandle, UpstreamAttemptList,
-    UpstreamAttemptOutcome, UpstreamAttemptRecord, UpstreamDiagnosticAttempt,
-    UpstreamDiagnosticBranch, UpstreamDiagnosticSelected, UpstreamDiagnostics,
-    UpstreamMetricAttempt, UpstreamTransport,
+    AnswerDetailsStatus, AttemptRegistrationHook, AuditResponse, CacheStatus, CompactPayload,
+    CompactResponse, DecodeErrorCode, ExecutionCheckpoint, FLAG_AA, FLAG_RA, FLAG_TC,
+    FailureProvenance, LocalFailureKind, QueryTerminalOutcome, ResponseSource,
+    ResponseState as ObservedResponseState, TerminalObservation, UpstreamAttemptLedger,
+    UpstreamAttemptLedgerHandle, UpstreamAttemptList, UpstreamAttemptOutcome,
+    UpstreamAttemptRecord, UpstreamDiagnosticAttempt, UpstreamDiagnosticBranch,
+    UpstreamDiagnosticSelected, UpstreamDiagnostics, UpstreamMetricAttempt, UpstreamTransport,
+    encode_flags_and_status, push_packed_record,
 };
 use crate::rewrite::{RewriteEnd, RewriteStart, SequenceResolver};
 
@@ -878,7 +880,7 @@ fn consume_external_target<E: ExchangeExecutor + ?Sized>(
 pub(crate) struct ExecutionResult {
     pub response_wire: Vec<u8>,
     pub response: ObservedResponseState,
-    pub response_details: ResponseDetails,
+    pub response_details: AuditResponse,
     pub cache_status: CacheStatus,
     pub final_sequence: Option<SharedStr>,
     pub matched_group: Option<SharedStr>,
@@ -1507,7 +1509,7 @@ impl FactsState {
                 // final response provenance, so an unfinished execution
                 // must not publish an intermediate W3 answer here.
                 response: ObservedResponseState::NoResponse,
-                response_details: ResponseDetails::no_response(),
+                response_details: AuditResponse::no_response(),
                 cache_status: self.cache_status,
                 final_sequence: self
                     .routing
@@ -5114,11 +5116,29 @@ fn result_from_wire(response_wire: Vec<u8>, facts: &mut ExecutionFacts) -> Execu
             });
         }
     }
-    let response = observed_response(&response_wire, response_source);
-    let response_details = if facts.capture_audit_details {
-        diagnose_response_wire(&response_wire)
+    let (response, response_details) = if response_wire.is_empty() {
+        (
+            ObservedResponseState::NoResponse,
+            AuditResponse::no_response(),
+        )
+    } else if facts.capture_audit_details {
+        let (rcode, details) = observe_and_diagnose_wire(&response_wire);
+        (
+            ObservedResponseState::Dns {
+                rcode,
+                source: response_source,
+            },
+            details,
+        )
     } else {
-        ResponseDetails::no_response()
+        let rcode = observe_response_rcode(&response_wire);
+        (
+            ObservedResponseState::Dns {
+                rcode,
+                source: response_source,
+            },
+            AuditResponse::no_response(),
+        )
     };
     facts.completed = true;
     ExecutionResult {
@@ -5519,9 +5539,188 @@ fn join_effective_tags(
     SharedStr::from(out)
 }
 
-pub(crate) fn diagnose_response_wire(response_wire: &[u8]) -> ResponseDetails {
+/// Single-pass response observation and compact audit diagnosis.
+///
+/// Produces the effective RCODE (including OPT extended RCODE when metadata
+/// validation succeeds) and the compact [`AuditResponse`] without formatting
+/// Answer strings on the hot path.
+pub(crate) fn observe_and_diagnose_wire(response_wire: &[u8]) -> (u16, AuditResponse) {
     if response_wire.is_empty() {
-        return ResponseDetails::no_response();
+        return (0, AuditResponse::no_response());
+    }
+    let flags = match (response_wire.get(2), response_wire.get(3)) {
+        (Some(&high), Some(&low)) => {
+            (if high & 0x04 != 0 { FLAG_AA } else { 0 })
+                | (if high & 0x02 != 0 { FLAG_TC } else { 0 })
+                | (if low & 0x80 != 0 { FLAG_RA } else { 0 })
+        }
+        _ => 0,
+    };
+
+    enum AnswerAcc {
+        None,
+        OneA {
+            ttl: u32,
+            ip: [u8; 4],
+        },
+        OneAaaa {
+            ttl: u32,
+            ip: [u8; 16],
+        },
+        TwoA {
+            ttl1: u32,
+            ip1: [u8; 4],
+            ttl2: u32,
+            ip2: [u8; 4],
+        },
+        Packed(Vec<u8>),
+    }
+
+    fn append_rdata(buf: &mut Vec<u8>, rrtype: u16, ttl: u32, rdata: AuditRdata<'_>) {
+        match rdata {
+            AuditRdata::A(ip) => push_packed_record(buf, rrtype, ttl, &ip),
+            AuditRdata::Aaaa(ip) => push_packed_record(buf, rrtype, ttl, &ip),
+            AuditRdata::ExpandedName(bytes) | AuditRdata::Txt(bytes) | AuditRdata::Raw(bytes) => {
+                push_packed_record(buf, rrtype, ttl, bytes)
+            }
+        }
+    }
+
+    let mut acc = AnswerAcc::None;
+    let outcome = observe_wire_for_audit(response_wire, |rrtype, ttl, rdata| match &mut acc {
+        AnswerAcc::None => match rdata {
+            AuditRdata::A(ip) => acc = AnswerAcc::OneA { ttl, ip },
+            AuditRdata::Aaaa(ip) => acc = AnswerAcc::OneAaaa { ttl, ip },
+            other => {
+                let mut buf = Vec::with_capacity(48);
+                append_rdata(&mut buf, rrtype, ttl, other);
+                acc = AnswerAcc::Packed(buf);
+            }
+        },
+        AnswerAcc::OneA { ttl: ttl1, ip: ip1 } => match rdata {
+            AuditRdata::A(ip2) => {
+                acc = AnswerAcc::TwoA {
+                    ttl1: *ttl1,
+                    ip1: *ip1,
+                    ttl2: ttl,
+                    ip2,
+                };
+            }
+            other => {
+                let mut buf = Vec::with_capacity(48);
+                push_packed_record(&mut buf, 1, *ttl1, ip1);
+                append_rdata(&mut buf, rrtype, ttl, other);
+                acc = AnswerAcc::Packed(buf);
+            }
+        },
+        AnswerAcc::OneAaaa { ttl: ttl1, ip: ip1 } => {
+            let mut buf = Vec::with_capacity(64);
+            push_packed_record(&mut buf, 28, *ttl1, ip1);
+            append_rdata(&mut buf, rrtype, ttl, rdata);
+            acc = AnswerAcc::Packed(buf);
+        }
+        AnswerAcc::TwoA {
+            ttl1,
+            ip1,
+            ttl2,
+            ip2,
+        } => {
+            let mut buf = Vec::with_capacity(48);
+            push_packed_record(&mut buf, 1, *ttl1, ip1);
+            push_packed_record(&mut buf, 1, *ttl2, ip2);
+            append_rdata(&mut buf, rrtype, ttl, rdata);
+            acc = AnswerAcc::Packed(buf);
+        }
+        AnswerAcc::Packed(buf) => append_rdata(buf, rrtype, ttl, rdata),
+    });
+
+    let rcode = outcome.rcode;
+    if let Some(error) = outcome.answer_error {
+        return (
+            rcode,
+            AuditResponse::DecodeError {
+                rcode,
+                flags,
+                error: DecodeErrorCode::from_response_error(error),
+            },
+        );
+    }
+
+    let response = match acc {
+        AnswerAcc::None => AuditResponse::Empty { rcode, flags },
+        AnswerAcc::OneA { ttl, ip } => AuditResponse::SingleA {
+            rcode,
+            flags,
+            ttl,
+            ip,
+        },
+        AnswerAcc::OneAaaa { ttl, ip } => AuditResponse::Compact(CompactResponse {
+            rcode,
+            flags_and_status: encode_flags_and_status(flags, AnswerDetailsStatus::Complete),
+            payload: CompactPayload::SingleAaaa { ttl, ip },
+        }),
+        AnswerAcc::TwoA {
+            ttl1,
+            ip1,
+            ttl2,
+            ip2,
+        } => AuditResponse::Compact(CompactResponse {
+            rcode,
+            flags_and_status: encode_flags_and_status(flags, AnswerDetailsStatus::Complete),
+            payload: CompactPayload::TwoA {
+                ttl1,
+                ip1,
+                ttl2,
+                ip2,
+            },
+        }),
+        AnswerAcc::Packed(buf) => {
+            let status = if outcome.has_raw {
+                AnswerDetailsStatus::RawRdata
+            } else {
+                AnswerDetailsStatus::Complete
+            };
+            AuditResponse::Compact(CompactResponse {
+                rcode,
+                flags_and_status: encode_flags_and_status(flags, status),
+                payload: CompactPayload::Packed(buf.into_boxed_slice()),
+            })
+        }
+    };
+    (rcode, response)
+}
+
+#[cfg(test)]
+pub(crate) fn diagnose_response_wire(response_wire: &[u8]) -> crate::observer::ResponseDetails {
+    observe_and_diagnose_wire(response_wire)
+        .1
+        .to_response_details()
+}
+
+/// Preserved pre-Step-5 reference oracle (`observed_response` +
+/// `diagnose_response_wire` using `observe_response_metadata` +
+/// `observe_answer_records`), compiled only under `#[cfg(test)]` for
+/// differential verification.
+#[cfg(test)]
+pub(crate) fn reference_observe_and_diagnose_wire(
+    response_wire: &[u8],
+) -> (u16, crate::observer::ResponseDetails) {
+    use crate::observer::{AuditAnswer, ResponseDetails, ResponseFlags};
+    use atomdns_dns_core::ResponseError;
+
+    fn answer_decode_error_name(error: ResponseError) -> &'static str {
+        match error {
+            ResponseError::TooShort
+            | ResponseError::TruncatedQuestion
+            | ResponseError::TruncatedRecord => "truncated_message",
+            ResponseError::NotResponse => "invalid_response",
+            ResponseError::BadName => "bad_name",
+            ResponseError::InvalidRecordData => "invalid_rdata",
+        }
+    }
+
+    if response_wire.is_empty() {
+        return (0, ResponseDetails::no_response());
     }
     let safe_flags = match (response_wire.get(2), response_wire.get(3)) {
         (Some(&high), Some(&low)) => ResponseFlags {
@@ -5536,7 +5735,7 @@ pub(crate) fn diagnose_response_wire(response_wire: &[u8]) -> ResponseDetails {
         .map_or(0, |flags| u16::from(flags & 0x0f));
     let metadata = observe_response_metadata(response_wire).ok();
     let rcode = metadata.as_ref().map_or(base_rcode, |value| value.rcode);
-    match observe_answer_records(response_wire) {
+    let details = match observe_answer_records(response_wire) {
         Ok(records) => {
             let has_raw = records
                 .iter()
@@ -5567,31 +5766,8 @@ pub(crate) fn diagnose_response_wire(response_wire: &[u8]) -> ResponseDetails {
             answer_details_status: AnswerDetailsStatus::DecodeError,
             answer_decode_error: Some(answer_decode_error_name(error).to_owned()),
         },
-    }
-}
-
-fn answer_decode_error_name(error: ResponseError) -> &'static str {
-    match error {
-        ResponseError::TooShort
-        | ResponseError::TruncatedQuestion
-        | ResponseError::TruncatedRecord => "truncated_message",
-        ResponseError::NotResponse => "invalid_response",
-        ResponseError::BadName => "bad_name",
-        ResponseError::InvalidRecordData => "invalid_rdata",
-    }
-}
-
-fn observed_response(response_wire: &[u8], source: ResponseSource) -> ObservedResponseState {
-    if response_wire.is_empty() {
-        ObservedResponseState::NoResponse
-    } else {
-        let rcode = observe_response_metadata(response_wire)
-            .map(|metadata| metadata.rcode)
-            .unwrap_or_else(|_| {
-                u16::from(response_wire.get(3).copied().unwrap_or_default() & 0x0f)
-            });
-        ObservedResponseState::Dns { rcode, source }
-    }
+    };
+    (rcode, details)
 }
 
 pub(crate) fn qualify_response(

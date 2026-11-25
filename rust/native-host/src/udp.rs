@@ -597,7 +597,8 @@ fn settle(
         ) {
             Ok((framed, records_removed)) => {
                 if records_removed && capture_audit_details {
-                    execution.response_details = crate::execution::diagnose_response_wire(&framed);
+                    execution.response_details =
+                        crate::execution::observe_and_diagnose_wire(&framed).1;
                 }
                 framed_response = Some(framed);
                 None
@@ -766,7 +767,8 @@ async fn process_request(task: RequestTask) {
         ) {
             Ok((framed, records_removed)) => {
                 if records_removed && capture_audit_details {
-                    execution.response_details = crate::execution::diagnose_response_wire(&framed);
+                    execution.response_details =
+                        crate::execution::observe_and_diagnose_wire(&framed).1;
                 }
                 framed_response = Some(framed);
                 None
