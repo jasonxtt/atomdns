@@ -48,6 +48,8 @@ mod system_api;
 mod tcp;
 mod transaction;
 mod udp;
+#[cfg(target_os = "linux")]
+mod udp_batch;
 mod udp_response;
 #[cfg(test)]
 mod udp_truncation_tests;

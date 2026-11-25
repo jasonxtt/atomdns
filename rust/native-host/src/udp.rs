@@ -27,6 +27,7 @@ use crate::observer::{
 };
 use crate::runtime_snapshot::AdmittedSnapshot;
 
+#[cfg(any(not(target_os = "linux"), test))]
 const MAX_UDP_PACKET: usize = 65535;
 /// Datagrams the receive loop handles synchronously before it yields, so the
 /// requests it handed to other tasks, upstream replies, refreshes, the
@@ -59,9 +60,13 @@ pub struct UdpServer {
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DispatchMode {
-    /// The product path: handled in the receive loop, moved to a task only
-    /// when it has to wait.
+    /// The product path: handled in the receive loop (batched on Linux,
+    /// per-datagram elsewhere), moved to a task only when it has to wait.
     Inline,
+    /// Per-datagram inline handling on Linux, for direct comparison with the
+    /// batched Linux path.
+    #[cfg(target_os = "linux")]
+    SingleInline,
     /// Every datagram in its own task from the start (the path before the
     /// inline handling), for comparing the two.
     Legacy,
@@ -168,8 +173,121 @@ impl UdpServer {
     /// A datagram is handled in the receive loop itself: a query that is
     /// answered without waiting (a cache hit, a local answer) is answered and
     /// sent right here. A query that has to wait moves, with everything it has
-    /// done so far, to its own task.
+    /// done so far, to its own task. On Linux the receive loop batches
+    /// non-blocking `recvmmsg` / `sendmmsg` calls under load while keeping
+    /// single-packet sends on `try_send_to` at low load.
     pub async fn serve(self, shutdown: TransportCancellation) -> Result<(), UdpServerError> {
+        #[cfg(target_os = "linux")]
+        {
+            #[cfg(test)]
+            if self.mode != DispatchMode::Inline {
+                return self.serve_single(shutdown).await;
+            }
+            self.serve_batched(shutdown).await
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            self.serve_single(shutdown).await
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn serve_batched(self, shutdown: TransportCancellation) -> Result<(), UdpServerError> {
+        let mut tasks = JoinSet::new();
+        let mut recv_batch = crate::udp_batch::RecvBatch::new(INLINE_BURST);
+        let mut send_scratch = crate::udp_batch::SendScratch::new(INLINE_BURST);
+        let mut pending: Vec<PendingSend> = Vec::with_capacity(INLINE_BURST);
+        let mut receive_error = None;
+        let mut task_error = None;
+        let mut handled_since_yield = 0_usize;
+
+        loop {
+            let has_tasks = !tasks.is_empty();
+            let max_count = INLINE_BURST - handled_since_yield;
+            tokio::select! {
+                biased;
+                () = shutdown.cancelled() => break,
+                joined = reap_one_task(&mut tasks, &mut task_error), if has_tasks => {
+                    if joined && task_error.is_some() {
+                        shutdown.cancel();
+                    }
+                }
+                received = recv_batch.recv(&self.socket, max_count) => {
+                    match received {
+                        Ok(count) => {
+                            for index in 0..count {
+                                if shutdown.is_cancelled() {
+                                    break;
+                                }
+                                let Some((raw, peer)) = recv_batch.packet(index) else {
+                                    handled_since_yield += 1;
+                                    continue;
+                                };
+                                // A panic while handling one datagram ends the
+                                // listener exactly as a panicking request task does.
+                                let handled = self.handle_caught_batched(
+                                    &mut tasks,
+                                    raw,
+                                    peer,
+                                    &shutdown,
+                                    &mut pending,
+                                );
+                                if let Err(message) = handled {
+                                    if task_error.is_none() {
+                                        task_error = Some(message);
+                                    }
+                                    // Flush replies already computed earlier in
+                                    // this batch before cancelling shutdown so
+                                    // their outcomes match per-datagram order.
+                                    self.flush_pending(
+                                        &mut tasks,
+                                        &mut send_scratch,
+                                        &mut pending,
+                                        &shutdown,
+                                    );
+                                    shutdown.cancel();
+                                    break;
+                                }
+                                handled_since_yield += 1;
+                                if pending.len() >= INLINE_BURST {
+                                    self.flush_pending(
+                                        &mut tasks,
+                                        &mut send_scratch,
+                                        &mut pending,
+                                        &shutdown,
+                                    );
+                                }
+                            }
+                            self.flush_pending(
+                                &mut tasks,
+                                &mut send_scratch,
+                                &mut pending,
+                                &shutdown,
+                            );
+                        }
+                        Err(error) => {
+                            receive_error = Some(error);
+                            shutdown.cancel();
+                            break;
+                        }
+                    }
+                }
+            }
+            if handled_since_yield >= INLINE_BURST {
+                handled_since_yield = 0;
+                #[cfg(test)]
+                YIELDS.with(|count| count.set(count.get() + 1));
+                tokio::task::yield_now().await;
+            }
+        }
+
+        debug_assert!(pending.is_empty());
+        self.finish_serve(shutdown, tasks, task_error, receive_error)
+            .await
+    }
+
+    #[cfg(any(not(target_os = "linux"), test))]
+    async fn serve_single(self, shutdown: TransportCancellation) -> Result<(), UdpServerError> {
         let mut tasks = JoinSet::new();
         let mut packet = vec![0_u8; MAX_UDP_PACKET];
         let mut receive_error = None;
@@ -221,6 +339,17 @@ impl UdpServer {
             }
         }
 
+        self.finish_serve(shutdown, tasks, task_error, receive_error)
+            .await
+    }
+
+    async fn finish_serve(
+        self,
+        shutdown: TransportCancellation,
+        mut tasks: JoinSet<()>,
+        mut task_error: Option<String>,
+        receive_error: Option<io::Error>,
+    ) -> Result<(), UdpServerError> {
         shutdown.cancel();
         if let Some((_, cache)) = &self.owners {
             cache.stop_admission();
@@ -243,6 +372,7 @@ impl UdpServer {
 
     /// [`UdpServer::handle_inline`], with a panic turned into the listener's
     /// task error.
+    #[cfg(any(not(target_os = "linux"), test))]
     fn handle_caught(
         &self,
         tasks: &mut JoinSet<()>,
@@ -256,9 +386,38 @@ impl UdpServer {
         .map_err(|panic| panic_message(panic.as_ref()))
     }
 
+    #[cfg(target_os = "linux")]
+    fn handle_caught_batched(
+        &self,
+        tasks: &mut JoinSet<()>,
+        raw: &[u8],
+        peer: SocketAddr,
+        shutdown: &TransportCancellation,
+        pending: &mut Vec<PendingSend>,
+    ) -> Result<(), String> {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.handle_inline_with(
+                tasks,
+                raw,
+                peer,
+                shutdown,
+                |_tasks, wire, peer, admitted, admission| {
+                    pending.push(PendingSend {
+                        wire,
+                        peer,
+                        admitted,
+                        admission: Some(admission),
+                    });
+                },
+            );
+        }))
+        .map_err(|panic| panic_message(panic.as_ref()))
+    }
+
     /// Handles one datagram without waiting. Whatever has to wait (an upstream
     /// exchange, a sleep, a branch policy, a rewrite lookup, a send the socket
     /// cannot take now) continues in a task of `tasks`.
+    #[cfg(any(not(target_os = "linux"), test))]
     fn handle_inline(
         &self,
         tasks: &mut JoinSet<()>,
@@ -266,8 +425,184 @@ impl UdpServer {
         peer: SocketAddr,
         shutdown: &TransportCancellation,
     ) {
+        self.handle_inline_with(
+            tasks,
+            raw,
+            peer,
+            shutdown,
+            |tasks, wire, peer, admitted, admission| {
+                self.send_single(tasks, wire, peer, admitted, Some(admission), shutdown);
+            },
+        );
+    }
+
+    fn send_single(
+        &self,
+        tasks: &mut JoinSet<()>,
+        wire: Vec<u8>,
+        peer: SocketAddr,
+        admitted: Option<AdmittedQueryGuard>,
+        admission: Option<AdmittedSnapshot>,
+        shutdown: &TransportCancellation,
+    ) {
+        match try_send(&self.socket, &wire, peer, shutdown) {
+            TrySend::Done(outcome) => {
+                if let Some(admitted) = admitted {
+                    admitted.finish(outcome);
+                }
+                drop(admission);
+            }
+            TrySend::WouldBlock => {
+                let socket = Arc::clone(&self.socket);
+                let shutdown = shutdown.clone();
+                tasks.spawn_local(async move {
+                    let outcome = send_with_control(&shutdown, socket.send_to(&wire, peer)).await;
+                    if let Some(admitted) = admitted {
+                        admitted.finish(outcome);
+                    }
+                    drop(admission);
+                });
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn flush_pending(
+        &self,
+        tasks: &mut JoinSet<()>,
+        send_scratch: &mut crate::udp_batch::SendScratch,
+        pending: &mut Vec<PendingSend>,
+        shutdown: &TransportCancellation,
+    ) {
+        if pending.is_empty() {
+            return;
+        }
+        // Single-reply low-load fast path: skip `sendmmsg` header setup and use
+        // the exact same `try_send_to` path as per-datagram mode.
+        if pending.len() == 1 {
+            let mut item = pending.pop().expect("pending has one entry");
+            self.send_single(
+                tasks,
+                item.wire,
+                item.peer,
+                item.admitted.take(),
+                item.admission.take(),
+                shutdown,
+            );
+            return;
+        }
+        let mut cursor = 0;
+        while cursor < pending.len() {
+            if shutdown.is_cancelled() {
+                for mut item in pending.drain(cursor..) {
+                    if let Some(admitted) = item.admitted.take() {
+                        admitted.finish(QueryTerminalOutcome::Canceled);
+                    }
+                    drop(item.admission.take());
+                }
+                pending.clear();
+                return;
+            }
+            let result =
+                try_send_batch_slice(&self.socket, send_scratch, &pending[cursor..], shutdown);
+            match result {
+                Ok(sent) if sent > 0 => {
+                    let sent = sent.min(pending.len() - cursor);
+                    for item in &mut pending[cursor..cursor + sent] {
+                        if let Some(admitted) = item.admitted.take() {
+                            admitted.finish(QueryTerminalOutcome::SendSucceeded);
+                        }
+                        drop(item.admission.take());
+                    }
+                    cursor += sent;
+                }
+                Ok(_) => {
+                    for mut item in pending.drain(cursor..) {
+                        let socket = Arc::clone(&self.socket);
+                        let shutdown = shutdown.clone();
+                        let wire = item.wire;
+                        let peer = item.peer;
+                        let admitted = item.admitted.take();
+                        let admission = item.admission.take();
+                        tasks.spawn_local(async move {
+                            let outcome =
+                                send_with_control(&shutdown, socket.send_to(&wire, peer)).await;
+                            if let Some(admitted) = admitted {
+                                admitted.finish(outcome);
+                            }
+                            drop(admission);
+                        });
+                    }
+                    pending.clear();
+                    return;
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    for mut item in pending.drain(cursor..) {
+                        let socket = Arc::clone(&self.socket);
+                        let shutdown = shutdown.clone();
+                        let wire = item.wire;
+                        let peer = item.peer;
+                        let admitted = item.admitted.take();
+                        let admission = item.admission.take();
+                        tasks.spawn_local(async move {
+                            let outcome =
+                                send_with_control(&shutdown, socket.send_to(&wire, peer)).await;
+                            if let Some(admitted) = admitted {
+                                admitted.finish(outcome);
+                            }
+                            drop(admission);
+                        });
+                    }
+                    pending.clear();
+                    return;
+                }
+                Err(_) => {
+                    // `sendmmsg` only returns -1 when the very first datagram in
+                    // the slice fails; mark `pending[cursor]` failed and keep
+                    // sending the remaining datagrams in the batch.
+                    if let Some(admitted) = pending[cursor].admitted.take() {
+                        admitted.finish(QueryTerminalOutcome::SendFailed);
+                    }
+                    drop(pending[cursor].admission.take());
+                    cursor += 1;
+                }
+            }
+        }
+        pending.clear();
+    }
+
+    /// Runs the synchronous prefix of one datagram and hands any framed reply
+    /// (with the raw `peer`) to `on_send`, or completes/hands off in place.
+    fn handle_inline_with(
+        &self,
+        tasks: &mut JoinSet<()>,
+        raw: &[u8],
+        peer: SocketAddr,
+        shutdown: &TransportCancellation,
+        on_send: impl FnOnce(
+            &mut JoinSet<()>,
+            Vec<u8>,
+            SocketAddr,
+            Option<AdmittedQueryGuard>,
+            AdmittedSnapshot,
+        ),
+    ) {
         #[cfg(test)]
         if PANIC_NEXT.with(|flag| flag.replace(false)) {
+            panic!("injected request panic");
+        }
+        #[cfg(test)]
+        if PANIC_COUNTDOWN.with(|countdown| match countdown.get() {
+            Some(0) => {
+                countdown.set(None);
+                true
+            }
+            Some(remaining) => {
+                countdown.set(Some(remaining - 1));
+                false
+            }
+            None => false,
+        }) {
             panic!("injected request panic");
         }
         let Some(mut admission) =
@@ -287,14 +622,8 @@ impl UdpServer {
                 // and is not itself a response, so clients do not wait for a timeout.
                 self.observer.record_malformed();
                 if let Some(reply) = atomdns_dns_core::query_error_reply(raw, error) {
-                    if let TrySend::WouldBlock = try_send(&self.socket, &reply, peer, shutdown) {
-                        let socket = Arc::clone(&self.socket);
-                        let shutdown = shutdown.clone();
-                        tasks.spawn_local(async move {
-                            let _ =
-                                send_with_control(&shutdown, socket.send_to(&reply, peer)).await;
-                            drop(admission);
-                        });
+                    if !shutdown.is_cancelled() {
+                        on_send(tasks, reply, peer, None, admission);
                     }
                 }
                 return;
@@ -302,7 +631,8 @@ impl UdpServer {
         };
 
         // A dual-stack wildcard socket reports IPv4 peers as IPv4-mapped IPv6;
-        // audit and client matching see the plain IPv4 address.
+        // audit and client matching see the plain IPv4 address. Sending still
+        // uses the raw `peer`.
         let client_addr = crate::bind::canonical_peer(peer);
         // The listener's own token: this query needs a token of its own only if
         // it moves to a task, where branch tokens are derived from it.
@@ -376,25 +706,20 @@ impl UdpServer {
             shutdown.is_cancelled(),
         );
         admitted.capture_execution(observation);
-        let outcome = match settled {
-            Settled::Terminal(outcome) => outcome,
-            Settled::Send(framed) => match try_send(&self.socket, &framed, peer, shutdown) {
-                TrySend::Done(outcome) => outcome,
-                TrySend::WouldBlock => {
-                    let socket = Arc::clone(&self.socket);
-                    let shutdown = shutdown.clone();
-                    tasks.spawn_local(async move {
-                        let outcome =
-                            send_with_control(&shutdown, socket.send_to(&framed, peer)).await;
-                        admitted.finish(outcome);
-                        drop(admission);
-                    });
+        match settled {
+            Settled::Terminal(outcome) => {
+                admitted.finish(outcome);
+                drop(admission);
+            }
+            Settled::Send(framed) => {
+                if shutdown.is_cancelled() {
+                    admitted.finish(QueryTerminalOutcome::Canceled);
+                    drop(admission);
                     return;
                 }
-            },
-        };
-        admitted.finish(outcome);
-        drop(admission);
+                on_send(tasks, framed, peer, Some(admitted), admission);
+            }
+        }
     }
 
     #[cfg(test)]
@@ -440,13 +765,90 @@ impl UdpServer {
     }
 }
 
+#[cfg(target_os = "linux")]
+struct PendingSend {
+    wire: Vec<u8>,
+    peer: SocketAddr,
+    // Declared before `admission`: the query is recorded before its admitted
+    // snapshot is released, as when a request task ends.
+    admitted: Option<AdmittedQueryGuard>,
+    admission: Option<AdmittedSnapshot>,
+}
+
+#[cfg(all(target_os = "linux", not(test)))]
+fn try_send_batch_slice(
+    socket: &UdpSocket,
+    send_scratch: &mut crate::udp_batch::SendScratch,
+    slice: &[PendingSend],
+    _shutdown: &TransportCancellation,
+) -> io::Result<usize> {
+    send_scratch.try_send_batch(socket, slice.len(), |i| {
+        (slice[i].wire.as_slice(), slice[i].peer)
+    })
+}
+
+#[cfg(all(target_os = "linux", test))]
+#[derive(Debug)]
+enum InjectedBatchSend {
+    /// Actually send the first `limit` datagrams of the slice, then return that
+    /// partial count as if the kernel stopped there.
+    RealThenStop(usize),
+    /// Actually send the first `limit` datagrams of the slice, cancel
+    /// `shutdown`, and return that partial count.
+    RealThenCancel(usize),
+    /// Return this error immediately without sending.
+    Error(io::ErrorKind),
+    /// Return `Ok(0)` without sending.
+    Zero,
+}
+
+#[cfg(all(target_os = "linux", test))]
+fn try_send_batch_slice(
+    socket: &UdpSocket,
+    send_scratch: &mut crate::udp_batch::SendScratch,
+    slice: &[PendingSend],
+    shutdown: &TransportCancellation,
+) -> io::Result<usize> {
+    BATCH_SEND_CALLS.with(|count| count.set(count.get() + 1));
+    if let Some(injected) = INJECTED_BATCH_SENDS.with(|sends| sends.borrow_mut().pop_front()) {
+        return match injected {
+            InjectedBatchSend::RealThenStop(limit) => {
+                let count = limit.min(slice.len());
+                send_scratch
+                    .try_send_batch(socket, count, |i| (slice[i].wire.as_slice(), slice[i].peer))
+            }
+            InjectedBatchSend::RealThenCancel(limit) => {
+                let count = limit.min(slice.len());
+                let sent = send_scratch
+                    .try_send_batch(socket, count, |i| (slice[i].wire.as_slice(), slice[i].peer))?;
+                shutdown.cancel();
+                Ok(sent)
+            }
+            InjectedBatchSend::Error(kind) => Err(io::Error::from(kind)),
+            InjectedBatchSend::Zero => Ok(0),
+        };
+    }
+    send_scratch.try_send_batch(socket, slice.len(), |i| {
+        (slice[i].wire.as_slice(), slice[i].peer)
+    })
+}
+
 #[cfg(test)]
 thread_local! {
     /// Test seam: the next inline datagram panics.
     static PANIC_NEXT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Test seam: countdown of inline datagrams before panicking.
+    static PANIC_COUNTDOWN: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
     /// Test seam: results the next `try_send` calls return instead of sending.
     static INJECTED_SENDS: std::cell::RefCell<std::collections::VecDeque<io::ErrorKind>> =
         const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
+    /// Test seam: scripted outcomes for Linux `try_send_batch_slice` calls.
+    #[cfg(target_os = "linux")]
+    static INJECTED_BATCH_SENDS: std::cell::RefCell<std::collections::VecDeque<InjectedBatchSend>> =
+        const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
+    /// How many times the Linux batched send path invoked `try_send_batch_slice`.
+    #[cfg(target_os = "linux")]
+    static BATCH_SEND_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// How often the receive loop yielded after a burst.
     static YIELDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -1445,7 +1847,7 @@ mod tests {
                         }
                     }
                     TwinStep::InjectSend(kind) => {
-                        if mode == DispatchMode::Inline {
+                        if mode != DispatchMode::Legacy {
                             INJECTED_SENDS.with(|sends| sends.borrow_mut().push_back(kind));
                         }
                     }
@@ -1504,8 +1906,8 @@ mod tests {
         }
 
         /// Runs the same steps on the inline path and on the
-        /// task-per-datagram path and returns the inline output after
-        /// checking that both are identical.
+        /// task-per-datagram path (plus per-datagram inline on Linux) and
+        /// returns the inline output after checking that all are identical.
         fn run(&self, steps: impl Fn() -> Vec<TwinStep>) -> TwinOutput {
             let inline = run_twin(
                 DispatchMode::Inline,
@@ -1514,6 +1916,17 @@ mod tests {
                 &self.rules,
                 steps(),
             );
+            #[cfg(target_os = "linux")]
+            {
+                let single = run_twin(
+                    DispatchMode::SingleInline,
+                    &self.upstream,
+                    &self.client,
+                    &self.rules,
+                    steps(),
+                );
+                assert_eq!(inline, single, "batched and single-inline paths differ");
+            }
             let legacy = run_twin(
                 DispatchMode::Legacy,
                 &self.upstream,
@@ -1761,5 +2174,697 @@ mod tests {
             assert!(audit[1].contains("terminal_outcome: Canceled"), "{audit:?}");
             upstream_task.abort();
         });
+    }
+
+    #[cfg(target_os = "linux")]
+    fn edns_query(id: u16, name: &str, qtype: u16, udp_size: u16) -> Vec<u8> {
+        let mut wire = named_query(id, name, qtype);
+        wire[10..12].copy_from_slice(&1_u16.to_be_bytes());
+        // Root owner (0), OPT (41), class = udp_size, TTL = 0, RDLEN = 0.
+        wire.push(0);
+        wire.extend_from_slice(&41_u16.to_be_bytes());
+        wire.extend_from_slice(&udp_size.to_be_bytes());
+        wire.extend_from_slice(&0_u32.to_be_bytes());
+        wire.extend_from_slice(&0_u16.to_be_bytes());
+        wire
+    }
+
+    #[cfg(target_os = "linux")]
+    fn reset_batch_test_hooks() {
+        super::INJECTED_BATCH_SENDS.with(|sends| sends.borrow_mut().clear());
+        super::BATCH_SEND_CALLS.with(|count| count.set(0));
+        super::PANIC_COUNTDOWN.with(|countdown| countdown.set(None));
+        PANIC_NEXT.with(|flag| flag.set(false));
+        INJECTED_SENDS.with(|sends| sends.borrow_mut().clear());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn batched_and_single_inline_paths_match_audit_and_trace_order_on_mixed_burst() {
+        use std::collections::BTreeMap;
+
+        let twins = Twins::new("batch-mixed-parity");
+        let run_mode = |mode: DispatchMode| {
+            reset_batch_test_hooks();
+            let upstream_addr = twins.upstream.local_addr().expect("upstream address");
+            let clock = CacheTestClock::new(1000);
+            let assembly = HostAssembly::with_options(
+                compile_yaml(&twin_yaml(upstream_addr, &twins.rules)).expect("twin config"),
+                HostOptions::default().with_cache_clock(Rc::new(clock)),
+            )
+            .expect("twin host");
+            let upstream = twins.upstream.try_clone().expect("upstream clone");
+            let client = twins.client.try_clone().expect("client clone");
+            assembly.block_on(async {
+                let received = Rc::new(Cell::new(0));
+                let upstream = UdpSocket::from_std(upstream).expect("tokio upstream");
+                let upstream_task =
+                    tokio::task::spawn_local(fake_upstream(upstream, Rc::clone(&received)));
+                let server = super::UdpServer::bind(
+                    &assembly,
+                    "127.0.0.1:0".parse().expect("listen address"),
+                )
+                .await
+                .expect("UDP listener")
+                .with_mode(mode);
+                let server_addr = server.local_addr().expect("bound listener");
+                let client = UdpSocket::from_std(client).expect("tokio client");
+
+                // Warm the cache for `cached.test` and `big.test` before the burst.
+                let shutdown = TransportCancellation::new();
+                let server_task = tokio::task::spawn_local(server.serve(shutdown.clone()));
+                for (id, name) in [(1_u16, "cached.test"), (2, "big.test")] {
+                    client
+                        .send_to(&named_query(id, name, 1), server_addr)
+                        .await
+                        .expect("warm query");
+                    let mut buf = [0_u8; 4096];
+                    tokio::time::timeout(Duration::from_secs(2), client.recv_from(&mut buf))
+                        .await
+                        .expect("warm reply")
+                        .expect("recv");
+                }
+                while assembly.metrics_snapshot().completed_total != 2 {
+                    tokio::task::yield_now().await;
+                }
+
+                // Queue a full mixed burst back-to-back before yielding so Linux
+                // `recvmmsg` pulls them together.
+                let burst = vec![
+                    named_query(10, "cached.test", 1),
+                    named_query(11, "blocked.test", 1),
+                    named_query(12, "ip.test", 1),
+                    named_query(13, "big.test", 1),
+                    edns_query(14, "big.test", 1, 4096),
+                    header_only_query(15),
+                    named_query(16, "alias.test", 1),
+                    named_query(17, "fresh.test", 1),
+                ];
+                for query in &burst {
+                    client
+                        .send_to(query, server_addr)
+                        .await
+                        .expect("burst send");
+                }
+
+                let mut replies = BTreeMap::new();
+                let mut buf = [0_u8; 4096];
+                while replies.len() < burst.len() {
+                    let (len, _) =
+                        tokio::time::timeout(Duration::from_secs(2), client.recv_from(&mut buf))
+                            .await
+                            .expect("burst reply")
+                            .expect("recv");
+                    let id = u16::from_be_bytes([buf[0], buf[1]]);
+                    replies.insert(id, buf[..len].to_vec());
+                }
+                while assembly.metrics_snapshot().completed_total
+                    + assembly.metrics_snapshot().malformed_total
+                    != 2 + burst.len() as u64
+                {
+                    tokio::task::yield_now().await;
+                }
+                shutdown.cancel();
+                assert!(server_task.await.expect("server task").is_ok());
+                upstream_task.abort();
+
+                // Verify trace IDs in the audit snapshot are strictly ordered by
+                // admission sequence, and extract normalized rows in trace order.
+                let mut records = assembly.audit_snapshot().records;
+                records.sort_by(|a, b| a.trace_id.cmp(&b.trace_id));
+                for pair in records.windows(2) {
+                    assert!(
+                        pair[0].trace_id < pair[1].trace_id,
+                        "trace IDs must strictly increase"
+                    );
+                }
+                let ordered_audit: Vec<String> = records
+                    .into_iter()
+                    .map(|mut record| {
+                        record.timestamp = std::time::UNIX_EPOCH;
+                        record.elapsed = Duration::ZERO;
+                        record.trace_id = TraceId::Text(String::new());
+                        format!("{record:?}")
+                    })
+                    .collect();
+                let batch_calls = super::BATCH_SEND_CALLS.with(Cell::get);
+                (
+                    replies,
+                    ordered_audit,
+                    normalized_metrics(&assembly),
+                    received.get(),
+                    batch_calls,
+                )
+            })
+        };
+
+        let (batched_replies, batched_audit, batched_metrics, batched_up, batched_calls) =
+            run_mode(DispatchMode::Inline);
+        let (single_replies, single_audit, single_metrics, single_up, single_calls) =
+            run_mode(DispatchMode::SingleInline);
+
+        assert!(batched_calls >= 1, "burst must exercise batched sendmmsg");
+        assert_eq!(single_calls, 0);
+        assert_eq!(batched_replies, single_replies);
+        assert_eq!(batched_audit, single_audit);
+        assert_eq!(batched_metrics, single_metrics);
+        assert_eq!(batched_up, single_up);
+        // Verify 512-byte truncation vs 4096-byte EDNS big reply in the same batch.
+        assert!(batched_replies[&13].len() <= 512 && batched_replies[&13][2] & 0x02 != 0);
+        assert!(batched_replies[&14].len() > 512 && batched_replies[&14][2] & 0x02 == 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn batched_partial_send_failure_isolates_only_the_failed_query() {
+        reset_batch_test_hooks();
+        let twins = Twins::new("batch-partial-fail");
+        let config = compile_yaml(&twin_yaml(
+            twins.upstream.local_addr().expect("upstream address"),
+            &twins.rules,
+        ))
+        .expect("twin config");
+        let assembly = HostAssembly::with_options(config, HostOptions::default()).expect("host");
+        assembly.block_on(async {
+            let server =
+                super::UdpServer::bind(&assembly, "127.0.0.1:0".parse().expect("listen address"))
+                    .await
+                    .expect("UDP listener");
+            let server_addr = server.local_addr().expect("bound listener");
+            let client = UdpSocket::bind("127.0.0.1:0").await.expect("client");
+
+            // Queue 5 local-answer queries before starting the server so all 5
+            // land in one `recvmmsg` / `sendmmsg` batch.
+            for id in 1..=5_u16 {
+                client
+                    .send_to(&named_query(id, "blocked.test", 1), server_addr)
+                    .await
+                    .expect("send");
+            }
+            super::INJECTED_BATCH_SENDS.with(|sends| {
+                let mut q = sends.borrow_mut();
+                q.push_back(super::InjectedBatchSend::RealThenStop(2));
+                q.push_back(super::InjectedBatchSend::Error(
+                    std::io::ErrorKind::ConnectionRefused,
+                ));
+            });
+
+            let shutdown = TransportCancellation::new();
+            let serving = tokio::task::spawn_local(server.serve(shutdown.clone()));
+
+            let mut received_ids = Vec::new();
+            let mut buf = [0_u8; 512];
+            for _ in 0..4 {
+                let (len, _) =
+                    tokio::time::timeout(Duration::from_secs(2), client.recv_from(&mut buf))
+                        .await
+                        .expect("reply")
+                        .expect("recv");
+                assert!(len >= 12);
+                received_ids.push(u16::from_be_bytes([buf[0], buf[1]]));
+            }
+            assert_eq!(received_ids, vec![1, 2, 4, 5]);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(30), client.recv_from(&mut buf))
+                    .await
+                    .is_err(),
+                "failed query 3 must not be sent"
+            );
+
+            shutdown.cancel();
+            assert!(serving.await.expect("server task").is_ok());
+            assert_eq!(assembly.control().admitted_requests(), 0);
+            let metrics = assembly.metrics_snapshot();
+            assert_eq!(metrics.send_succeeded_total, 4);
+            assert_eq!(metrics.send_failed_total, 1);
+            let mut records = assembly.audit_snapshot().records;
+            records.sort_by(|a, b| a.trace_id.cmp(&b.trace_id));
+            let outcomes: Vec<_> = records.iter().map(|r| r.terminal_outcome).collect();
+            assert_eq!(
+                outcomes,
+                vec![
+                    QueryTerminalOutcome::SendSucceeded,
+                    QueryTerminalOutcome::SendSucceeded,
+                    QueryTerminalOutcome::SendFailed,
+                    QueryTerminalOutcome::SendSucceeded,
+                    QueryTerminalOutcome::SendSucceeded,
+                ]
+            );
+        });
+        reset_batch_test_hooks();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn batched_dual_stack_first_send_failure_still_delivers_ipv4_mapped_and_ipv6_peers() {
+        reset_batch_test_hooks();
+        let twins = Twins::new("batch-dual-stack-first-fail");
+        let config = compile_yaml(&twin_yaml(
+            twins.upstream.local_addr().expect("upstream address"),
+            &twins.rules,
+        ))
+        .expect("twin config");
+        let assembly = HostAssembly::with_options(config, HostOptions::default()).expect("host");
+        assembly.block_on(async {
+            let Ok(server) =
+                super::UdpServer::bind(&assembly, "[::]:0".parse().expect("listen address")).await
+            else {
+                return;
+            };
+            let port = server.local_addr().expect("bound listener").port();
+            let Ok(v6_first) = UdpSocket::bind("[::1]:0").await else {
+                return;
+            };
+            let v4_client = UdpSocket::bind("127.0.0.1:0").await.expect("v4 client");
+            let v4_addr = v4_client.local_addr().expect("v4 addr");
+            let v6_second = UdpSocket::bind("[::1]:0").await.expect("v6 client");
+            let v6_second_addr = v6_second.local_addr().expect("v6 addr");
+
+            // Queue 3 datagrams before starting the server: the first fails in
+            // `sendmmsg`, and the subsequent IPv4-mapped and native IPv6 replies
+            // must still be sent cleanly using their raw peer addresses.
+            v6_first
+                .send_to(
+                    &named_query(1, "blocked.test", 1),
+                    SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], port)),
+                )
+                .await
+                .expect("send 1");
+            v4_client
+                .send_to(
+                    &named_query(2, "ip.test", 1),
+                    SocketAddr::from(([127, 0, 0, 1], port)),
+                )
+                .await
+                .expect("send 2");
+            v6_second
+                .send_to(
+                    &named_query(3, "ip.test", 1),
+                    SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], port)),
+                )
+                .await
+                .expect("send 3");
+
+            super::INJECTED_BATCH_SENDS.with(|sends| {
+                sends
+                    .borrow_mut()
+                    .push_back(super::InjectedBatchSend::Error(
+                        std::io::ErrorKind::ConnectionRefused,
+                    ));
+            });
+
+            let shutdown = TransportCancellation::new();
+            let serving = tokio::task::spawn_local(server.serve(shutdown.clone()));
+
+            let mut buf = [0_u8; 512];
+            let (n4, _) =
+                tokio::time::timeout(Duration::from_secs(2), v4_client.recv_from(&mut buf))
+                    .await
+                    .expect("v4 reply")
+                    .expect("recv v4");
+            assert_eq!(u16::from_be_bytes([buf[0], buf[1]]), 2);
+            assert!(n4 >= 12);
+
+            let (n6, _) =
+                tokio::time::timeout(Duration::from_secs(2), v6_second.recv_from(&mut buf))
+                    .await
+                    .expect("v6 reply")
+                    .expect("recv v6");
+            assert_eq!(u16::from_be_bytes([buf[0], buf[1]]), 3);
+            assert!(n6 >= 12);
+
+            assert!(
+                tokio::time::timeout(Duration::from_millis(30), v6_first.recv_from(&mut buf))
+                    .await
+                    .is_err(),
+                "first failed datagram must not be delivered"
+            );
+
+            shutdown.cancel();
+            assert!(serving.await.expect("server task").is_ok());
+            let mut records = assembly.audit_snapshot().records;
+            records.sort_by(|a, b| a.trace_id.cmp(&b.trace_id));
+            assert_eq!(records.len(), 3);
+            assert_eq!(
+                records[0].terminal_outcome,
+                QueryTerminalOutcome::SendFailed
+            );
+            assert_eq!(
+                records[1].terminal_outcome,
+                QueryTerminalOutcome::SendSucceeded
+            );
+            // Audit must record the unmapped plain IPv4 address while sending
+            // used the raw IPv4-mapped IPv6 peer so `v4_client` received it.
+            assert_eq!(records[1].client_addr, v4_addr);
+            assert_eq!(
+                records[2].terminal_outcome,
+                QueryTerminalOutcome::SendSucceeded
+            );
+            assert_eq!(records[2].client_addr, v6_second_addr);
+        });
+        reset_batch_test_hooks();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn batched_partial_send_then_would_block_hands_remainder_to_async_send() {
+        reset_batch_test_hooks();
+        let twins = Twins::new("batch-wouldblock");
+        let config = compile_yaml(&twin_yaml(
+            twins.upstream.local_addr().expect("upstream address"),
+            &twins.rules,
+        ))
+        .expect("twin config");
+        let assembly = HostAssembly::with_options(config, HostOptions::default()).expect("host");
+        assembly.block_on(async {
+            let server =
+                super::UdpServer::bind(&assembly, "127.0.0.1:0".parse().expect("listen address"))
+                    .await
+                    .expect("UDP listener");
+            let server_addr = server.local_addr().expect("bound listener");
+            let client = UdpSocket::bind("127.0.0.1:0").await.expect("client");
+
+            for id in 1..=5_u16 {
+                client
+                    .send_to(&named_query(id, "blocked.test", 1), server_addr)
+                    .await
+                    .expect("send");
+            }
+            super::INJECTED_BATCH_SENDS.with(|sends| {
+                let mut q = sends.borrow_mut();
+                q.push_back(super::InjectedBatchSend::RealThenStop(2));
+                q.push_back(super::InjectedBatchSend::Error(
+                    std::io::ErrorKind::WouldBlock,
+                ));
+            });
+
+            let shutdown = TransportCancellation::new();
+            let serving = tokio::task::spawn_local(server.serve(shutdown.clone()));
+
+            let mut received_ids = Vec::new();
+            let mut buf = [0_u8; 512];
+            for _ in 0..5 {
+                let (len, _) =
+                    tokio::time::timeout(Duration::from_secs(2), client.recv_from(&mut buf))
+                        .await
+                        .expect("reply")
+                        .expect("recv");
+                assert!(len >= 12);
+                received_ids.push(u16::from_be_bytes([buf[0], buf[1]]));
+            }
+            received_ids.sort_unstable();
+            assert_eq!(received_ids, vec![1, 2, 3, 4, 5]);
+            while assembly.metrics_snapshot().completed_total != 5 {
+                tokio::task::yield_now().await;
+            }
+            shutdown.cancel();
+            assert!(serving.await.expect("server task").is_ok());
+            assert_eq!(assembly.control().admitted_requests(), 0);
+            assert_eq!(assembly.metrics_snapshot().send_succeeded_total, 5);
+        });
+        reset_batch_test_hooks();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn batched_zero_send_result_falls_back_to_async_send_without_spinning() {
+        reset_batch_test_hooks();
+        let twins = Twins::new("batch-zero");
+        let config = compile_yaml(&twin_yaml(
+            twins.upstream.local_addr().expect("upstream address"),
+            &twins.rules,
+        ))
+        .expect("twin config");
+        let assembly = HostAssembly::with_options(config, HostOptions::default()).expect("host");
+        assembly.block_on(async {
+            let server =
+                super::UdpServer::bind(&assembly, "127.0.0.1:0".parse().expect("listen address"))
+                    .await
+                    .expect("UDP listener");
+            let server_addr = server.local_addr().expect("bound listener");
+            let client = UdpSocket::bind("127.0.0.1:0").await.expect("client");
+
+            for id in 1..=3_u16 {
+                client
+                    .send_to(&named_query(id, "blocked.test", 1), server_addr)
+                    .await
+                    .expect("send");
+            }
+            super::INJECTED_BATCH_SENDS.with(|sends| {
+                sends.borrow_mut().push_back(super::InjectedBatchSend::Zero);
+            });
+
+            let shutdown = TransportCancellation::new();
+            let serving = tokio::task::spawn_local(server.serve(shutdown.clone()));
+
+            let mut received_ids = Vec::new();
+            let mut buf = [0_u8; 512];
+            for _ in 0..3 {
+                let (_, _) =
+                    tokio::time::timeout(Duration::from_secs(2), client.recv_from(&mut buf))
+                        .await
+                        .expect("reply")
+                        .expect("recv");
+                received_ids.push(u16::from_be_bytes([buf[0], buf[1]]));
+            }
+            received_ids.sort_unstable();
+            assert_eq!(received_ids, vec![1, 2, 3]);
+            while assembly.metrics_snapshot().completed_total != 3 {
+                tokio::task::yield_now().await;
+            }
+            shutdown.cancel();
+            assert!(serving.await.expect("server task").is_ok());
+            assert_eq!(assembly.control().admitted_requests(), 0);
+            assert_eq!(assembly.metrics_snapshot().send_succeeded_total, 3);
+        });
+        reset_batch_test_hooks();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn batched_mid_flush_cancellation_records_canceled_for_unsent_queries() {
+        reset_batch_test_hooks();
+        let twins = Twins::new("batch-mid-cancel");
+        let config = compile_yaml(&twin_yaml(
+            twins.upstream.local_addr().expect("upstream address"),
+            &twins.rules,
+        ))
+        .expect("twin config");
+        let assembly = HostAssembly::with_options(config, HostOptions::default()).expect("host");
+        assembly.block_on(async {
+            let server =
+                super::UdpServer::bind(&assembly, "127.0.0.1:0".parse().expect("listen address"))
+                    .await
+                    .expect("UDP listener");
+            let server_addr = server.local_addr().expect("bound listener");
+            let client = UdpSocket::bind("127.0.0.1:0").await.expect("client");
+
+            for id in 1..=5_u16 {
+                client
+                    .send_to(&named_query(id, "blocked.test", 1), server_addr)
+                    .await
+                    .expect("send");
+            }
+            super::INJECTED_BATCH_SENDS.with(|sends| {
+                sends
+                    .borrow_mut()
+                    .push_back(super::InjectedBatchSend::RealThenCancel(2));
+            });
+
+            let shutdown = TransportCancellation::new();
+            let serving = tokio::task::spawn_local(server.serve(shutdown.clone()));
+
+            let mut received_ids = Vec::new();
+            let mut buf = [0_u8; 512];
+            for _ in 0..2 {
+                let (_, _) =
+                    tokio::time::timeout(Duration::from_secs(2), client.recv_from(&mut buf))
+                        .await
+                        .expect("reply")
+                        .expect("recv");
+                received_ids.push(u16::from_be_bytes([buf[0], buf[1]]));
+            }
+            assert_eq!(received_ids, vec![1, 2]);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(30), client.recv_from(&mut buf))
+                    .await
+                    .is_err(),
+                "canceled replies must not be sent"
+            );
+
+            assert!(serving.await.expect("server task").is_ok());
+            assert_eq!(assembly.control().admitted_requests(), 0);
+            let mut records = assembly.audit_snapshot().records;
+            records.sort_by(|a, b| a.trace_id.cmp(&b.trace_id));
+            let outcomes: Vec<_> = records.iter().map(|r| r.terminal_outcome).collect();
+            assert_eq!(
+                outcomes,
+                vec![
+                    QueryTerminalOutcome::SendSucceeded,
+                    QueryTerminalOutcome::SendSucceeded,
+                    QueryTerminalOutcome::Canceled,
+                    QueryTerminalOutcome::Canceled,
+                    QueryTerminalOutcome::Canceled,
+                ]
+            );
+        });
+        reset_batch_test_hooks();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn batched_mid_batch_panic_flushes_earlier_replies_and_closes_upstreams() {
+        reset_batch_test_hooks();
+        let twins = Twins::new("batch-mid-panic");
+        let config = compile_yaml(&twin_yaml(
+            twins.upstream.local_addr().expect("upstream address"),
+            &twins.rules,
+        ))
+        .expect("twin config");
+        let assembly = HostAssembly::with_options(config, HostOptions::default()).expect("host");
+        assembly.block_on(async {
+            let server =
+                super::UdpServer::bind(&assembly, "127.0.0.1:0".parse().expect("listen address"))
+                    .await
+                    .expect("UDP listener");
+            let server_addr = server.local_addr().expect("bound listener");
+            let client = UdpSocket::bind("127.0.0.1:0").await.expect("client");
+
+            for id in 1..=4_u16 {
+                client
+                    .send_to(&named_query(id, "blocked.test", 1), server_addr)
+                    .await
+                    .expect("send");
+            }
+            // Let the first 2 datagrams finish, then panic on the 3rd.
+            super::PANIC_COUNTDOWN.with(|c| c.set(Some(2)));
+
+            let serving = tokio::task::spawn_local(server.serve(TransportCancellation::new()));
+            let result = tokio::time::timeout(Duration::from_secs(2), serving)
+                .await
+                .expect("listener ends")
+                .expect("server task");
+            match result {
+                Err(super::UdpServerError::Task(message)) => {
+                    assert!(message.contains("injected request panic"), "{message}");
+                }
+                other => panic!("unexpected listener result {other:?}"),
+            }
+
+            let mut received_ids = Vec::new();
+            let mut buf = [0_u8; 512];
+            for _ in 0..2 {
+                let (_, _) =
+                    tokio::time::timeout(Duration::from_secs(2), client.recv_from(&mut buf))
+                        .await
+                        .expect("pre-panic reply")
+                        .expect("recv");
+                received_ids.push(u16::from_be_bytes([buf[0], buf[1]]));
+            }
+            assert_eq!(received_ids, vec![1, 2]);
+            assert_eq!(assembly.control().admitted_requests(), 0);
+            assert_eq!(assembly.metrics_snapshot().send_succeeded_total, 2);
+            assert_eq!(
+                assembly
+                    .forward()
+                    .expect("forward")
+                    .upstream()
+                    .lifecycle_state(),
+                LifecycleState::Closed
+            );
+        });
+        reset_batch_test_hooks();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn low_load_single_datagram_uses_single_send_fast_path() {
+        reset_batch_test_hooks();
+        let twins = Twins::new("batch-low-load");
+        let config = compile_yaml(&twin_yaml(
+            twins.upstream.local_addr().expect("upstream address"),
+            &twins.rules,
+        ))
+        .expect("twin config");
+        let assembly = HostAssembly::with_options(config, HostOptions::default()).expect("host");
+        assembly.block_on(async {
+            let server =
+                super::UdpServer::bind(&assembly, "127.0.0.1:0".parse().expect("listen address"))
+                    .await
+                    .expect("UDP listener");
+            let server_addr = server.local_addr().expect("bound listener");
+            let shutdown = TransportCancellation::new();
+            let serving = tokio::task::spawn_local(server.serve(shutdown.clone()));
+            let client = UdpSocket::bind("127.0.0.1:0").await.expect("client");
+
+            let mut buf = [0_u8; 512];
+            for id in 1..=3_u16 {
+                client
+                    .send_to(&named_query(id, "blocked.test", 1), server_addr)
+                    .await
+                    .expect("send");
+                let (len, _) =
+                    tokio::time::timeout(Duration::from_secs(2), client.recv_from(&mut buf))
+                        .await
+                        .expect("reply")
+                        .expect("recv");
+                assert!(len >= 12);
+                assert_eq!(u16::from_be_bytes([buf[0], buf[1]]), id);
+            }
+            assert_eq!(
+                super::BATCH_SEND_CALLS.with(Cell::get),
+                0,
+                "single-datagram wakeups must bypass sendmmsg"
+            );
+            shutdown.cancel();
+            assert!(serving.await.expect("server task").is_ok());
+        });
+        reset_batch_test_hooks();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn batched_burst_of_64_datagrams_yields_exactly_twice() {
+        reset_batch_test_hooks();
+        let twins = Twins::new("batch-yield-burst");
+        let config = compile_yaml(&twin_yaml(
+            twins.upstream.local_addr().expect("upstream address"),
+            &twins.rules,
+        ))
+        .expect("twin config");
+        let assembly = HostAssembly::with_options(config, HostOptions::default()).expect("host");
+        assembly.block_on(async {
+            let server =
+                super::UdpServer::bind(&assembly, "127.0.0.1:0".parse().expect("listen address"))
+                    .await
+                    .expect("UDP listener");
+            let server_addr = server.local_addr().expect("bound listener");
+            let client = UdpSocket::bind("127.0.0.1:0").await.expect("client");
+
+            for id in 0..64_u16 {
+                client
+                    .send_to(&header_only_query(id), server_addr)
+                    .await
+                    .expect("send");
+            }
+            YIELDS.with(|count| count.set(0));
+            let shutdown = TransportCancellation::new();
+            let serving = tokio::task::spawn_local(server.serve(shutdown.clone()));
+            let mut buf = [0_u8; 64];
+            for _ in 0..64 {
+                tokio::time::timeout(Duration::from_secs(2), client.recv_from(&mut buf))
+                    .await
+                    .expect("formerr reply")
+                    .expect("recv");
+            }
+            while assembly.metrics_snapshot().malformed_total != 64 {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(YIELDS.with(Cell::get), 2);
+            assert!(super::BATCH_SEND_CALLS.with(Cell::get) >= 2);
+            shutdown.cancel();
+            assert!(serving.await.expect("server task").is_ok());
+        });
+        reset_batch_test_hooks();
     }
 }

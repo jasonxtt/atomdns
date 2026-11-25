@@ -1369,3 +1369,41 @@ copyable executable identifier while awaiting the exchange, and materialize
 the identity once at terminalization. Derive `final_upstream` from the response
 source only when creating an enabled audit record; always retain the attempt
 facts needed by metrics and cancellation.
+
+## Scenario: native UDP listener batched datagram I/O (Linux)
+
+### 1. Scope / Trigger
+
+Use this contract when changing `UdpServer::serve` (`rust/native-host/src/udp.rs`)
+or its Linux batched datagram wrapper (`rust/native-host/src/udp_batch.rs`).
+
+### 2. Contracts
+
+- **Platform split**: On Linux (`#[cfg(target_os = "linux")]`), `UdpServer::serve`
+  receives datagrams with non-blocking `recvmmsg` (`MSG_DONTWAIT`, null timeout)
+  and flushes multiple synchronous replies from the same receive batch with
+  non-blocking `sendmmsg` (`MSG_DONTWAIT`). On all other platforms, the listener
+  keeps the per-datagram `recv_from` / `try_send_to` loop with no `libc`
+  dependency and no `unsafe` code.
+- **No low-load coalescing**: The listener never waits to accumulate a batch.
+  When a batch produces a single synchronous reply, it uses the single-datagram
+  `try_send_to` path directly.
+- **Full UDP datagram size & bounded RSS**: Receive slots hold full 65,535-byte
+  datagrams (no truncation of large UDP queries) backed by an anonymous `mmap`
+  slab (with heap fallback) so unused pages remain unallocated and are unmapped
+  on listener drop.
+- **Fairness & isolation**: Each `recvmmsg` call is capped at
+  `INLINE_BURST - handled_since_yield` (at most 32), yielding once every 32
+  datagrams. A panic while handling a datagram flushes earlier completed replies
+  in the batch, cancels shutdown, drains tasks, and closes owned upstreams.
+- **Per-query terminal outcomes & addressing**: Replies are sent to the raw
+  socket `peer` (including IPv4-mapped IPv6 peers on dual-stack wildcard
+  sockets), while audit and client matching continue to use `canonical_peer`.
+  Each query records `SendSucceeded` only after its datagram is accepted by the
+  kernel; a non-`WouldBlock` error marks only the failing entry `SendFailed` and
+  continues sending the rest of the batch; `WouldBlock` (or a defensive `Ok(0)`)
+  hands remaining entries to async `send_to` tasks; cancellation wins before
+  sending and records `Canceled` for all unsent entries.
+- **`unsafe` boundary**: All `unsafe` FFI and buffer-backing code is confined to
+  `rust/native-host/src/udp_batch.rs`; the rest of `atomdns-native-host` keeps
+  `#![deny(unsafe_code)]`.
