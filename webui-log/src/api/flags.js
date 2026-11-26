@@ -18,9 +18,17 @@ export function pageOfFlag(flag) {
   return PAGE_OF_SECTION[flag?.section] || ''
 }
 
-// The flags of one page in the order the configuration declares them.
-export function flagsForPage(flags, page) {
-  return (Array.isArray(flags) ? flags : []).filter((flag) => pageOfFlag(flag) === page)
+// The flags of one page in the order the configuration declares them. Optional `only` /
+// `exclude` key lists let a page place specific flags inside a dedicated tab or card.
+export function flagsForPage(flags, page, { only = null, exclude = null } = {}) {
+  const onlySet = Array.isArray(only) ? new Set(only) : null
+  const excludeSet = Array.isArray(exclude) ? new Set(exclude) : null
+  return (Array.isArray(flags) ? flags : []).filter((flag) => {
+    if (pageOfFlag(flag) !== page) return false
+    if (onlySet && !onlySet.has(flag.key)) return false
+    if (excludeSet && excludeSet.has(flag.key)) return false
+    return true
+  })
 }
 
 export function isValidFlagList(data) {

@@ -24,6 +24,7 @@ export const SEARCH_LISTS = Object.freeze([
   { tag: 'cnfakeipfilter', title: 'CN fakeip filter', page: 'routing', tab: 'fakeip' },
   { tag: 'direct_ip', title: '直连 IP', page: 'routing', tab: 'ip-rewrite', ip: true },
   { tag: 'rewrite', title: '重定向', page: 'routing', tab: 'ip-rewrite' },
+  { tag: 'poisoned_ip', title: '污染 IP', page: 'routing', tab: 'poison', ip: true },
   { tag: 'ddnslist', title: 'DDNS 域名', page: 'routing', tab: 'ddns' },
   { tag: 'blocklist', title: '黑名单', page: 'blocking' },
   { tag: 'client_ip', title: '客户端 IP', page: 'clients', ip: true }

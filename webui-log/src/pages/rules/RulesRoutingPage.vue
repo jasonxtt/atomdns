@@ -6,22 +6,30 @@ import ListEditor from '../../components/rules/ListEditor.vue'
 import SpecialGroupLinks from '../../components/rules/SpecialGroupLinks.vue'
 import SubscriptionTable from '../../components/rules/SubscriptionTable.vue'
 import { BASE_SUBSCRIPTIONS, CUSTOM_SUBSCRIPTIONS } from '../../utils/subscription'
+import { queryText } from '../../utils/deepLink'
 
-// 分流规则 has many lists, so they sit under third-level tabs (`?tab=<id>`); the switches stay on top.
+// 分流规则 has many lists, so they sit under third-level tabs (`?tab=<id>`); switches not
+// owned by a dedicated tab stay on top.
 const TABS = [
   { id: 'subscriptions', label: '在线订阅' },
   { id: 'lists', label: '白/灰名单' },
   { id: 'fakeip', label: 'FakeIP 过滤' },
   { id: 'ip-rewrite', label: '直连 IP 与重定向' },
+  { id: 'poison', label: '污染识别' },
   { id: 'ddns', label: 'DDNS 域名' }
 ]
+const POISON_FLAGS = ['detect_poison']
 const route = useRoute()
-const active = computed(() => TABS.some(tab => tab.id === route.query.tab) ? route.query.tab : TABS[0].id)
+const active = computed(() => {
+  if (TABS.some(tab => tab.id === route.query.tab)) return route.query.tab
+  if (POISON_FLAGS.includes(queryText(route.query.flag))) return 'poison'
+  return TABS[0].id
+})
 </script>
 
 <template>
   <div class="rt-settings-page">
-    <FlagSwitches page="routing" />
+    <FlagSwitches page="routing" v-if="active !== 'poison'" :exclude="POISON_FLAGS" />
     <nav class="rt-subtabs" aria-label="分流规则">
       <router-link
         v-for="tab in TABS"
@@ -49,6 +57,13 @@ const active = computed(() => TABS.some(tab => tab.id === route.query.tab) ? rou
     <template v-else-if="active === 'ip-rewrite'">
       <ListEditor tag="direct_ip" title="直连 IP" hint="不在任何域名名单里的域名，解析出的 IP 属于这个名单时，该域名归入直连。每行一个条目，可以是单个 IP、网段（203.0.113.0/24）或 IP 范围（203.0.113.10-203.0.113.99）。" />
       <ListEditor tag="rewrite" title="重定向" hint="每行“域名 IP或域名”，例如 example.com 192.0.2.1，或 test.example example.com。支持 full:、domain: 等写法。" />
+    </template>
+    <template v-else-if="active === 'poison'">
+      <section class="panel rt-panel-group">
+        <FlagSwitches page="routing" :only="POISON_FLAGS" />
+        <div class="rt-divider" role="separator"><i></i></div>
+        <ListEditor tag="poisoned_ip" title="污染 IP" hint="配合上面的「污染识别」使用：中国域名由国内 DNS 返回的 A 记录若全部命中此名单，自动改走代理并写入学习名单。每行一个条目，可以是单个 IP、网段（203.0.113.0/24）或 IP 范围（203.0.113.10-203.0.113.99）。" />
+      </section>
     </template>
     <template v-else>
       <ListEditor tag="ddnslist" title="DDNS 域名" hint="名单里的域名按动态域名处理，适合经常变 IP 的域名；是否优先用国外上游解析，由「运行模式 › DDNS 优先国外解析」开关决定。" />

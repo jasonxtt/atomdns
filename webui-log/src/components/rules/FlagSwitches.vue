@@ -16,7 +16,9 @@ import SettingRow from '../settings/SettingRow.vue'
 const props = defineProps({
   page: { type: String, required: true },
   tiles: { type: Boolean, default: false },
-  joined: { type: Boolean, default: false }
+  joined: { type: Boolean, default: false },
+  only: { type: Array, default: null },
+  exclude: { type: Array, default: null }
 })
 
 const route = useRoute()
@@ -26,7 +28,7 @@ const loadError = ref('')
 // The key being applied; every switch of the page is disabled meanwhile.
 const busyKey = ref('')
 
-const pageFlags = computed(() => flagsForPage(flags.value, props.page))
+const pageFlags = computed(() => flagsForPage(flags.value, props.page, { only: props.only, exclude: props.exclude }))
 const enabled = computed(() => supportsOperation('flags.manage'))
 
 async function load() {

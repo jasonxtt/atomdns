@@ -30,6 +30,9 @@ test('a flag is shown on the sub-item of its declared section, in declaration or
   assert.deepEqual(flagsForPage(flags, 'learning').map((item) => item.key), ['learn_extra'])
   // A rewrite flag belongs to 分流规则 now, after the routing flags that were declared before it.
   assert.deepEqual(flagsForPage(flags, 'routing').map((item) => item.key), ['redirect_extra', 'route_extra'])
+  // A page can isolate dedicated flags into a sub-tab while keeping other flags on top.
+  assert.deepEqual(flagsForPage(flags, 'routing', { only: ['route_extra'] }).map((item) => item.key), ['route_extra'])
+  assert.deepEqual(flagsForPage(flags, 'routing', { exclude: ['route_extra'] }).map((item) => item.key), ['redirect_extra'])
   assert.equal(pageOfFlag(flag('x', 'nowhere')), '')
   assert.deepEqual(flagsForPage(undefined, 'mode'), [])
 })
@@ -368,7 +371,7 @@ test('each sub-item page has its switches first, then lists and subscriptions', 
   const expected = {
     Mode: ['FlagSwitches page="mode"'],
     Upstream: ['FlagSwitches page="upstream"', '<UpstreamPanel />', '<OverridesPanel />'],
-    Routing: ['FlagSwitches page="routing"', 'kind="online"', '<SpecialGroupLinks />', 'tag="whitelist"', 'tag="greylist"', 'tag="realiplist"', 'tag="cnfakeipfilter"', 'tag="direct_ip"', 'tag="rewrite"', 'tag="ddnslist"'],
+    Routing: ['FlagSwitches page="routing"', 'kind="online"', '<SpecialGroupLinks />', 'tag="whitelist"', 'tag="greylist"', 'tag="realiplist"', 'tag="cnfakeipfilter"', 'tag="direct_ip"', 'tag="rewrite"', 'tag="poisoned_ip"', 'tag="ddnslist"'],
     Blocking: ['FlagSwitches page="blocking"', 'tag="blocklist"', 'kind="adguard"'],
     Learning: ['FlagSwitches page="learning"', '<DomainGenerationPanel />', '<LearningData />', '<RequeryPanel />'],
     Cache: ['FlagSwitches page="cache"', '<CachePanel />', 'to="/rules/learning"'],
@@ -484,7 +487,7 @@ test('the upstream page hides groups not in use unless asked, and checks before 
 
 // ----- global search ---------------------------------------------------------------------
 
-import { aliasEntries, flagEntries, lineCoversIP, listMatches, looksLikeLookup, parseIP, pick, rank, ruleCoversDomain } from '../src/utils/globalSearch.js'
+import { SEARCH_LISTS, aliasEntries, flagEntries, lineCoversIP, listMatches, looksLikeLookup, parseIP, pick, rank, ruleCoversDomain } from '../src/utils/globalSearch.js'
 
 test('search ranks exact before prefix before substring and drops non-matches', () => {
   assert.equal(rank('cache', ['cache']), 0)
@@ -533,4 +536,16 @@ test('a domain rule covers the names under it, and a domain list search finds th
   assert.equal(ruleCoversDomain('regexp:^ad[0-9]+\\.', 'ad12.example.com'), true)
   assert.equal(ruleCoversDomain('example.com 192.0.2.1  # note', 'www.example.com'), true)
   assert.deepEqual(listMatches('domain:example.org\nfull:other.com', 'www.example.org').lines, ['domain:example.org'])
+})
+
+test('poison detection pairs its switch and IP list in its own routing tab and search entry', () => {
+  const routing = read('../src/pages/rules/RulesRoutingPage.vue')
+  assert.match(routing, /id: 'poison',\s*label: '污染识别'/)
+  assert.match(routing, /id: 'ip-rewrite',\s*label: '直连 IP 与重定向'/)
+  assert.match(routing, /const POISON_FLAGS = \['detect_poison'\]/)
+  assert.match(routing, /POISON_FLAGS\.includes\(queryText\(route\.query\.flag\)\)\) return 'poison'/)
+  assert.match(routing, /<FlagSwitches page="routing" v-if="active !== 'poison'" :exclude="POISON_FLAGS" \/>/)
+  assert.match(routing, /<section class="panel rt-panel-group">[\s\S]*?<FlagSwitches page="routing" :only="POISON_FLAGS" \/>[\s\S]*?rt-divider[\s\S]*?<ListEditor tag="poisoned_ip"/)
+  const entry = SEARCH_LISTS.find((item) => item.tag === 'poisoned_ip')
+  assert.deepEqual(entry, { tag: 'poisoned_ip', title: '污染 IP', page: 'routing', tab: 'poison', ip: true })
 })
