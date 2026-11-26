@@ -1,7 +1,7 @@
 # AtomDNS container image. The build context is the staging directory made by
 # scripts/build-docker-image.sh (release artifacts, nothing is compiled here):
 #   bin/{amd64,arm64,armv7}/atomdns   glibc programs (static musl ARM ones for releases before the -gnu packages)
-#   assets/                           config_rust.zip, config_rust_up.zip, atomdns-webui.tar.gz[, atomdns-webui-lg.tar.gz]
+#   assets/                           config_rust.zip, config_rust_up.zip, atomdns-webui.tar.gz
 # There is no RUN step for the target platform, so a multi-arch build needs no emulation.
 
 # CA roots and zoneinfo are architecture independent: they are installed on the build platform and copied.

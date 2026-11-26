@@ -55,13 +55,8 @@ for platform in ${PLATFORMS//,/ }; do
 done
 echo "program packages: ${PACKAGES[*]}"
 
-HAS_WEBUI_LG="$(jq -r '.artifacts["atomdns-webui-lg.tar.gz"].sha256 // empty' "${MANIFEST}")"
-
 if [ -z "${RELEASE_DIR:-}" ]; then
   patterns=(--pattern atomdns-webui.tar.gz --pattern config_rust.zip)
-  if [ -n "${HAS_WEBUI_LG}" ]; then
-    patterns+=(--pattern atomdns-webui-lg.tar.gz)
-  fi
   for pair in "${PACKAGES[@]}"; do patterns+=(--pattern "${pair#*:}"); done
   gh release download "${TAG}" --repo "${REPO}" --dir "${SRC}" "${patterns[@]}"
 fi
@@ -85,15 +80,12 @@ done
 # image assets
 check_asset "${SRC}/atomdns-webui.tar.gz" atomdns-webui.tar.gz
 cp "${SRC}/atomdns-webui.tar.gz" "${STAGE}/ctx/assets/"
-if [ -n "${HAS_WEBUI_LG}" ]; then
-  check_asset "${SRC}/atomdns-webui-lg.tar.gz" atomdns-webui-lg.tar.gz
-  cp "${SRC}/atomdns-webui-lg.tar.gz" "${STAGE}/ctx/assets/"
-fi
 # The fresh-install package is a release asset but not part of the manifest: it must carry the same WebUI.
 cp "${SRC}/config_rust.zip" "${STAGE}/ctx/assets/"
 UI_IN_ZIP="$(unzip -p "${SRC}/config_rust.zip" ui/main/ui-manifest.json | jq -r '.ui_version')"
 [ "${UI_IN_ZIP}" = "${TAG}" ] || { echo "config_rust.zip carries WebUI ${UI_IN_ZIP}, not ${TAG}" >&2; exit 1; }
-if [ -n "${HAS_WEBUI_LG}" ]; then
+WEBUI_ENTRIES="$(tar -tzf "${SRC}/atomdns-webui.tar.gz")"
+if grep -qx 'bundled-ui/lg/ui-manifest.json' <<<"${WEBUI_ENTRIES}"; then
   UI_LG_IN_ZIP="$(unzip -p "${SRC}/config_rust.zip" ui/lg/ui-manifest.json | jq -r '.ui_version')"
   [ "${UI_LG_IN_ZIP}" = "${TAG}" ] || { echo "config_rust.zip carries glass WebUI ${UI_LG_IN_ZIP}, not ${TAG}" >&2; exit 1; }
 fi

@@ -120,6 +120,18 @@ pub fn arm_update_candidate() {
     update::guard::arm_parent_death_signal();
 }
 
+/// Whether this process is running as an update-guard trial candidate.
+#[must_use]
+pub fn is_update_candidate() -> bool {
+    update::guard::is_candidate()
+}
+
+/// Normal-startup bridge: promotes `<root>/ui/main/bundled-ui/lg` to `<root>/ui/lg` before
+/// the UI registry scans `ui/`. Must not be called during an update-guard trial.
+pub fn promote_bundled_ui(root: &std::path::Path) -> Result<Option<String>, String> {
+    update::webui::promote_bundled_on_start(root)
+}
+
 /// Called by `atomdns start` before the configuration is loaded: rolls back an interrupted
 /// update and returns the program and arguments to run again (`None`: nothing to recover).
 ///

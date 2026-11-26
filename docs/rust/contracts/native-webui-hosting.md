@@ -47,10 +47,9 @@ failures produce bounded diagnostics, without filenames/content disclosure.
 `webui-log/dist/` (`index.html`, `app.js`, `app.css`, `chunks/`, `assets/`, `ui-manifest.json`) with
 **relative** resource URLs (`base: './'`), so the same package works as `ui/main` at `/` and as any
 `ui/<name>` at `/<name>/` (API calls are same-origin absolute paths); `npm run build:package` also
-writes `release/atomdns-webui.tar.gz` (the package files at the top level: the release asset), and
-`npm run build:lg:package` writes the optional glass variant `release/atomdns-webui-lg.tar.gz`
-(installed at `ui/lg/` for `/lg/`). Online updates replace `ui/main` — and install or update `ui/lg`
-when the release carries `atomdns-webui-lg.tar.gz` — when, and only when, `ui/main` exists as a real
+writes `release/atomdns-webui.tar.gz` (the default package at the top level plus the optional glass
+variant under `bundled-ui/lg/`). Online updates replace `ui/main` — and split `bundled-ui/lg/` into
+`ui/lg` (for `/lg/`) — when, and only when, `ui/main` exists as a real
 directory ([native-update](native-update.md)); other `ui/<name>` directories are never touched. Directory
 names follow the rules above. A **atomdns UI package** is a directory that carries a
 `ui-manifest.json`:

@@ -20,5 +20,5 @@ export function buildManifest({ version, now = new Date() }) {
 
 /** The release asset holding the package (rust/native-host/src/update/mod.rs WEBUI_ASSET). */
 export const ARCHIVE_NAME = 'atomdns-webui.tar.gz'
-/** The release asset holding the glass UI package installed at `ui/lg/` (WEBUI_GLASS_ASSET). */
-export const GLASS_ARCHIVE_NAME = 'atomdns-webui-lg.tar.gz'
+/** Subdirectory inside `atomdns-webui.tar.gz` carrying the optional glass UI installed at `ui/lg/`. */
+export const BUNDLED_GLASS_SUBDIR = 'bundled-ui/lg'

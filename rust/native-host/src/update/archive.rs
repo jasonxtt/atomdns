@@ -80,6 +80,71 @@ pub(crate) fn extract_tar_gz_file(
     }
 }
 
+/// The regular file at exact normalized relative path `wanted_path` inside a gzip-compressed
+/// tar stream, or `Ok(None)` when no such entry exists.
+pub(crate) fn extract_tar_gz_path(
+    data: &[u8],
+    wanted_path: &str,
+    max_file: u64,
+    max_scan: u64,
+) -> Result<Option<Vec<u8>>, String> {
+    let mut stream = GzDecoder::new(data).take(max_scan.saturating_add(1));
+    let mut scanned: u64 = 0;
+    let mut long_name: Option<String> = None;
+    loop {
+        let mut header = [0_u8; BLOCK];
+        if !read_exact_or_end(&mut stream, &mut header)? {
+            return Ok(None);
+        }
+        scanned += BLOCK as u64;
+        if header.iter().all(|byte| *byte == 0) {
+            return Ok(None);
+        }
+        let size = parse_octal(&header[124..136])?;
+        let kind = header[156];
+        let padded = size.div_ceil(BLOCK as u64) * BLOCK as u64;
+        scanned = scanned.saturating_add(padded);
+        if scanned > max_scan {
+            return Err("archive is larger than the allowed scan size".to_owned());
+        }
+        match kind {
+            b'L' => {
+                if size > 4096 {
+                    return Err("archive entry name is too long".to_owned());
+                }
+                let mut name = read_block_data(&mut stream, size, padded)?;
+                while name.last() == Some(&0) {
+                    name.pop();
+                }
+                long_name = Some(String::from_utf8(name).map_err(|_| "archive name is not UTF-8")?);
+            }
+            b'0' | 0 => {
+                let name = match long_name.take() {
+                    Some(name) => name,
+                    None => header_name(&header),
+                };
+                let mut normalized = name.as_str();
+                while let Some(stripped) = normalized.strip_prefix("./") {
+                    normalized = stripped;
+                }
+                if normalized == wanted_path {
+                    if size == 0 || size > max_file {
+                        return Err(format!(
+                            "`{wanted_path}` has an unacceptable size ({size} bytes)"
+                        ));
+                    }
+                    return read_block_data(&mut stream, size, padded).map(Some);
+                }
+                skip(&mut stream, padded)?;
+            }
+            _ => {
+                long_name = None;
+                skip(&mut stream, padded)?;
+            }
+        }
+    }
+}
+
 /// Bounds for [`extract_tar_gz_tree`].
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TreeLimits {

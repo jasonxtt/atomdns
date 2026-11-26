@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-import { API_LEVEL, ARCHIVE_NAME, GLASS_ARCHIVE_NAME, buildManifest, validVersion } from '../../scripts/external-ui-manifest.mjs'
+import { API_LEVEL, ARCHIVE_NAME, BUNDLED_GLASS_SUBDIR, buildManifest, validVersion } from '../../scripts/external-ui-manifest.mjs'
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8')
 
@@ -20,10 +20,11 @@ test('the manifest of an external package has the fields the host judges', () =>
     assert.throws(() => buildManifest({ version: bad }))
   }
   assert.equal(ARCHIVE_NAME, 'atomdns-webui.tar.gz')
-  assert.equal(GLASS_ARCHIVE_NAME, 'atomdns-webui-lg.tar.gz')
+  assert.equal(BUNDLED_GLASS_SUBDIR, 'bundled-ui/lg')
   const updateMod = read('../../rust/native-host/src/update/mod.rs')
   assert.match(updateMod, /pub\(crate\) const WEBUI_ASSET: &str = "atomdns-webui\.tar\.gz";/)
-  assert.match(updateMod, /pub\(crate\) const WEBUI_GLASS_ASSET: &str = "atomdns-webui-lg\.tar\.gz";/)
+  const webuiRs = read('../../rust/native-host/src/update/webui.rs')
+  assert.match(webuiRs, /pub\(crate\) const BUNDLED_UI_DIR: &str = "bundled-ui";/)
 })
 
 test('the build script and the host agree on the interface level', () => {
@@ -41,7 +42,6 @@ test('one build makes the WebUI package: relative URLs, a name-independent direc
   assert.equal(pkg.scripts.build, 'node ../scripts/build-webui.mjs')
   assert.equal(pkg.scripts['build:package'], 'node ../scripts/build-webui.mjs --package')
   assert.equal(pkg.scripts['build:lg'], 'VITE_UI_VARIANT=glass node ../scripts/build-webui.mjs')
-  assert.equal(pkg.scripts['build:lg:package'], 'VITE_UI_VARIANT=glass node ../scripts/build-webui.mjs --package')
   assert.equal(pkg.scripts['build:external'], undefined)
   const script = read('../../scripts/build-webui.mjs')
   assert.match(script, /ui-manifest\.json/)

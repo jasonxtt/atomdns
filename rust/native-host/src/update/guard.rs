@@ -44,6 +44,11 @@ fn exec_program(executable: &str, args: &[String]) -> std::io::Error {
         .exec()
 }
 
+/// Whether this process is running as an update-guard trial candidate.
+pub(crate) fn is_candidate() -> bool {
+    std::env::var_os(MARKER_ENV).is_some()
+}
+
 /// A candidate started by the guard dies with it, instead of staying behind holding the
 /// service's ports. Called by `atomdns start` when the guard marker is present.
 ///
@@ -259,7 +264,7 @@ fn wait_healthy(tx: &Transaction, child: &mut Child) -> Result<(), String> {
             &tx.target_version,
             tx.required_config_schema,
             !tx.webui_archive_path.is_empty(),
-            !tx.webui_glass_archive_path.is_empty(),
+            !tx.webui_glass_new_dir.is_empty(),
         ) {
             healthy += 1;
             if healthy >= REQUIRED_HEALTHY {

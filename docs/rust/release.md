@@ -11,7 +11,7 @@
 | tag / Release 名 | `vX.Y.Z`（只认这一种写法；`rust-v*`、`lite-v*`、`vX.Y`、`vX.Y.Z-rc1` 都会被更新器忽略） |
 | 程序 | `atomdns`（`rust/native-host` 的 cargo bin；crate 名仍是 `atomdns-native-host`） |
 | 发布包 | `atomdns-linux-amd64.tar.gz`（包内只有一个文件 `atomdns`；v0.5.0 起另有 `-amd64-v3`、`-amd64-musl`、`-arm64`、`-armv7`，在线更新默认只装 `amd64`；`amd64-musl` 在 musl/Alpine 系统上由更新器自动选用；`amd64-v3` 仅在 UI 点“切换到 v3”或已运行 v3 时由更新器安装） |
-| 界面包 | `atomdns-webui.tar.gz`（v0.4.0 起；顶层即 `<配置根>/ui/main/` 的文件，`ui-manifest.json` 的 `ui_version` 等于 tag）与 `atomdns-webui-lg.tar.gz`（可选毛玻璃界面，顶层即 `<配置根>/ui/lg/`，访问路径 `/lg/`） |
+| 界面包 | `atomdns-webui.tar.gz`（v0.4.0 起；顶层即 `<配置根>/ui/main/` 的文件，并附带 `bundled-ui/lg/` 作为可选毛玻璃界面自动拆分到 `<配置根>/ui/lg/`，`ui-manifest.json` 的 `ui_version` 等于 tag） |
 | 清单 | `atomdns-update-manifest.json`（`format 1`、`channel "rust"`、`version` 等于 tag、各发布包的 sha256） |
 | 程序自报版本 | `atomdns version` 与 `GET /api/v1/system/health` 的 `version` 都等于 tag |
 
@@ -36,9 +36,9 @@
    scripts/build-rust-release.sh v0.2.0 release/rust
    ```
 
-   产物：`release/rust/atomdns-linux-amd64.tar.gz`、`release/rust/atomdns-webui.tar.gz`、`release/rust/atomdns-webui-lg.tar.gz`、`release/rust/atomdns-update-manifest.json`。
-   脚本会拒绝非 `vX.Y.Z` 的 tag，要求构建出的程序自报版本、两份界面包的 `ui_version` 都等于 tag，并核对 `scripts/rust-release-metadata.json`
-   与 `update/mod.rs` 里的配置包标识和四个资产名（清单的 `artifacts` 必须同时有程序包与两份界面包）。脚本只构建，不发布。
+   产物：`release/rust/atomdns-linux-amd64.tar.gz`、`release/rust/atomdns-webui.tar.gz`、`release/rust/atomdns-update-manifest.json`。
+   脚本会拒绝非 `vX.Y.Z` 的 tag，要求构建出的程序自报版本、界面包顶层及内嵌 `bundled-ui/lg/` 的 `ui_version` 都等于 tag，并核对 `scripts/rust-release-metadata.json`
+   与 `update/mod.rs` 里的配置包标识和三个资产名（清单的 `artifacts` 必须同时有程序包与界面包）。脚本只构建，不发布。
 3. 核对：
 
    ```bash
@@ -87,8 +87,8 @@
 
    脚本核对该文件的 sha256 与包内 manifest 是否等于元数据，通过后清单带 `config{url,sha256}`。
 6. **建 Release**：程序包、界面包、清单，加全新安装包 `config_rust.zip`（见下一步）。增量包不再是 Release 资产。
-7. **全新安装包与界面**：用同一份 `atomdns-webui.tar.gz`（及其同目录的 `atomdns-webui-lg.tar.gz`）在 file 仓库运行 `atomdns/config/full/build_config_rust_zip.sh <atomdns-webui.tar.gz>` 重新生成 `config_rust.zip`（带 `ui/main/` 与 `ui/lg/`），
-   并把 `atomdns-webui.tar.gz`（与 `atomdns-webui-lg.tar.gz`）放进 `atomdns/ui/`，提交 file 仓库。Release 建好后，用 `curl -fsSL <config.url> | sha256sum` 再核对一次与元数据一致。
+7. **全新安装包与界面**：用同一份 `atomdns-webui.tar.gz` 在 file 仓库运行 `atomdns/config/full/build_config_rust_zip.sh <atomdns-webui.tar.gz>` 重新生成 `config_rust.zip`（自动拆出 `ui/main/` 与 `ui/lg/`），
+   并把 `atomdns-webui.tar.gz` 放进 `atomdns/ui/`，提交 file 仓库。Release 建好后，用 `curl -fsSL <config.url> | sha256sum` 再核对一次与元数据一致。
    更新器只在 `applied_config_schema < required_config_schema` 时下载配置包。
 
 v0.5.0 起 `config.url` 指向 file 仓库（此前指向 Release 资产）；已发布的 v0.4.x 与 v0.5.0 的清单仍指向各自 Release 里的包，不受影响。

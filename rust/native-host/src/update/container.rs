@@ -18,7 +18,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::archive::{ZipLimits, extract_tar_gz_file, extract_tar_gz_tree, read_zip};
+use super::archive::{ZipLimits, extract_tar_gz_path, extract_tar_gz_tree, read_zip};
 use super::fsio::{durable_write, sync_dir};
 use super::package::{self, ConfigState};
 use super::webui;
@@ -35,7 +35,6 @@ const DEFAULT_ASSETS: &str = "/usr/share/atomdns";
 const FRESH_CONFIG: &str = "config_rust.zip";
 const INCREMENTAL_CONFIG: &str = "config_rust_up.zip";
 const WEBUI_PACKAGE: &str = super::WEBUI_ASSET;
-const WEBUI_GLASS_PACKAGE: &str = super::WEBUI_GLASS_ASSET;
 const MAX_FRESH_ENTRIES: usize = 4096;
 
 /// Whether this process runs as a container image.
@@ -195,51 +194,107 @@ fn ui_version(manifest: &[u8]) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn sync_one_webui(
-    assets: &Path,
-    root: &Path,
-    package_name: &str,
-    dir_name: &str,
-    label: &str,
-    allow_create: bool,
-) -> Result<Option<String>, String> {
-    let presence = webui::presence_named(root, dir_name);
-    match presence {
-        webui::Presence::Directory => {}
-        webui::Presence::Absent if allow_create => {}
-        webui::Presence::Absent | webui::Presence::Unusable => return Ok(None),
+struct UiSyncTarget<'a> {
+    new: &'a Path,
+    previous: &'a Path,
+    dir_name: &'a str,
+    label: &'a str,
+    presence: webui::Presence,
+    installed: Option<&'a str>,
+    target_version: &'a str,
+}
+
+fn install_dir(root: &Path, scratch: &Path, target: UiSyncTarget<'_>) -> Result<String, String> {
+    let live = webui::target_named(root, target.dir_name);
+    let label = target.label;
+    if target.presence == webui::Presence::Directory {
+        std::fs::rename(&live, target.previous)
+            .map_err(|error| format!("移开旧{label}失败: {error}"))?;
+        if let Err(error) = std::fs::rename(target.new, &live) {
+            // Put the old one back: a missing `ui/main` would silently turn the host into a backend.
+            let _ = std::fs::rename(target.previous, &live);
+            return Err(format!("放入新{label}失败: {error}"));
+        }
+        let _ = sync_dir(&root.join("ui"));
+        let _ = sync_dir(scratch);
+        let _ = std::fs::remove_dir_all(target.previous);
+        Ok(format!(
+            "{label}已更新: {} → {}",
+            target.installed.unwrap_or("未知版本"),
+            target.target_version
+        ))
+    } else {
+        std::fs::rename(target.new, &live).map_err(|error| format!("安装{label}失败: {error}"))?;
+        let _ = sync_dir(&root.join("ui"));
+        let _ = sync_dir(scratch);
+        Ok(format!("{label}已安装: {}", target.target_version))
     }
-    let archive = read_asset(assets, package_name, MAX_WEBUI_ARCHIVE_BYTES)?;
-    let image_manifest = extract_tar_gz_file(
+}
+
+/// Replaces `ui/main` by the image's WebUI when the versions differ, and installs/updates
+/// `ui/lg` from `bundled-ui/lg/` inside `atomdns-webui.tar.gz` when `ui/main` is present.
+fn sync_webui(assets: &Path, root: &Path) -> Result<Vec<String>, String> {
+    if webui::presence(root) != webui::Presence::Directory {
+        return Ok(Vec::new());
+    }
+    let archive = read_asset(assets, WEBUI_PACKAGE, MAX_WEBUI_ARCHIVE_BYTES)?;
+    let image_manifest = extract_tar_gz_path(
         &archive,
         "ui-manifest.json",
         64 << 10,
         webui::LIMITS.max_total,
     )
-    .map_err(|reason| format!("镜像内置的{label}包缺少 ui-manifest.json: {reason}"))?;
+    .map_err(|reason| format!("读取镜像内置界面包失败: {reason}"))?
+    .ok_or_else(|| "镜像内置的界面包缺少 ui-manifest.json".to_owned())?;
     let image_version = ui_version(&image_manifest)
-        .ok_or_else(|| format!("镜像内置{label}包的 ui-manifest.json 没有 ui_version"))?;
-    let live = webui::target_named(root, dir_name);
-    let installed = if presence == webui::Presence::Directory {
-        std::fs::read(live.join("ui-manifest.json"))
+        .ok_or_else(|| "镜像内置界面包的 ui-manifest.json 没有 ui_version".to_owned())?;
+
+    let main_installed = std::fs::read(webui::target(root).join("ui-manifest.json"))
+        .ok()
+        .and_then(|bytes| ui_version(&bytes));
+    let main_needs_sync = main_installed.as_deref() != Some(image_version.as_str());
+
+    let glass_manifest_path = format!(
+        "{}/{}/ui-manifest.json",
+        webui::BUNDLED_UI_DIR,
+        crate::external_ui::GLASS
+    );
+    let glass_version = extract_tar_gz_path(
+        &archive,
+        &glass_manifest_path,
+        64 << 10,
+        webui::LIMITS.max_total,
+    )
+    .map_err(|reason| format!("读取镜像内置玻璃界面失败: {reason}"))?
+    .and_then(|bytes| ui_version(&bytes));
+    let glass_presence = webui::presence_glass(root);
+    let glass_installed = if glass_presence == webui::Presence::Directory {
+        std::fs::read(webui::target_glass(root).join("ui-manifest.json"))
             .ok()
             .and_then(|bytes| ui_version(&bytes))
     } else {
         None
     };
-    if presence == webui::Presence::Directory
-        && installed.as_deref() == Some(image_version.as_str())
-    {
-        return Ok(None);
+    let glass_needs_sync = match (&glass_version, &glass_presence) {
+        (Some(target), webui::Presence::Directory) => {
+            glass_installed.as_deref() != Some(target.as_str())
+        }
+        (Some(_), webui::Presence::Absent) => true,
+        _ => false,
+    };
+
+    if !main_needs_sync && !glass_needs_sync {
+        return Ok(Vec::new());
     }
+
     // Scratch space next to `ui/`, never inside it: every directory of `ui/` is served.
     let scratch = root.join("update");
-    let (new, previous) = (
-        scratch.join(format!("container-webui-{dir_name}-new")),
-        scratch.join(format!("container-webui-{dir_name}-previous")),
-    );
+    let new_main = scratch.join("container-webui-new");
+    let prev_main = scratch.join("container-webui-previous");
+    let new_glass = scratch.join("container-webui-lg-new");
+    let prev_glass = scratch.join("container-webui-lg-previous");
     std::fs::create_dir_all(&scratch).map_err(|error| format!("创建 update/ 失败: {error}"))?;
-    for stale in [&new, &previous] {
+    for stale in [&new_main, &prev_main, &new_glass, &prev_glass] {
         match std::fs::remove_dir_all(stale) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -249,58 +304,45 @@ fn sync_one_webui(
     if !webui::same_filesystem(&root.join("ui"), &scratch).unwrap_or(false) {
         return Err("ui/ 与 update/ 不在同一文件系统，无法原子替换界面".to_owned());
     }
-    extract_tar_gz_tree(&archive, &new, webui::LIMITS)
-        .map_err(|reason| format!("解压{label}包失败: {reason}"))?;
-    if presence == webui::Presence::Directory {
-        std::fs::rename(&live, &previous).map_err(|error| format!("移开旧{label}失败: {error}"))?;
-        if let Err(error) = std::fs::rename(&new, &live) {
-            // Put the old one back: a missing `ui/main` would silently turn the host into a backend.
-            let _ = std::fs::rename(&previous, &live);
-            return Err(format!("放入新{label}失败: {error}"));
-        }
-        let _ = sync_dir(&root.join("ui"));
-        let _ = sync_dir(&scratch);
-        let _ = std::fs::remove_dir_all(&previous);
-        Ok(Some(format!(
-            "{label}已更新: {} → {image_version}",
-            installed.as_deref().unwrap_or("未知版本")
-        )))
-    } else {
-        std::fs::rename(&new, &live).map_err(|error| format!("安装{label}失败: {error}"))?;
-        let _ = sync_dir(&root.join("ui"));
-        let _ = sync_dir(&scratch);
-        Ok(Some(format!("{label}已安装: {image_version}")))
-    }
-}
-
-/// Replaces `ui/main` by the image's WebUI when the versions differ, and installs/updates
-/// `ui/lg` from `atomdns-webui-lg.tar.gz` when `ui/main` is present and the image carries it.
-fn sync_webui(assets: &Path, root: &Path) -> Result<Vec<String>, String> {
-    if webui::presence(root) != webui::Presence::Directory {
-        return Ok(Vec::new());
-    }
+    extract_tar_gz_tree(&archive, &new_main, webui::LIMITS)
+        .map_err(|reason| format!("解压界面包失败: {reason}"))?;
+    let extracted_glass =
+        webui::split_bundled_glass(&new_main, glass_needs_sync.then_some(new_glass.as_path()))?;
     let mut lines = Vec::new();
-    if let Some(line) = sync_one_webui(
-        assets,
-        root,
-        WEBUI_PACKAGE,
-        crate::external_ui::MAIN,
-        "界面",
-        false,
-    )? {
-        lines.push(line);
-    }
-    if assets.join(WEBUI_GLASS_PACKAGE).is_file()
-        && let Some(line) = sync_one_webui(
-            assets,
+    if main_needs_sync {
+        lines.push(install_dir(
             root,
-            WEBUI_GLASS_PACKAGE,
-            crate::external_ui::GLASS,
-            "玻璃界面",
-            true,
-        )?
-    {
-        lines.push(line);
+            &scratch,
+            UiSyncTarget {
+                new: &new_main,
+                previous: &prev_main,
+                dir_name: crate::external_ui::MAIN,
+                label: "界面",
+                presence: webui::Presence::Directory,
+                installed: main_installed.as_deref(),
+                target_version: &image_version,
+            },
+        )?);
+    } else {
+        let _ = std::fs::remove_dir_all(&new_main);
+    }
+    if glass_needs_sync && extracted_glass {
+        let target_glass_version = glass_version.as_deref().unwrap_or(&image_version);
+        lines.push(install_dir(
+            root,
+            &scratch,
+            UiSyncTarget {
+                new: &new_glass,
+                previous: &prev_glass,
+                dir_name: crate::external_ui::GLASS,
+                label: "玻璃界面",
+                presence: glass_presence,
+                installed: glass_installed.as_deref(),
+                target_version: target_glass_version,
+            },
+        )?);
+    } else {
+        let _ = std::fs::remove_dir_all(&new_glass);
     }
     Ok(lines)
 }
@@ -324,15 +366,29 @@ mod tests {
         path
     }
 
-    fn webui_tgz(version: &str) -> Vec<u8> {
+    fn webui_tgz_with_glass(version: &str, with_glass: bool) -> Vec<u8> {
         let manifest = format!(r#"{{"manifest_schema":1,"ui_version":"{version}"}}"#);
-        let mut tar = Vec::new();
-        for (name, data) in [
-            ("index.html", format!("<html>{version}</html>").into_bytes()),
+        let mut entries: Vec<(String, Vec<u8>)> = vec![
+            (
+                "index.html".to_owned(),
+                format!("<html>{version}</html>").into_bytes(),
+            ),
             // Bigger than the scan limit a manifest lookup once had, and before the manifest.
-            ("app.js", vec![b'x'; 300 << 10]),
-            ("ui-manifest.json", manifest.into_bytes()),
-        ] {
+            ("app.js".to_owned(), vec![b'x'; 300 << 10]),
+            ("ui-manifest.json".to_owned(), manifest.clone().into_bytes()),
+        ];
+        if with_glass {
+            entries.push((
+                "bundled-ui/lg/index.html".to_owned(),
+                format!("<html>glass-{version}</html>").into_bytes(),
+            ));
+            entries.push((
+                "bundled-ui/lg/ui-manifest.json".to_owned(),
+                manifest.into_bytes(),
+            ));
+        }
+        let mut tar = Vec::new();
+        for (name, data) in entries {
             let mut header = [0_u8; 512];
             header[..name.len()].copy_from_slice(name.as_bytes());
             header[100..107].copy_from_slice(b"0000644");
@@ -347,6 +403,10 @@ mod tests {
         let mut gz = GzEncoder::new(Vec::new(), Compression::fast());
         gz.write_all(&tar).unwrap();
         gz.finish().unwrap()
+    }
+
+    fn webui_tgz(version: &str) -> Vec<u8> {
+        webui_tgz_with_glass(version, false)
     }
 
     fn config_up(content: &str) -> Vec<u8> {
@@ -473,14 +533,18 @@ mod tests {
     #[test]
     fn glass_ui_is_installed_and_updated_when_main_exists_and_skipped_for_pure_backend() {
         let assets = assets("lg-assets", "v2.0.0", "new: true\n");
-        std::fs::write(assets.join(WEBUI_GLASS_PACKAGE), webui_tgz("v2.0.0")).unwrap();
+        std::fs::write(
+            assets.join(WEBUI_PACKAGE),
+            webui_tgz_with_glass("v2.0.0", true),
+        )
+        .unwrap();
         // Pure backend without `ui/main`: neither `ui/main` nor `ui/lg` is created.
         let headless = temp("lg-headless");
         std::fs::write(headless.join("config_custom.yaml"), "mine: true\n").unwrap();
         prepare_with(&assets, &headless.join("config_custom.yaml"), &headless).unwrap();
         assert!(!headless.join("ui").exists());
 
-        // Host with `ui/main`: `ui/lg` is installed fresh and kept in sync with image version.
+        // Host with `ui/main`: `ui/lg` is split out and installed cleanly without leaving `bundled-ui`.
         let root = temp("lg-root");
         let config = root.join("config_custom.yaml");
         let log = prepare_with(&assets, &config, &root).unwrap();
@@ -489,6 +553,7 @@ mod tests {
                 .any(|line| line.contains("玻璃界面已安装: v2.0.0")),
             "{log:?}"
         );
+        assert!(!root.join("ui/main/bundled-ui").exists());
         assert_eq!(
             ui_version(&std::fs::read(root.join("ui/lg/ui-manifest.json")).unwrap()).as_deref(),
             Some("v2.0.0")
@@ -496,10 +561,14 @@ mod tests {
         // Same version: no-op.
         assert!(prepare_with(&assets, &config, &root).unwrap().is_empty());
         // New image version updates both `ui/main` and `ui/lg`.
-        std::fs::write(assets.join(WEBUI_PACKAGE), webui_tgz("v2.1.0")).unwrap();
-        std::fs::write(assets.join(WEBUI_GLASS_PACKAGE), webui_tgz("v2.1.0")).unwrap();
+        std::fs::write(
+            assets.join(WEBUI_PACKAGE),
+            webui_tgz_with_glass("v2.1.0", true),
+        )
+        .unwrap();
         let log = prepare_with(&assets, &config, &root).unwrap();
         assert_eq!(log.len(), 2, "{log:?}");
+        assert!(!root.join("ui/main/bundled-ui").exists());
         assert_eq!(
             ui_version(&std::fs::read(root.join("ui/lg/ui-manifest.json")).unwrap()).as_deref(),
             Some("v2.1.0")

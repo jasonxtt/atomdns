@@ -33,6 +33,6 @@ tar -xzf atomdns-webui.tar.gz -C /cus/atomdns/ui/main
 ```bash
 cd webui-log
 npm ci
-npm run build:package       # 生成 release/atomdns-webui.tar.gz
-npm run build:lg:package    # 生成毛玻璃版 release/atomdns-webui-lg.tar.gz
+npm run build:package    # 生成 release/atomdns-webui.tar.gz（含默认版与毛玻璃版 bundled-ui/lg/）
+npm run build:lg         # 仅构建毛玻璃版目录 webui-log/dist-lg/
 ```

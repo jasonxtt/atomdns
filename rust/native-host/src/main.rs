@@ -60,6 +60,19 @@ fn serve(config: &std::path::Path, dir: Option<&std::path::Path>) -> Result<(), 
     loop {
         let (config_path, root) = atomdns_native_host::resolve_config_paths(config, dir)
             .map_err(|error| error.to_string())?;
+        if !atomdns_native_host::is_update_candidate() {
+            let base = root.as_deref().unwrap_or_else(|| {
+                config_path
+                    .parent()
+                    .filter(|path| !path.as_os_str().is_empty())
+                    .unwrap_or_else(|| std::path::Path::new("."))
+            });
+            match atomdns_native_host::promote_bundled_ui(base) {
+                Ok(Some(line)) => eprintln!("atomdns: {line}"),
+                Ok(None) => {}
+                Err(error) => eprintln!("atomdns: warning: 迁出内嵌玻璃界面失败: {error}"),
+            }
+        }
         let assembly =
             atomdns_native_host::HostAssembly::from_config_file_in(&config_path, root.as_deref())
                 .map_err(|error| error.to_string())?;

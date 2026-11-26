@@ -62,12 +62,7 @@ pub(crate) struct Transaction {
     /// Where the old `ui/main` waits until the update is verified or rolled back.
     #[serde(default)]
     pub(crate) webui_previous_dir: String,
-    /// The staged `atomdns-webui-lg.tar.gz`; empty when `ui/lg` is not installed or replaced.
-    #[serde(default)]
-    pub(crate) webui_glass_archive_path: String,
-    #[serde(default)]
-    pub(crate) webui_glass_sha256: String,
-    /// Where the guard unpacks the glass WebUI before moving it to `ui/lg`.
+    /// Where the guard splits out `bundled-ui/lg` before moving it to `ui/lg` (empty when absent).
     #[serde(default)]
     pub(crate) webui_glass_new_dir: String,
     /// Where an existing `ui/lg` waits until the update is verified or rolled back.
@@ -235,10 +230,8 @@ pub(crate) struct StageInput<'a> {
     pub(crate) candidate: Option<&'a [u8]>,
     /// The configuration package and its original bytes, when the update carries one.
     pub(crate) package: Option<(&'a Package, &'a [u8])>,
-    /// The release's `atomdns-webui.tar.gz`, when `ui/main` is replaced.
+    /// The release's `atomdns-webui.tar.gz`, when `ui/main` is replaced (may bundle `bundled-ui/lg/`).
     pub(crate) webui: Option<&'a [u8]>,
-    /// The release's `atomdns-webui-lg.tar.gz`, when `ui/lg` is installed or replaced.
-    pub(crate) webui_glass: Option<&'a [u8]>,
 }
 
 /// What a candidate must pass before the service is touched.
@@ -331,7 +324,15 @@ fn stage_into(
         }
         None => (String::new(), String::new(), String::new()),
     };
-    let (webui_archive_path, webui_sha256, webui_new_dir, webui_previous_dir) = match input.webui {
+    let (
+        webui_archive_path,
+        webui_sha256,
+        webui_new_dir,
+        webui_previous_dir,
+        webui_glass_new_dir,
+        webui_glass_previous_dir,
+        webui_glass_existed,
+    ) = match input.webui {
         Some(bytes) => {
             let webui = dir.join("webui");
             std::fs::create_dir_all(&webui)
@@ -343,49 +344,34 @@ fn stage_into(
             if !super::webui::same_filesystem(&ui, &webui).unwrap_or(false) {
                 return Err("ui/ 与 update/ 不在同一文件系统，无法原子替换界面".to_owned());
             }
-            super::webui::check_archive(bytes, &webui.join("check"))?;
+            let has_bundled_glass = super::webui::check_archive(bytes, &webui.join("check"))?;
             let path = dir.join(super::WEBUI_ASSET);
             durable_write(&path, bytes, 0o600)
                 .map_err(|error| format!("暂存界面资产失败: {error}"))?;
+            let (glass_new, glass_prev, glass_existed) = if has_bundled_glass
+                && super::webui::presence_glass(input.root) != super::webui::Presence::Unusable
+            {
+                let webui_lg = dir.join("webui-lg");
+                std::fs::create_dir_all(&webui_lg)
+                    .map_err(|error| format!("创建玻璃界面暂存目录失败: {error}"))?;
+                let existed =
+                    super::webui::presence_glass(input.root) == super::webui::Presence::Directory;
+                (
+                    webui_lg.join("new").display().to_string(),
+                    webui_lg.join("previous").display().to_string(),
+                    existed,
+                )
+            } else {
+                Default::default()
+            };
             (
                 path.display().to_string(),
                 super::sha256_hex(bytes),
                 webui.join("new").display().to_string(),
                 webui.join("previous").display().to_string(),
-            )
-        }
-        None => Default::default(),
-    };
-    let (
-        webui_glass_archive_path,
-        webui_glass_sha256,
-        webui_glass_new_dir,
-        webui_glass_previous_dir,
-        webui_glass_existed,
-    ) = match input.webui_glass {
-        Some(bytes) => {
-            let webui_lg = dir.join("webui-lg");
-            std::fs::create_dir_all(&webui_lg)
-                .map_err(|error| format!("创建玻璃界面暂存目录失败: {error}"))?;
-            let ui = super::webui::target_glass(input.root)
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_default();
-            if !super::webui::same_filesystem(&ui, &webui_lg).unwrap_or(false) {
-                return Err("ui/ 与 update/ 不在同一文件系统，无法原子替换界面".to_owned());
-            }
-            super::webui::check_archive(bytes, &webui_lg.join("check"))?;
-            let path = dir.join(super::WEBUI_GLASS_ASSET);
-            durable_write(&path, bytes, 0o600)
-                .map_err(|error| format!("暂存玻璃界面资产失败: {error}"))?;
-            let existed =
-                super::webui::presence_glass(input.root) == super::webui::Presence::Directory;
-            (
-                path.display().to_string(),
-                super::sha256_hex(bytes),
-                webui_lg.join("new").display().to_string(),
-                webui_lg.join("previous").display().to_string(),
-                existed,
+                glass_new,
+                glass_prev,
+                glass_existed,
             )
         }
         None => Default::default(),
@@ -432,8 +418,6 @@ fn stage_into(
         webui_sha256,
         webui_new_dir,
         webui_previous_dir,
-        webui_glass_archive_path,
-        webui_glass_sha256,
         webui_glass_new_dir,
         webui_glass_previous_dir,
         webui_glass_existed,
@@ -466,7 +450,6 @@ pub(crate) fn validate_paths(tx: &Transaction) -> Result<(), String> {
         &tx.webui_archive_path,
         &tx.webui_new_dir,
         &tx.webui_previous_dir,
-        &tx.webui_glass_archive_path,
         &tx.webui_glass_new_dir,
         &tx.webui_glass_previous_dir,
     ] {
@@ -480,46 +463,43 @@ pub(crate) fn validate_paths(tx: &Transaction) -> Result<(), String> {
         return Err("transaction has no previous program".to_owned());
     }
     // The WebUI paths are this transaction's own fixed ones (the guard removes and renames
-    // whole directories there): `<txn>/<asset>`, `<txn>/<subdir>/{new,previous}`,
-    // where `<txn>` is the `update/txn-*` directory of the saved program.
-    for (paths, asset, subdir) in [
-        (
-            [
-                &tx.webui_archive_path,
-                &tx.webui_new_dir,
-                &tx.webui_previous_dir,
-            ],
-            super::WEBUI_ASSET,
-            "webui",
-        ),
-        (
-            [
-                &tx.webui_glass_archive_path,
-                &tx.webui_glass_new_dir,
-                &tx.webui_glass_previous_dir,
-            ],
-            super::WEBUI_GLASS_ASSET,
-            "webui-lg",
-        ),
-    ] {
-        if paths.iter().any(|path| !path.is_empty()) {
-            let txn = Path::new(&tx.previous_binary_path)
-                .parent()
-                .filter(|dir| {
-                    dir.parent() == Some(update_dir(root).as_path())
-                        && dir
-                            .file_name()
-                            .is_some_and(|name| name.to_string_lossy().starts_with("txn-"))
-                })
-                .ok_or("transaction has no transaction directory for the WebUI")?;
-            let expected = [
-                txn.join(asset),
-                txn.join(subdir).join("new"),
-                txn.join(subdir).join("previous"),
-            ];
-            if paths
+    // whole directories there): `<txn>/atomdns-webui.tar.gz`, `<txn>/webui/{new,previous}`,
+    // and (when bundled glass UI is present) `<txn>/webui-lg/{new,previous}`.
+    let webui_paths = [
+        &tx.webui_archive_path,
+        &tx.webui_new_dir,
+        &tx.webui_previous_dir,
+    ];
+    let glass_paths = [&tx.webui_glass_new_dir, &tx.webui_glass_previous_dir];
+    if webui_paths.iter().any(|path| !path.is_empty())
+        || glass_paths.iter().any(|path| !path.is_empty())
+    {
+        let txn = Path::new(&tx.previous_binary_path)
+            .parent()
+            .filter(|dir| {
+                dir.parent() == Some(update_dir(root).as_path())
+                    && dir
+                        .file_name()
+                        .is_some_and(|name| name.to_string_lossy().starts_with("txn-"))
+            })
+            .ok_or("transaction has no transaction directory for the WebUI")?;
+        let expected_main = [
+            txn.join(super::WEBUI_ASSET),
+            txn.join("webui/new"),
+            txn.join("webui/previous"),
+        ];
+        if webui_paths
+            .iter()
+            .zip(&expected_main)
+            .any(|(path, expected)| Path::new(path.as_str()) != expected.as_path())
+        {
+            return Err("transaction WebUI paths are not the transaction's own".to_owned());
+        }
+        if glass_paths.iter().any(|path| !path.is_empty()) {
+            let expected_glass = [txn.join("webui-lg/new"), txn.join("webui-lg/previous")];
+            if glass_paths
                 .iter()
-                .zip(&expected)
+                .zip(&expected_glass)
                 .any(|(path, expected)| Path::new(path.as_str()) != expected.as_path())
             {
                 return Err("transaction WebUI paths are not the transaction's own".to_owned());
@@ -694,7 +674,6 @@ mod tests {
                 candidate: (kind == "binary").then_some(b"NEW-PROGRAM".as_slice()),
                 package: with_package.then_some((&package, bytes.as_slice())),
                 webui: None,
-                webui_glass: None,
             },
             preflight,
         )
@@ -1025,11 +1004,24 @@ mod tests {
         ])
     }
 
-    fn stage_webui_pair(
-        fixture: &Fixture,
-        webui: &[u8],
-        webui_glass: Option<&[u8]>,
-    ) -> Result<(PathBuf, Transaction), String> {
+    fn good_webui_with_glass(main_marker: &str, glass_marker: &str) -> Vec<u8> {
+        webui_tar(&[
+            ("index.html", main_marker.as_bytes()),
+            (
+                "ui-manifest.json",
+                br#"{"manifest_schema":1,"ui_version":"v0.7.1","api_level":1}"#,
+            ),
+            ("chunks/a.js", b"js"),
+            ("bundled-ui/lg/index.html", glass_marker.as_bytes()),
+            (
+                "bundled-ui/lg/ui-manifest.json",
+                br#"{"manifest_schema":1,"ui_version":"v0.7.1","api_level":1}"#,
+            ),
+            ("bundled-ui/lg/chunks/g.js", b"glass"),
+        ])
+    }
+
+    fn stage_webui(fixture: &Fixture, webui: &[u8]) -> Result<(PathBuf, Transaction), String> {
         stage(
             &StageInput {
                 root: &fixture.root,
@@ -1045,14 +1037,9 @@ mod tests {
                 candidate: Some(b"NEW-PROGRAM".as_slice()),
                 package: None,
                 webui: Some(webui),
-                webui_glass,
             },
             &|_, _| Ok(()),
         )
-    }
-
-    fn stage_webui(fixture: &Fixture, webui: &[u8]) -> Result<(PathBuf, Transaction), String> {
-        stage_webui_pair(fixture, webui, None)
     }
 
     fn live_index(fixture: &Fixture) -> Option<String> {
@@ -1201,8 +1188,6 @@ mod tests {
             "webui_sha256",
             "webui_new_dir",
             "webui_previous_dir",
-            "webui_glass_archive_path",
-            "webui_glass_sha256",
             "webui_glass_new_dir",
             "webui_glass_previous_dir",
             "webui_glass_existed",
@@ -1212,7 +1197,7 @@ mod tests {
         std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let read_back = read(&path).unwrap();
         assert!(read_back.webui_archive_path.is_empty());
-        assert!(read_back.webui_glass_archive_path.is_empty());
+        assert!(read_back.webui_glass_new_dir.is_empty());
         assert!(!read_back.webui_glass_existed);
         validate_paths(&read_back).unwrap();
         std::fs::remove_dir_all(fixture.root).unwrap();
@@ -1306,20 +1291,22 @@ mod tests {
         std::fs::create_dir_all(fixture.root.join("ui/main")).unwrap();
         std::fs::write(fixture.root.join("ui/main/index.html"), "OLD-UI").unwrap();
         let (path, mut tx) =
-            stage_webui_pair(&fixture, &good_webui("NEW-UI"), Some(&good_webui("NEW-LG"))).unwrap();
+            stage_webui(&fixture, &good_webui_with_glass("NEW-UI", "NEW-LG")).unwrap();
         assert!(!tx.webui_glass_existed);
+        assert!(!tx.webui_glass_new_dir.is_empty());
         assert!(live_glass_index(&fixture).is_none());
         validate_paths(&tx).unwrap();
         // Early rollback before install leaves `ui/lg` absent.
         let mut early = tx.clone();
         rollback(&path, &mut early, "未开始").unwrap();
         assert!(live_glass_index(&fixture).is_none());
-        // Install creates `ui/lg` alongside `ui/main`.
+        // Install splits `bundled-ui/lg` out into `ui/lg` and keeps `ui/main` clean.
         tx.status = "installing".into();
         write(&path, &tx).unwrap();
         crate::update::webui::install(&tx).unwrap();
         assert_eq!(live_index(&fixture).as_deref(), Some("NEW-UI"));
         assert_eq!(live_glass_index(&fixture).as_deref(), Some("NEW-LG"));
+        assert!(!fixture.root.join("ui/main/bundled-ui").exists());
         // Rollback removes the freshly created `ui/lg` and restores `ui/main`; repeating is safe.
         rollback(&path, &mut tx, "候选未通过").unwrap();
         assert_eq!(live_index(&fixture).as_deref(), Some("OLD-UI"));
@@ -1337,7 +1324,7 @@ mod tests {
         std::fs::create_dir_all(fixture.root.join("ui/lg")).unwrap();
         std::fs::write(fixture.root.join("ui/lg/index.html"), "OLD-LG").unwrap();
         let (path, mut tx) =
-            stage_webui_pair(&fixture, &good_webui("NEW-UI"), Some(&good_webui("NEW-LG"))).unwrap();
+            stage_webui(&fixture, &good_webui_with_glass("NEW-UI", "NEW-LG")).unwrap();
         assert!(tx.webui_glass_existed);
         validate_paths(&tx).unwrap();
         // Doctored `webui_glass_*` paths are refused.
@@ -1345,14 +1332,12 @@ mod tests {
         for (field, value) in [
             ("new", dir.clone()),
             ("previous", dir.join("webui/previous")),
-            ("archive", dir.join("atomdns-webui.tar.gz")),
         ] {
             let mut doctored = tx.clone();
             let value = value.display().to_string();
             match field {
                 "new" => doctored.webui_glass_new_dir = value,
-                "previous" => doctored.webui_glass_previous_dir = value,
-                _ => doctored.webui_glass_archive_path = value,
+                _ => doctored.webui_glass_previous_dir = value,
             }
             assert!(validate_paths(&doctored).is_err(), "{field}");
         }
@@ -1361,16 +1346,13 @@ mod tests {
         write(&path, &tx).unwrap();
         crate::update::webui::install(&tx).unwrap();
         assert_eq!(live_glass_index(&fixture).as_deref(), Some("NEW-LG"));
+        assert!(!fixture.root.join("ui/main/bundled-ui").exists());
         rollback(&path, &mut tx, "候选未通过").unwrap();
         assert_eq!(live_index(&fixture).as_deref(), Some("OLD-UI"));
         assert_eq!(live_glass_index(&fixture).as_deref(), Some("OLD-LG"));
         // Interrupted between `ui/lg` rename-aside and rename-in recovers on start.
-        let (path2, mut tx2) = stage_webui_pair(
-            &fixture,
-            &good_webui("NEW-UI2"),
-            Some(&good_webui("NEW-LG2")),
-        )
-        .unwrap();
+        let (path2, mut tx2) =
+            stage_webui(&fixture, &good_webui_with_glass("NEW-UI2", "NEW-LG2")).unwrap();
         tx2.status = "installing".into();
         write(&path2, &tx2).unwrap();
         std::fs::create_dir_all(Path::new(&tx2.webui_glass_previous_dir).parent().unwrap())
@@ -1380,6 +1362,84 @@ mod tests {
         let recovered = recover_on_start(&fixture.root).unwrap();
         assert!(recovered.is_some());
         assert_eq!(live_glass_index(&fixture).as_deref(), Some("OLD-LG"));
+        std::fs::remove_dir_all(fixture.root).unwrap();
+    }
+
+    #[test]
+    fn startup_promotion_moves_bundled_lg_from_old_updater_into_ui_lg() {
+        let fixture = fixture("webui-lg-promote");
+        // Pure backend: no-op.
+        assert_eq!(
+            crate::update::webui::promote_bundled_on_start(&fixture.root).unwrap(),
+            None
+        );
+        // Simulate v0.7.0 unpacking the combined archive directly into `ui/main`.
+        std::fs::create_dir_all(fixture.root.join("ui")).unwrap();
+        crate::update::archive::extract_tar_gz_tree(
+            &good_webui_with_glass("MAIN-V1", "LG-V1"),
+            &fixture.root.join("ui/main"),
+            crate::update::webui::LIMITS,
+        )
+        .unwrap();
+        assert!(
+            fixture
+                .root
+                .join("ui/main/bundled-ui/lg/index.html")
+                .is_file()
+        );
+        let note = crate::update::webui::promote_bundled_on_start(&fixture.root)
+            .unwrap()
+            .expect("should promote on first start");
+        assert!(note.contains("ui/lg"), "{note}");
+        assert_eq!(live_glass_index(&fixture).as_deref(), Some("LG-V1"));
+        assert!(!fixture.root.join("ui/main/bundled-ui").exists());
+        // Second start: fast no-op, and if operator deletes `ui/lg`, it stays deleted.
+        assert_eq!(
+            crate::update::webui::promote_bundled_on_start(&fixture.root).unwrap(),
+            None
+        );
+        std::fs::remove_dir_all(fixture.root.join("ui/lg")).unwrap();
+        assert_eq!(
+            crate::update::webui::promote_bundled_on_start(&fixture.root).unwrap(),
+            None
+        );
+        assert!(!fixture.root.join("ui/lg").exists());
+        // Replacing an existing `ui/lg` atomically swaps it.
+        std::fs::create_dir_all(fixture.root.join("ui/lg")).unwrap();
+        std::fs::write(fixture.root.join("ui/lg/index.html"), "OLD-LG").unwrap();
+        std::fs::remove_dir_all(fixture.root.join("ui/main")).unwrap();
+        crate::update::archive::extract_tar_gz_tree(
+            &good_webui_with_glass("MAIN-V2", "LG-V2"),
+            &fixture.root.join("ui/main"),
+            crate::update::webui::LIMITS,
+        )
+        .unwrap();
+        let note = crate::update::webui::promote_bundled_on_start(&fixture.root)
+            .unwrap()
+            .expect("should update existing ui/lg");
+        assert!(note.contains("ui/lg"), "{note}");
+        assert_eq!(live_glass_index(&fixture).as_deref(), Some("LG-V2"));
+        assert!(!fixture.root.join("ui/main/bundled-ui").exists());
+        // Unusable `ui/lg` (symlink) is preserved untouched while cleaning `bundled-ui`.
+        std::fs::remove_dir_all(fixture.root.join("ui/lg")).unwrap();
+        std::fs::create_dir_all(fixture.root.join("elsewhere")).unwrap();
+        std::os::unix::fs::symlink(fixture.root.join("elsewhere"), fixture.root.join("ui/lg"))
+            .unwrap();
+        std::fs::remove_dir_all(fixture.root.join("ui/main")).unwrap();
+        crate::update::archive::extract_tar_gz_tree(
+            &good_webui_with_glass("MAIN-V3", "LG-V3"),
+            &fixture.root.join("ui/main"),
+            crate::update::webui::LIMITS,
+        )
+        .unwrap();
+        crate::update::webui::promote_bundled_on_start(&fixture.root).unwrap();
+        assert!(
+            std::fs::symlink_metadata(fixture.root.join("ui/lg"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(!fixture.root.join("ui/main/bundled-ui").exists());
         std::fs::remove_dir_all(fixture.root).unwrap();
     }
 }
