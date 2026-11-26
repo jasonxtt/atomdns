@@ -259,6 +259,7 @@ fn wait_healthy(tx: &Transaction, child: &mut Child) -> Result<(), String> {
             &tx.target_version,
             tx.required_config_schema,
             !tx.webui_archive_path.is_empty(),
+            !tx.webui_glass_archive_path.is_empty(),
         ) {
             healthy += 1;
             if healthy >= REQUIRED_HEALTHY {
@@ -278,12 +279,13 @@ fn wait_healthy(tx: &Transaction, child: &mut Child) -> Result<(), String> {
 }
 
 /// One health probe: `200`, `ready`, the target version, the required config schema and,
-/// when the update replaced the WebUI, `ui/main` mounted by the candidate.
+/// when the update replaced or installed `ui/main` / `ui/lg`, each mounted by the candidate.
 pub(crate) fn is_healthy(
     url: &str,
     target_version: &str,
     required_schema: u32,
     webui: bool,
+    webui_glass: bool,
 ) -> bool {
     let Some((status, body)) = http_get(url) else {
         return false;
@@ -294,18 +296,21 @@ pub(crate) fn is_healthy(
     let Ok(health) = serde_json::from_slice::<serde_json::Value>(&body) else {
         return false;
     };
+    let mounted = |name: &str| {
+        health["external_ui"].as_array().is_some_and(|entries| {
+            entries
+                .iter()
+                .any(|entry| entry["name"] == name && entry["mounted"] == true)
+        })
+    };
     health["ready"] == true
         && health["version"] == target_version
         && (required_schema == 0
             || health["applied_config_schema"]
                 .as_u64()
                 .is_some_and(|applied| applied >= u64::from(required_schema)))
-        && (!webui
-            || health["external_ui"].as_array().is_some_and(|entries| {
-                entries.iter().any(|entry| {
-                    entry["name"] == crate::external_ui::MAIN && entry["mounted"] == true
-                })
-            }))
+        && (!webui || mounted(crate::external_ui::MAIN))
+        && (!webui_glass || mounted(crate::external_ui::GLASS))
 }
 
 /// A bounded blocking `GET http://host:port/path` (the local management address only).
@@ -532,7 +537,7 @@ mod tests {
         ] {
             let (url, handle) = serve_once(body, status);
             assert_eq!(
-                is_healthy(&url, "v0.2.0", schema, false),
+                is_healthy(&url, "v0.2.0", schema, false, false),
                 expected,
                 "{body} {status} {schema}"
             );
@@ -560,24 +565,56 @@ mod tests {
             );
             let (url, handle) = serve_once(body, 200);
             assert_eq!(
-                is_healthy(&url, "v0.2.0", 1, true),
+                is_healthy(&url, "v0.2.0", 1, true, false),
                 expected,
                 "{external_ui}"
             );
             handle.join().unwrap();
             let (url, handle) = serve_once(body, 200);
             assert!(
-                is_healthy(&url, "v0.2.0", 1, false),
+                is_healthy(&url, "v0.2.0", 1, false, false),
                 "{external_ui}: not required"
             );
             handle.join().unwrap();
         }
+        // When `ui/lg` was also staged, both `ui/main` and `ui/lg` must mount.
+        for (external_ui, expected) in [
+            (
+                r#"[{"name":"main","mounted":true},{"name":"lg","mounted":true}]"#,
+                true,
+            ),
+            (
+                r#"[{"name":"main","mounted":true},{"name":"lg","mounted":false}]"#,
+                false,
+            ),
+            (r#"[{"name":"main","mounted":true}]"#, false),
+        ] {
+            let body: &'static str = Box::leak(
+                format!(
+                    r#"{{"ready":true,"version":"v0.2.0","applied_config_schema":1,"external_ui":{external_ui}}}"#
+                )
+                .into_boxed_str(),
+            );
+            let (url, handle) = serve_once(body, 200);
+            assert_eq!(
+                is_healthy(&url, "v0.2.0", 1, true, true),
+                expected,
+                "lg check: {external_ui}"
+            );
+            handle.join().unwrap();
+        }
         assert!(
-            !is_healthy("http://127.0.0.1:9/api/v1/system/health", "x", 0, false),
+            !is_healthy(
+                "http://127.0.0.1:9/api/v1/system/health",
+                "x",
+                0,
+                false,
+                false
+            ),
             "nothing listens"
         );
         assert!(
-            !is_healthy("https://example.invalid/", "x", 0, false),
+            !is_healthy("https://example.invalid/", "x", 0, false, false),
             "only plain http to the local address"
         );
     }

@@ -51,3 +51,4 @@ docs/site/.vitepress/dist/
 docs/site/.vitepress/cache/
 
 /webui-log/dist-bl/
+/webui-log/dist-lg/

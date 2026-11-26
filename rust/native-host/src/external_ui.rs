@@ -53,6 +53,8 @@ pub(crate) struct Registry {
 
 /// The name of the directory served at `/`.
 pub(crate) const MAIN: &str = "main";
+/// The name of the optional glass UI directory served at `/lg/`.
+pub(crate) const GLASS: &str = "lg";
 
 /// Whether `route` (decoded) belongs to the API whatever `ui/main` holds.
 fn api_route(route: &str) -> bool {

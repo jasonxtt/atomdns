@@ -115,7 +115,7 @@ docker compose pull && docker compose up -d
 新容器启动时会自动让数据目录跟上新版本：
 
 - 配置结构有变化时，替换配置包管理的 `config_custom.yaml` 与 `sub_config/*.yaml`，旧文件备份到 `backup/` 下；
-- `ui/main/` 替换为新版界面（删除 `ui/main/` 即为纯后端，之后不会再创建）；
+- `ui/main/` 替换为新版界面，并同步更新可选毛玻璃界面 `ui/lg/`（删除 `ui/main/` 即为纯后端，之后不会再创建）；
 - 规则、缓存、学习结果、WebUI 里的设置都原样保留。
 
 需要回退时换回旧版本标签即可。配置结构只升不降，跨配置版本回退前请先看发布说明。

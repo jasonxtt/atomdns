@@ -35,7 +35,7 @@ docker compose up -d                  # 或 docker rm -f atomdns 后重新 docke
 镜像里带着在线更新原本会带来的全部东西，新容器启动时（`ATOMDNS_CONTAINER=1`，镜像已设置）会让挂载的配置目录跟上镜像：
 
 1. **配置包**：目录里记录的配置 schema 低于程序要求时，应用镜像内置的 `config_rust_up.zip`，规则与在线更新相同（只替换托管文件 `config_custom.yaml`、`sub_config/*.yaml`，不碰 `webinfo/settings.json` 等用户数据）。替换前的旧文件备份在 `backup/container-schema-<旧>-to-<新>-<时间>/`。
-2. **WebUI**：`ui/main/` 是真实目录且 `ui-manifest.json` 的 `ui_version` 与镜像不同时，整体替换为镜像内置的界面。不想要界面的部署删掉 `ui/main/` 即可，镜像不会再创建它。
+2. **WebUI**：`ui/main/` 是真实目录且 `ui-manifest.json` 的 `ui_version` 与镜像不同时，整体替换为镜像内置的界面；镜像附带 `atomdns-webui-lg.tar.gz` 时，`ui/lg/`（可选毛玻璃界面，`/lg/`）也会一并安装或更新。不想要界面的部署删掉 `ui/main/` 即可，镜像不会再创建 `ui/main/` 或 `ui/lg/`。
 3. 其它一切（规则、缓存、学习数据、`settings.json`）原样保留。
 
 回退：把镜像换回旧标签即可；配置包只前进不后退，新 schema 的配置不一定能被更旧的程序加载，回退前先看发布说明里该版本是否带了新配置包（`config_schema_required`）。
@@ -49,7 +49,7 @@ scripts/build-docker-image.sh vX.Y.Z           # 构建首个平台到本机 doc
 PUSH=1 LATEST=1 scripts/build-docker-image.sh vX.Y.Z   # 推送多平台镜像到 Docker Hub
 ```
 
-脚本从 Release 下载 `atomdns-linux-{amd64,arm64-gnu,armv7-gnu}.tar.gz`（清单里没有 `-gnu` 包的旧版本用 `arm64`/`armv7` 的 musl 包）、`atomdns-webui.tar.gz`、`config_rust.zip` 和清单，
+脚本从 Release 下载 `atomdns-linux-{amd64,arm64-gnu,armv7-gnu}.tar.gz`（清单里没有 `-gnu` 包的旧版本用 `arm64`/`armv7` 的 musl 包）、`atomdns-webui.tar.gz`、`atomdns-webui-lg.tar.gz`（清单列出时）、`config_rust.zip` 和清单，
 用清单核对 sha256，按清单的 `config.url` 取 `config_rust_up.zip` 并核对，再用 `docker/Dockerfile` 打包。
 
 **与发版联动：** 镜像跟着 Release 走，不跟着 main 的提交走（在线更新也只认 Release）。在 GitHub 发布正式的 `vX.Y.Z` Release 后，

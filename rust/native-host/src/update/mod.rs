@@ -46,6 +46,10 @@ pub(crate) const RELEASE_BINARY: &str = "atomdns";
 /// level of a `tar.gz`. Listed in the manifest's `artifacts` like the program (a new
 /// top-level manifest field would make older updaters refuse the manifest).
 pub(crate) const WEBUI_ASSET: &str = "atomdns-webui.tar.gz";
+/// The release asset holding the optional glass WebUI installed at `<config root>/ui/lg/`.
+/// Synced alongside `ui/main` whenever `ui/main` exists (pure backends without `ui/main`
+/// create neither).
+pub(crate) const WEBUI_GLASS_ASSET: &str = "atomdns-webui-lg.tar.gz";
 /// The release asset naming every artifact's sha256 and the configuration package.
 pub(crate) const MANIFEST_ASSET: &str = "atomdns-update-manifest.json";
 const DEFAULT_API_URL: &str = "https://api.github.com/repos/jasonxtt/atomdns/releases?per_page=100";
@@ -722,14 +726,17 @@ mod tests {
         let with_webui = manifest_json("v1.2.3", "rust").replacen(
             &format!(r#""{RELEASE_ASSET}":"#),
             &format!(
-                r#""{WEBUI_ASSET}":{{"sha256":"{}"}},"{RELEASE_ASSET}":"#,
-                "c".repeat(64)
+                r#""{WEBUI_ASSET}":{{"sha256":"{}"}},"{WEBUI_GLASS_ASSET}":{{"sha256":"{}"}},"{RELEASE_ASSET}":"#,
+                "c".repeat(64),
+                "d".repeat(64)
             ),
             1,
         );
         let manifest = parse_manifest(with_webui.as_bytes(), "v1.2.3").unwrap();
         assert_eq!(manifest.artifacts[WEBUI_ASSET].sha256, "c".repeat(64));
+        assert_eq!(manifest.artifacts[WEBUI_GLASS_ASSET].sha256, "d".repeat(64));
         assert_eq!(WEBUI_ASSET, "atomdns-webui.tar.gz");
+        assert_eq!(WEBUI_GLASS_ASSET, "atomdns-webui-lg.tar.gz");
     }
 
     #[test]

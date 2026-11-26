@@ -18,7 +18,7 @@ UI_VERSION=v0.4.0-ui2 npm run build:package    # and release/atomdns-webui.tar.g
 `webui-log/dist/` holds `index.html`, `app.js`, `app.css`, `chunks/`, `assets/` and `ui-manifest.json`; `atomdns-webui.tar.gz` has the same files at its top level
 (the release asset of the same name is built this way). Resource URLs are **relative**, so one package works as `ui/main` and under any other name.
 
-## Optional glass UI (`/bl/`)
+## Optional glass UI (`/lg/`)
 
 The glass variant reuses the maintained UI's routes, menus, pages and API workflows.
 It adds the MosDNS light/dark glass palette and browser-local background controls;
@@ -27,12 +27,17 @@ the duplicate page-title strip is hidden. The normal build remains unchanged.
 ```sh
 cd webui-log
 npm ci
-npm run build:bl              # dist-bl/ only; no release archive
+UI_VERSION=v0.7.1 npm run build:lg              # webui-log/dist-lg/
+UI_VERSION=v0.7.1 npm run build:lg:package      # and release/atomdns-webui-lg.tar.gz
 ```
 
-Install the contents of `webui-log/dist-bl/` into `<config root>/ui/bl/` using the
-same package installation procedure below. Build outputs are ignored by Git.
-This variant is not included in the normal release build or online update of `ui/main`.
+Install the contents of `webui-log/dist-lg/` (or `atomdns-webui-lg.tar.gz`) into
+`<config root>/ui/lg/` so it is served at `/lg/`. Build outputs are ignored by Git.
+Releases carry `atomdns-webui-lg.tar.gz` alongside `atomdns-webui.tar.gz`: when
+`<config root>/ui/main/` exists as a real directory, online updates and container
+startup install or update `<config root>/ui/lg/` in the same transaction; a pure
+backend without `ui/main/` creates neither. From System Management on `/`, click
+"前往 /lg/" to open the glass UI; from `/lg/`, click "返回默认界面" to return to `/`.
 
 Source:
 - `webui-log/src/glass.css`: palette, shared transparency/blur and component surfaces.
@@ -52,10 +57,11 @@ their semantic colors. The source also includes opaque fallback styling for brow
 without backdrop-filter and reduced-transparency preferences.
 
 ## Install / update (operator)
-Online updates replace `ui/main` together with the program when `ui/main` exists ([native-update.md](contracts/native-update.md)); by hand:
+Online updates replace `ui/main` and install/update `ui/lg` together with the program when `ui/main` exists ([native-update.md](contracts/native-update.md)); by hand:
 1. Unpack into the directory (the configuration root is the directory that holds `config_custom.yaml`; for `atomdns start -d /cus/atomdns` that is `/cus/atomdns`):
    ```sh
    mkdir -p /cus/atomdns/ui/main && tar -xzf atomdns-webui.tar.gz -C /cus/atomdns/ui/main      # the WebUI at /
+   mkdir -p /cus/atomdns/ui/lg && tar -xzf atomdns-webui-lg.tar.gz -C /cus/atomdns/ui/lg      # optional glass UI at /lg/
    mkdir -p /cus/atomdns/ui/pg && tar -xzf atomdns-webui.tar.gz -C /cus/atomdns/ui/pg          # another copy at /pg/
    ```
    Replace a package by unpacking into an empty directory (remove the old one first), so no files of the old version are left behind.

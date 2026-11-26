@@ -27,6 +27,12 @@ const externalEntries = computed(() => uiEntries.value.filter((entry) => !isWebu
 // The directory this page was loaded from ('/' for the built-in UI, '/<name>/' for an external one).
 const currentDirectory = typeof window !== 'undefined' ? new URL('./', window.location.href).pathname : '/'
 const packageUrl = (entry) => entry.path || `/${encodeURIComponent(entry.name)}/`
+// When viewing an external UI (e.g. /lg/), link back to the default UI at `/` when it is mounted.
+const mainPackage = computed(() => {
+  if (currentDirectory === '/') return null
+  const entry = uiEntries.value.find((item) => isWebui(item))
+  return entry && entry.kind === 'atomdns_ui' && entry.mounted ? entry : null
+})
 // Compatible UI packages other than the one being viewed.
 const mountedPackages = computed(() => externalEntries.value.filter((entry) => entry.kind === 'atomdns_ui' && entry.mounted && packageUrl(entry) !== currentDirectory))
 // Packages the host refused (incompatible, broken manifest, ...), with the reason.
@@ -258,6 +264,9 @@ onBeforeUnmount(() => {
       <span v-if="configPackage.transactionState" class="muted rt-setting-note">更新事务：{{ configPackage.transactionState }}<template v-if="configPackage.transactionTarget"> · {{ configPackage.transactionTarget }}</template></span>
     </SettingRow>
     <SystemBackupSection />
+    <SettingRow v-if="mainPackage" label="默认界面" layout="form" :description="`ui/main 下的默认界面包，版本 ${mainPackage.ui_version}`" data-main-ui-link>
+      <a class="btn tiny secondary" href="/">返回默认界面</a>
+    </SettingRow>
     <SettingRow v-for="entry in mountedPackages" :key="`ui-${entry.name}`" label="外置界面" layout="form" :description="`ui/${entry.name} 下的界面包，版本 ${entry.ui_version}`" data-external-ui-link>
       <a class="btn tiny secondary" :href="packageUrl(entry)">前往 {{ packageUrl(entry) }}</a>
     </SettingRow>

@@ -47,9 +47,11 @@ failures produce bounded diagnostics, without filenames/content disclosure.
 `webui-log/dist/` (`index.html`, `app.js`, `app.css`, `chunks/`, `assets/`, `ui-manifest.json`) with
 **relative** resource URLs (`base: './'`), so the same package works as `ui/main` at `/` and as any
 `ui/<name>` at `/<name>/` (API calls are same-origin absolute paths); `npm run build:package` also
-writes `release/atomdns-webui.tar.gz` (the package files at the top level: the release asset). Online
-updates replace `ui/main` with the release's package when, and only when, `ui/main` exists
-([native-update](native-update.md)); other `ui/<name>` directories are never touched. Directory
+writes `release/atomdns-webui.tar.gz` (the package files at the top level: the release asset), and
+`npm run build:lg:package` writes the optional glass variant `release/atomdns-webui-lg.tar.gz`
+(installed at `ui/lg/` for `/lg/`). Online updates replace `ui/main` — and install or update `ui/lg`
+when the release carries `atomdns-webui-lg.tar.gz` — when, and only when, `ui/main` exists as a real
+directory ([native-update](native-update.md)); other `ui/<name>` directories are never touched. Directory
 names follow the rules above. A **atomdns UI package** is a directory that carries a
 `ui-manifest.json`:
 
@@ -104,7 +106,8 @@ special-group files that could not be removed yet; empty normally, never affects
 `path` is `/` for `main` (the WebUI) and `/<name>/` otherwise (v0.4.0);
 `reason` explains a refusal, or notes that a manifest-less directory is not a atomdns UI package; the
 WebUI shows `main`'s `ui_version` as 界面版本 on the system page, a link to `/<name>/` for **every**
-other mounted compatible atomdns UI package (not the one being viewed) and the reason of each refused
+other mounted compatible atomdns UI package (not the one being viewed), a link back to `/` when
+viewing an external UI while `main` is mounted, and the reason of each refused
 one; never affects `ready`) and `udp_receive_buffers` (one
 `{listen, bytes}` per live UDP listener: the kernel receive buffer it was
 granted, `null` when unreadable; see "UDP receive buffer and apply pause"

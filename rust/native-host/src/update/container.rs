@@ -34,7 +34,8 @@ pub(crate) const UNSUPPORTED_REASON: &str =
 const DEFAULT_ASSETS: &str = "/usr/share/atomdns";
 const FRESH_CONFIG: &str = "config_rust.zip";
 const INCREMENTAL_CONFIG: &str = "config_rust_up.zip";
-const WEBUI_PACKAGE: &str = "atomdns-webui.tar.gz";
+const WEBUI_PACKAGE: &str = super::WEBUI_ASSET;
+const WEBUI_GLASS_PACKAGE: &str = super::WEBUI_GLASS_ASSET;
 const MAX_FRESH_ENTRIES: usize = 4096;
 
 /// Whether this process runs as a container image.
@@ -91,9 +92,7 @@ fn prepare_with(assets: &Path, config: &Path, root: &Path) -> Result<Vec<String>
     if let Some(line) = sync_config(assets, root, seeded)? {
         log.push(line);
     }
-    if let Some(line) = sync_webui(assets, root)? {
-        log.push(line);
-    }
+    log.extend(sync_webui(assets, root)?);
     Ok(log)
 }
 
@@ -196,33 +195,48 @@ fn ui_version(manifest: &[u8]) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Replaces `ui/main` by the image's WebUI when the versions differ.
-fn sync_webui(assets: &Path, root: &Path) -> Result<Option<String>, String> {
-    if webui::presence(root) != webui::Presence::Directory {
-        return Ok(None);
+fn sync_one_webui(
+    assets: &Path,
+    root: &Path,
+    package_name: &str,
+    dir_name: &str,
+    label: &str,
+    allow_create: bool,
+) -> Result<Option<String>, String> {
+    let presence = webui::presence_named(root, dir_name);
+    match presence {
+        webui::Presence::Directory => {}
+        webui::Presence::Absent if allow_create => {}
+        webui::Presence::Absent | webui::Presence::Unusable => return Ok(None),
     }
-    let archive = read_asset(assets, WEBUI_PACKAGE, MAX_WEBUI_ARCHIVE_BYTES)?;
+    let archive = read_asset(assets, package_name, MAX_WEBUI_ARCHIVE_BYTES)?;
     let image_manifest = extract_tar_gz_file(
         &archive,
         "ui-manifest.json",
         64 << 10,
         webui::LIMITS.max_total,
     )
-    .map_err(|reason| format!("镜像内置的界面包缺少 ui-manifest.json: {reason}"))?;
+    .map_err(|reason| format!("镜像内置的{label}包缺少 ui-manifest.json: {reason}"))?;
     let image_version = ui_version(&image_manifest)
-        .ok_or_else(|| "镜像内置界面包的 ui-manifest.json 没有 ui_version".to_owned())?;
-    let live = webui::target(root);
-    let installed = std::fs::read(live.join("ui-manifest.json"))
-        .ok()
-        .and_then(|bytes| ui_version(&bytes));
-    if installed.as_deref() == Some(image_version.as_str()) {
+        .ok_or_else(|| format!("镜像内置{label}包的 ui-manifest.json 没有 ui_version"))?;
+    let live = webui::target_named(root, dir_name);
+    let installed = if presence == webui::Presence::Directory {
+        std::fs::read(live.join("ui-manifest.json"))
+            .ok()
+            .and_then(|bytes| ui_version(&bytes))
+    } else {
+        None
+    };
+    if presence == webui::Presence::Directory
+        && installed.as_deref() == Some(image_version.as_str())
+    {
         return Ok(None);
     }
     // Scratch space next to `ui/`, never inside it: every directory of `ui/` is served.
     let scratch = root.join("update");
     let (new, previous) = (
-        scratch.join("container-webui-new"),
-        scratch.join("container-webui-previous"),
+        scratch.join(format!("container-webui-{dir_name}-new")),
+        scratch.join(format!("container-webui-{dir_name}-previous")),
     );
     std::fs::create_dir_all(&scratch).map_err(|error| format!("创建 update/ 失败: {error}"))?;
     for stale in [&new, &previous] {
@@ -236,20 +250,59 @@ fn sync_webui(assets: &Path, root: &Path) -> Result<Option<String>, String> {
         return Err("ui/ 与 update/ 不在同一文件系统，无法原子替换界面".to_owned());
     }
     extract_tar_gz_tree(&archive, &new, webui::LIMITS)
-        .map_err(|reason| format!("解压界面包失败: {reason}"))?;
-    std::fs::rename(&live, &previous).map_err(|error| format!("移开旧界面失败: {error}"))?;
-    if let Err(error) = std::fs::rename(&new, &live) {
-        // Put the old one back: a missing `ui/main` would silently turn the host into a backend.
-        let _ = std::fs::rename(&previous, &live);
-        return Err(format!("放入新界面失败: {error}"));
+        .map_err(|reason| format!("解压{label}包失败: {reason}"))?;
+    if presence == webui::Presence::Directory {
+        std::fs::rename(&live, &previous).map_err(|error| format!("移开旧{label}失败: {error}"))?;
+        if let Err(error) = std::fs::rename(&new, &live) {
+            // Put the old one back: a missing `ui/main` would silently turn the host into a backend.
+            let _ = std::fs::rename(&previous, &live);
+            return Err(format!("放入新{label}失败: {error}"));
+        }
+        let _ = sync_dir(&root.join("ui"));
+        let _ = sync_dir(&scratch);
+        let _ = std::fs::remove_dir_all(&previous);
+        Ok(Some(format!(
+            "{label}已更新: {} → {image_version}",
+            installed.as_deref().unwrap_or("未知版本")
+        )))
+    } else {
+        std::fs::rename(&new, &live).map_err(|error| format!("安装{label}失败: {error}"))?;
+        let _ = sync_dir(&root.join("ui"));
+        let _ = sync_dir(&scratch);
+        Ok(Some(format!("{label}已安装: {image_version}")))
     }
-    let _ = sync_dir(&root.join("ui"));
-    let _ = sync_dir(&scratch);
-    let _ = std::fs::remove_dir_all(&previous);
-    Ok(Some(format!(
-        "界面已更新: {} → {image_version}",
-        installed.as_deref().unwrap_or("未知版本")
-    )))
+}
+
+/// Replaces `ui/main` by the image's WebUI when the versions differ, and installs/updates
+/// `ui/lg` from `atomdns-webui-lg.tar.gz` when `ui/main` is present and the image carries it.
+fn sync_webui(assets: &Path, root: &Path) -> Result<Vec<String>, String> {
+    if webui::presence(root) != webui::Presence::Directory {
+        return Ok(Vec::new());
+    }
+    let mut lines = Vec::new();
+    if let Some(line) = sync_one_webui(
+        assets,
+        root,
+        WEBUI_PACKAGE,
+        crate::external_ui::MAIN,
+        "界面",
+        false,
+    )? {
+        lines.push(line);
+    }
+    if assets.join(WEBUI_GLASS_PACKAGE).is_file()
+        && let Some(line) = sync_one_webui(
+            assets,
+            root,
+            WEBUI_GLASS_PACKAGE,
+            crate::external_ui::GLASS,
+            "玻璃界面",
+            true,
+        )?
+    {
+        lines.push(line);
+    }
+    Ok(lines)
 }
 
 #[cfg(test)]
@@ -415,5 +468,41 @@ mod tests {
         );
         let names: Vec<_> = std::fs::read_dir(root.join("ui")).unwrap().collect();
         assert_eq!(names.len(), 1);
+    }
+
+    #[test]
+    fn glass_ui_is_installed_and_updated_when_main_exists_and_skipped_for_pure_backend() {
+        let assets = assets("lg-assets", "v2.0.0", "new: true\n");
+        std::fs::write(assets.join(WEBUI_GLASS_PACKAGE), webui_tgz("v2.0.0")).unwrap();
+        // Pure backend without `ui/main`: neither `ui/main` nor `ui/lg` is created.
+        let headless = temp("lg-headless");
+        std::fs::write(headless.join("config_custom.yaml"), "mine: true\n").unwrap();
+        prepare_with(&assets, &headless.join("config_custom.yaml"), &headless).unwrap();
+        assert!(!headless.join("ui").exists());
+
+        // Host with `ui/main`: `ui/lg` is installed fresh and kept in sync with image version.
+        let root = temp("lg-root");
+        let config = root.join("config_custom.yaml");
+        let log = prepare_with(&assets, &config, &root).unwrap();
+        assert!(
+            log.iter()
+                .any(|line| line.contains("玻璃界面已安装: v2.0.0")),
+            "{log:?}"
+        );
+        assert_eq!(
+            ui_version(&std::fs::read(root.join("ui/lg/ui-manifest.json")).unwrap()).as_deref(),
+            Some("v2.0.0")
+        );
+        // Same version: no-op.
+        assert!(prepare_with(&assets, &config, &root).unwrap().is_empty());
+        // New image version updates both `ui/main` and `ui/lg`.
+        std::fs::write(assets.join(WEBUI_PACKAGE), webui_tgz("v2.1.0")).unwrap();
+        std::fs::write(assets.join(WEBUI_GLASS_PACKAGE), webui_tgz("v2.1.0")).unwrap();
+        let log = prepare_with(&assets, &config, &root).unwrap();
+        assert_eq!(log.len(), 2, "{log:?}");
+        assert_eq!(
+            ui_version(&std::fs::read(root.join("ui/lg/ui-manifest.json")).unwrap()).as_deref(),
+            Some("v2.1.0")
+        );
     }
 }

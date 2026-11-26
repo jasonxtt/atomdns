@@ -79,7 +79,7 @@ body::before {
   -webkit-backdrop-filter: blur(var(--panel-glass-blur));
   box-shadow: var(--bl-shadow);
 }
-/* Navigation already identifies the page; omit the duplicate title strip in /bl. */
+/* Navigation already identifies the page; omit the duplicate title strip in /lg. */
 .rt-page-title { display: none; }
 .rt-setting-tiles.rt-setting-section, .rt-panel-group > .panel {
   background: transparent; border: 0; box-shadow: none;

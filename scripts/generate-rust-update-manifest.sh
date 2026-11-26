@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Writes atomdns-update-manifest.json for a release: the sha256 of every
-# atomdns-*.tar.gz in the artifact directory (the program and the WebUI, both required), the configuration schema/package ID the
+# atomdns-*.tar.gz in the artifact directory (the program, the default WebUI and the glass WebUI,
+# all required), the configuration schema/package ID the
 # program requires (read from the Rust source and checked against the release metadata),
 # and the configuration package URL + sha256 once the package is published. The asset
-# names must equal the constants of the updater (RELEASE_ASSET, MANIFEST_ASSET).
+# names must equal the constants of the updater (RELEASE_ASSET, WEBUI_ASSET, WEBUI_GLASS_ASSET,
+# MANIFEST_ASSET).
 #   scripts/generate-rust-update-manifest.sh vX.Y.Z <artifact-dir> [output]
 # RUST_RELEASE_METADATA=<file> uses another metadata file (tests).
 # RUST_CONFIG_PACKAGE=<config_rust_up.zip> checks that local file against the metadata instead of
@@ -17,6 +19,7 @@ VERSION="${1:?version tag is required (vX.Y.Z)}"
 ARTIFACT_DIR="${2:?artifact directory is required}"
 RELEASE_ASSET="atomdns-linux-amd64.tar.gz"
 WEBUI_ASSET="atomdns-webui.tar.gz"
+WEBUI_GLASS_ASSET="atomdns-webui-lg.tar.gz"
 MANIFEST_ASSET="atomdns-update-manifest.json"
 OUTPUT="${3:-${ARTIFACT_DIR}/${MANIFEST_ASSET}}"
 
@@ -42,7 +45,7 @@ if [ "$(jq 'length' <<<"${artifacts}")" -eq 0 ]; then
   echo "no atomdns-*.tar.gz found in ${ARTIFACT_DIR}" >&2
   exit 1
 fi
-for name in "${RELEASE_ASSET}" "${WEBUI_ASSET}"; do
+for name in "${RELEASE_ASSET}" "${WEBUI_ASSET}" "${WEBUI_GLASS_ASSET}"; do
   if [ "$(jq --arg name "${name}" 'has($name)' <<<"${artifacts}")" != "true" ]; then
     echo "${name} is missing from ${ARTIFACT_DIR}" >&2
     exit 1
@@ -52,8 +55,10 @@ done
 code_asset="$(sed -n 's/^pub(crate) const RELEASE_ASSET: &str = "\([^"]*\)";.*/\1/p' "${SOURCE}")"
 code_manifest_asset="$(sed -n 's/^pub(crate) const MANIFEST_ASSET: &str = "\([^"]*\)";.*/\1/p' "${SOURCE}")"
 code_webui_asset="$(sed -n 's/^pub(crate) const WEBUI_ASSET: &str = "\([^"]*\)";.*/\1/p' "${SOURCE}")"
+code_webui_glass_asset="$(sed -n 's/^pub(crate) const WEBUI_GLASS_ASSET: &str = "\([^"]*\)";.*/\1/p' "${SOURCE}")"
 if [ "${code_asset}" != "${RELEASE_ASSET}" ] || [ "${code_manifest_asset}" != "${MANIFEST_ASSET}" ] \
-  || [ "${code_webui_asset}" != "${WEBUI_ASSET}" ]; then
+  || [ "${code_webui_asset}" != "${WEBUI_ASSET}" ] \
+  || [ "${code_webui_glass_asset}" != "${WEBUI_GLASS_ASSET}" ]; then
   echo "asset names do not match ${SOURCE}" >&2
   exit 1
 fi

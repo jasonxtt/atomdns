@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-import { API_LEVEL, ARCHIVE_NAME, buildManifest, validVersion } from '../../scripts/external-ui-manifest.mjs'
+import { API_LEVEL, ARCHIVE_NAME, GLASS_ARCHIVE_NAME, buildManifest, validVersion } from '../../scripts/external-ui-manifest.mjs'
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8')
 
@@ -20,7 +20,10 @@ test('the manifest of an external package has the fields the host judges', () =>
     assert.throws(() => buildManifest({ version: bad }))
   }
   assert.equal(ARCHIVE_NAME, 'atomdns-webui.tar.gz')
-  assert.match(read('../../rust/native-host/src/update/mod.rs'), /pub\(crate\) const WEBUI_ASSET: &str = "atomdns-webui\.tar\.gz";/)
+  assert.equal(GLASS_ARCHIVE_NAME, 'atomdns-webui-lg.tar.gz')
+  const updateMod = read('../../rust/native-host/src/update/mod.rs')
+  assert.match(updateMod, /pub\(crate\) const WEBUI_ASSET: &str = "atomdns-webui\.tar\.gz";/)
+  assert.match(updateMod, /pub\(crate\) const WEBUI_GLASS_ASSET: &str = "atomdns-webui-lg\.tar\.gz";/)
 })
 
 test('the build script and the host agree on the interface level', () => {
@@ -37,6 +40,8 @@ test('one build makes the WebUI package: relative URLs, a name-independent direc
   const pkg = JSON.parse(read('../package.json'))
   assert.equal(pkg.scripts.build, 'node ../scripts/build-webui.mjs')
   assert.equal(pkg.scripts['build:package'], 'node ../scripts/build-webui.mjs --package')
+  assert.equal(pkg.scripts['build:lg'], 'VITE_UI_VARIANT=glass node ../scripts/build-webui.mjs')
+  assert.equal(pkg.scripts['build:lg:package'], 'VITE_UI_VARIANT=glass node ../scripts/build-webui.mjs --package')
   assert.equal(pkg.scripts['build:external'], undefined)
   const script = read('../../scripts/build-webui.mjs')
   assert.match(script, /ui-manifest\.json/)
@@ -53,6 +58,8 @@ test('the system page links to every other mounted UI package', () => {
   assert.match(panel, /entry\.kind === 'atomdns_ui' && entry\.mounted/)
   assert.match(panel, /entry\.kind === 'atomdns_ui' && !entry\.mounted/)
   assert.match(panel, /v-for="entry in mountedPackages"/)
+  assert.match(panel, /data-main-ui-link/)
+  assert.match(panel, /href="\/">返回默认界面<\/a>/)
   assert.match(panel, /encodeURIComponent\(entry\.name\)/)
   assert.doesNotMatch(panel, /'\/main\/'|"\/main\/"/, 'no mount name is hard-coded')
   assert.match(panel, /new URL\('\.\/', window\.location\.href\)\.pathname/, 'a package does not link to itself')

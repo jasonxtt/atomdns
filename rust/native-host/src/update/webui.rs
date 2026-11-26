@@ -1,11 +1,14 @@
-//! The WebUI directory `<root>/ui/main` in an update: an online update replaces it with
-//! the release's `atomdns-webui.tar.gz` **only when it already exists** as a real directory,
-//! inside the same transaction as the program and the configuration package.
+//! The WebUI directories `<root>/ui/main` (default at `/`) and `<root>/ui/lg` (glass UI
+//! at `/lg/`) in an update: an online update replaces `ui/main` with `atomdns-webui.tar.gz`
+//! **only when `ui/main` already exists** as a real directory, and when the release also
+//! provides `atomdns-webui-lg.tar.gz`, installs or replaces `ui/lg` inside the same
+//! transaction.
 //!
-//! Installing is two renames — the old directory into the transaction (`webui/previous`),
-//! then the freshly unpacked one (`webui/new`) into place — and [`restore`] undoes them
-//! from whatever point it finds: if `webui/previous` exists the old directory goes back,
-//! otherwise it was never moved. Both are repeatable after an interruption.
+//! Installing an existing directory is two renames — the old directory into the transaction
+//! (`previous`), then the freshly unpacked one (`new`) into place; installing a fresh `ui/lg`
+//! is one rename (`new` → `ui/lg`). [`restore`] undoes both from whatever point it finds:
+//! if `previous` exists the old directory goes back, and a newly created `ui/lg` is removed.
+//! Both are repeatable after an interruption.
 
 use std::path::{Path, PathBuf};
 
@@ -22,34 +25,52 @@ pub(crate) const LIMITS: TreeLimits = TreeLimits {
     max_total: 64 << 20,
 };
 
-/// `<root>/ui/main`.
-pub(crate) fn target(root: &Path) -> PathBuf {
-    root.join("ui").join(crate::external_ui::MAIN)
+/// `<root>/ui/<name>`.
+pub(crate) fn target_named(root: &Path, name: &str) -> PathBuf {
+    root.join("ui").join(name)
 }
 
-/// What `<root>/ui/main` is when an update starts.
+/// `<root>/ui/main`.
+pub(crate) fn target(root: &Path) -> PathBuf {
+    target_named(root, crate::external_ui::MAIN)
+}
+
+/// `<root>/ui/lg`.
+pub(crate) fn target_glass(root: &Path) -> PathBuf {
+    target_named(root, crate::external_ui::GLASS)
+}
+
+/// What `<root>/ui/<name>` is when an update starts.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Presence {
     /// A real directory: it is replaced.
     Directory,
-    /// Not there (or no `ui/` at all): nothing is downloaded or created.
+    /// Not there (or no `ui/` at all).
     Absent,
     /// A symbolic link or not a directory: left alone (the host does not serve it).
     Unusable,
 }
 
-pub(crate) fn presence(root: &Path) -> Presence {
+pub(crate) fn presence_named(root: &Path, name: &str) -> Presence {
     let ui = root.join("ui");
     match std::fs::symlink_metadata(&ui) {
         Ok(metadata) if metadata.is_dir() => {}
         Ok(_) => return Presence::Unusable,
         Err(_) => return Presence::Absent,
     }
-    match std::fs::symlink_metadata(target(root)) {
+    match std::fs::symlink_metadata(target_named(root, name)) {
         Ok(metadata) if metadata.is_dir() => Presence::Directory,
         Ok(_) => Presence::Unusable,
         Err(_) => Presence::Absent,
     }
+}
+
+pub(crate) fn presence(root: &Path) -> Presence {
+    presence_named(root, crate::external_ui::MAIN)
+}
+
+pub(crate) fn presence_glass(root: &Path) -> Presence {
+    presence_named(root, crate::external_ui::GLASS)
 }
 
 /// Unpacks `archive` into `scratch` and checks that it is a WebUI package: a regular
@@ -123,20 +144,24 @@ fn real_ui_directory(root: &Path) -> Result<(), String> {
     }
 }
 
-/// Puts the release's WebUI in place (guard, `installing`): re-checks the staged
-/// archive's sha256, unpacks it into `webui/new`, moves the old `ui/main` to
-/// `webui/previous` and the new tree to `ui/main`.
-pub(crate) fn install(tx: &Transaction) -> Result<(), String> {
-    if tx.webui_archive_path.is_empty() {
+fn install_one(
+    root: &Path,
+    name: &str,
+    archive_path: &str,
+    expected_sha: &str,
+    new_dir: &str,
+    previous_dir: &str,
+    require_existing: bool,
+) -> Result<(), String> {
+    if archive_path.is_empty() {
         return Ok(());
     }
-    let root = Path::new(&tx.config_base_dir);
-    let live = target(root);
-    let new = Path::new(&tx.webui_new_dir);
-    let previous = Path::new(&tx.webui_previous_dir);
-    let bytes = std::fs::read(&tx.webui_archive_path)
-        .map_err(|error| format!("读取界面资产失败: {error}"))?;
-    if super::sha256_hex(&bytes) != tx.webui_sha256 {
+    let live = target_named(root, name);
+    let new = Path::new(new_dir);
+    let previous = Path::new(previous_dir);
+    let bytes =
+        std::fs::read(archive_path).map_err(|error| format!("读取界面资产失败: {error}"))?;
+    if super::sha256_hex(&bytes) != expected_sha {
         return Err("界面资产的校验值与暂存时不同".to_owned());
     }
     match std::fs::remove_dir_all(new) {
@@ -155,44 +180,116 @@ pub(crate) fn install(tx: &Transaction) -> Result<(), String> {
     }
     if inspect(previous)?.is_none() {
         match inspect(&live)? {
-            Some(metadata) if metadata.is_dir() => {}
-            _ => return Err("ui/main 已不是目录，拒绝替换".to_owned()),
+            Some(metadata) if metadata.is_dir() => {
+                std::fs::rename(&live, previous)
+                    .map_err(|error| format!("移开旧界面失败: {error}"))?;
+                sync_parents(&[&live, previous])
+                    .map_err(|error| format!("同步目录失败: {error}"))?;
+            }
+            Some(_) => return Err(format!("ui/{name} 已不是目录，拒绝替换")),
+            None if require_existing => return Err(format!("ui/{name} 已不是目录，拒绝替换")),
+            None => {}
         }
-        std::fs::rename(&live, previous).map_err(|error| format!("移开旧界面失败: {error}"))?;
-        sync_parents(&[&live, previous]).map_err(|error| format!("同步目录失败: {error}"))?;
     }
     std::fs::rename(new, &live).map_err(|error| format!("放入新界面失败: {error}"))?;
     sync_parents(&[&live, new]).map_err(|error| format!("同步目录失败: {error}"))
 }
 
-/// Puts the old `ui/main` back (rollback). Idempotent: without `webui/previous` the old
-/// directory was never moved and nothing changes. A failure to look at either directory
-/// is an error, so the rollback is not recorded as done and is tried again at the next
-/// start.
-pub(crate) fn restore(tx: &Transaction) -> Result<(), String> {
-    if tx.webui_archive_path.is_empty() {
+fn restore_one(
+    root: &Path,
+    name: &str,
+    archive_path: &str,
+    previous_dir: &str,
+    existed: bool,
+) -> Result<(), String> {
+    if archive_path.is_empty() {
         return Ok(());
     }
-    let root = Path::new(&tx.config_base_dir);
-    let live = target(root);
-    let previous = Path::new(&tx.webui_previous_dir);
-    if inspect(previous)?.is_none() {
-        return Ok(());
-    }
-    real_ui_directory(root)?;
-    if inspect(&live)?.is_some() {
-        let parent = previous.parent().unwrap_or_else(|| Path::new("."));
-        let mut failed = None;
-        for index in 0..1000 {
-            let path = parent.join(format!("failed-{index}"));
-            if inspect(&path)?.is_none() {
-                failed = Some(path);
-                break;
+    let live = target_named(root, name);
+    let previous = Path::new(previous_dir);
+    if inspect(previous)?.is_some() {
+        real_ui_directory(root)?;
+        if inspect(&live)?.is_some() {
+            let parent = previous.parent().unwrap_or_else(|| Path::new("."));
+            let mut failed = None;
+            for index in 0..1000 {
+                let path = parent.join(format!("failed-{index}"));
+                if inspect(&path)?.is_none() {
+                    failed = Some(path);
+                    break;
+                }
             }
+            let failed = failed.ok_or("没有可用的位置移开新界面")?;
+            std::fs::rename(&live, &failed).map_err(|error| format!("移开新界面失败: {error}"))?;
         }
-        let failed = failed.ok_or("没有可用的位置移开新界面")?;
-        std::fs::rename(&live, &failed).map_err(|error| format!("移开新界面失败: {error}"))?;
+        std::fs::rename(previous, &live).map_err(|error| format!("恢复旧界面失败: {error}"))?;
+        return sync_parents(&[&live, previous]).map_err(|error| format!("同步目录失败: {error}"));
     }
-    std::fs::rename(previous, &live).map_err(|error| format!("恢复旧界面失败: {error}"))?;
-    sync_parents(&[&live, previous]).map_err(|error| format!("同步目录失败: {error}"))
+    if !existed {
+        real_ui_directory(root)?;
+        match inspect(&live)? {
+            Some(metadata) if metadata.is_dir() => {
+                std::fs::remove_dir_all(&live)
+                    .map_err(|error| format!("移除新安装的 ui/{name} 失败: {error}"))?;
+                sync_dir(&root.join("ui")).map_err(|error| format!("同步目录失败: {error}"))?;
+            }
+            Some(_) => return Err(format!("ui/{name} 已不是目录，拒绝回滚删除")),
+            None => {}
+        }
+    }
+    Ok(())
+}
+
+/// Puts the release's WebUI package(s) in place (guard, `installing`): `ui/main` and, when
+/// staged, `ui/lg`.
+pub(crate) fn install(tx: &Transaction) -> Result<(), String> {
+    let root = Path::new(&tx.config_base_dir);
+    install_one(
+        root,
+        crate::external_ui::MAIN,
+        &tx.webui_archive_path,
+        &tx.webui_sha256,
+        &tx.webui_new_dir,
+        &tx.webui_previous_dir,
+        true,
+    )?;
+    install_one(
+        root,
+        crate::external_ui::GLASS,
+        &tx.webui_glass_archive_path,
+        &tx.webui_glass_sha256,
+        &tx.webui_glass_new_dir,
+        &tx.webui_glass_previous_dir,
+        false,
+    )
+}
+
+/// Puts the old `ui/main` (and `ui/lg`, removing a freshly created one) back on rollback.
+/// Idempotent across interruptions.
+pub(crate) fn restore(tx: &Transaction) -> Result<(), String> {
+    let root = Path::new(&tx.config_base_dir);
+    let mut problems = Vec::new();
+    if let Err(error) = restore_one(
+        root,
+        crate::external_ui::MAIN,
+        &tx.webui_archive_path,
+        &tx.webui_previous_dir,
+        true,
+    ) {
+        problems.push(error);
+    }
+    if let Err(error) = restore_one(
+        root,
+        crate::external_ui::GLASS,
+        &tx.webui_glass_archive_path,
+        &tx.webui_glass_previous_dir,
+        tx.webui_glass_existed,
+    ) {
+        problems.push(error);
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems.join("；"))
+    }
 }

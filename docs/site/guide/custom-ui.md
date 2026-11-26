@@ -23,7 +23,8 @@ tar -xzf atomdns-webui.tar.gz -C /cus/atomdns/ui/main
 - 目录名不能是保留名：`root`、`log`、`log1`、`legacy`、`blog`、`assets`、`debug`、`metrics`、`plugins`、`api`、`chunks`。
 - 带 `ui-manifest.json` 的目录被当作 AtomDNS 界面包，程序会检查它与当前版本是否匹配，不匹配就不挂载，并在「系统管理」显示原因。
 - 不带 `ui-manifest.json` 的目录按普通静态页面提供。
-- 在线更新只更新 `ui/main/`，其它目录不动。
+- 在线更新会在 `ui/main/` 存在时同步更新 `ui/main/` 与可选毛玻璃界面 `ui/lg/`（`/lg/`），其它自定义目录不动。
+- 在系统管理页面中，可以从默认界面一键前往 `/lg/`，也可以从 `/lg/`（或其它外置界面）一键返回默认界面 `/` 。
 
 ## 自己构建
 
@@ -32,5 +33,6 @@ tar -xzf atomdns-webui.tar.gz -C /cus/atomdns/ui/main
 ```bash
 cd webui-log
 npm ci
-npm run build:package    # 生成 release/atomdns-webui.tar.gz
+npm run build:package       # 生成 release/atomdns-webui.tar.gz
+npm run build:lg:package    # 生成毛玻璃版 release/atomdns-webui-lg.tar.gz
 ```

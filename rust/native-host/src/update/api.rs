@@ -20,8 +20,8 @@ use super::transaction::{self, StageInput, Transaction};
 use super::{
     CheckEnv, MANIFEST_ASSET, MAX_ARCHIVE_BYTES, MAX_BINARY_BYTES, MAX_CONFIG_PACKAGE_BYTES,
     MAX_MANIFEST_BYTES, MAX_WEBUI_ARCHIVE_BYTES, RELEASE_BINARY, REQUIRED_CONFIG_PACKAGE_ID,
-    REQUIRED_CONFIG_SCHEMA, UpdateStatus, WEBUI_ASSET, cpu_supports_v3, current_is_v3, manager,
-    pick_program_asset, valid_sha256, wants_musl,
+    REQUIRED_CONFIG_SCHEMA, UpdateStatus, WEBUI_ASSET, WEBUI_GLASS_ASSET, cpu_supports_v3,
+    current_is_v3, manager, pick_program_asset, valid_sha256, wants_musl,
 };
 use crate::config::CompiledConfig;
 use crate::rule_sources::Reply;
@@ -257,6 +257,7 @@ async fn stage_and_schedule(
     candidate: Option<Vec<u8>>,
     package: Option<(Package, Vec<u8>)>,
     webui: Option<Vec<u8>>,
+    webui_glass: Option<Vec<u8>>,
 ) -> Result<(), (u16, String)> {
     let (Some(control), Some(target)) = (ctx.control, crate::restart::target()) else {
         return Err((501, "此进程不能在线更新".to_owned()));
@@ -298,6 +299,7 @@ async fn stage_and_schedule(
                 candidate: candidate.as_deref(),
                 package: package_ref,
                 webui: webui.as_deref(),
+                webui_glass: webui_glass.as_deref(),
             },
             &|program, preview| {
                 super::guard::preflight(
@@ -482,8 +484,10 @@ async fn apply(ctx: &Context<'_>, body: &[u8]) -> Reply {
         None
     };
     // The WebUI goes with the program only where `ui/main` already is a directory.
+    // When the release also carries `atomdns-webui-lg.tar.gz`, `ui/lg` is installed or
+    // replaced in the same transaction (pure backends without `ui/main` create neither).
     let mut notes = "二进制与所需配置已下载并校验，正在安全切换…".to_owned();
-    let webui = match super::webui::presence(root) {
+    let (webui, webui_glass) = match super::webui::presence(root) {
         super::webui::Presence::Directory => {
             let (Some(asset), Some(artifact)) = (
                 release.asset(WEBUI_ASSET),
@@ -520,12 +524,67 @@ async fn apply(ctx: &Context<'_>, body: &[u8]) -> Reply {
                 );
             }
             notes = "二进制、界面与所需配置已下载并校验，正在安全切换…".to_owned();
-            Some(bytes)
+            let glass = match super::webui::presence_glass(root) {
+                super::webui::Presence::Unusable => {
+                    notes.push_str("（ui/lg 是符号链接或不是目录，未随更新替换）");
+                    None
+                }
+                super::webui::Presence::Directory | super::webui::Presence::Absent => {
+                    match (
+                        release.asset(WEBUI_GLASS_ASSET),
+                        manifest.artifacts.get(WEBUI_GLASS_ASSET),
+                    ) {
+                        (None, None) => None,
+                        (Some(glass_asset), Some(glass_artifact)) => {
+                            if !super::valid_sha256(&glass_artifact.sha256) {
+                                return fail(
+                                    &mut status,
+                                    format!("玻璃界面资产 {WEBUI_GLASS_ASSET:?} 的 SHA-256 无效"),
+                                );
+                            }
+                            let glass_bytes = match super::download(
+                                &socks5,
+                                &glass_asset.browser_download_url,
+                                MAX_WEBUI_ARCHIVE_BYTES,
+                                ctx.shutdown,
+                            )
+                            .await
+                            {
+                                Ok(bytes) => bytes,
+                                Err(reason) => {
+                                    return fail(
+                                        &mut status,
+                                        format!("玻璃界面资产下载失败: {reason}"),
+                                    );
+                                }
+                            };
+                            if !super::sha256_hex(&glass_bytes)
+                                .eq_ignore_ascii_case(glass_artifact.sha256.trim())
+                            {
+                                return fail(
+                                    &mut status,
+                                    "玻璃界面资产校验失败: SHA-256 与更新清单不一致".to_owned(),
+                                );
+                            }
+                            Some(glass_bytes)
+                        }
+                        _ => {
+                            return fail(
+                                &mut status,
+                                format!(
+                                    "版本 {tag} 的玻璃界面资产 {WEBUI_GLASS_ASSET} 与更新清单不一致，已取消更新"
+                                ),
+                            );
+                        }
+                    }
+                }
+            };
+            (Some(bytes), glass)
         }
-        super::webui::Presence::Absent => None,
+        super::webui::Presence::Absent => (None, None),
         super::webui::Presence::Unusable => {
             notes.push_str("（ui/main 是符号链接或不是目录，未随更新替换）");
-            None
+            (None, None)
         }
     };
     if let Err((code, reason)) = stage_and_schedule(
@@ -537,6 +596,7 @@ async fn apply(ctx: &Context<'_>, body: &[u8]) -> Reply {
         Some(candidate),
         package,
         webui,
+        webui_glass,
     )
     .await
     {
