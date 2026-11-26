@@ -1,10 +1,10 @@
 {
   "format": 1,
   "channel": "rust",
-  "required_config_schema": 7,
-  "config_package_id": "rust-config-schema-7",
+  "required_config_schema": 8,
+  "config_package_id": "rust-config-schema-8",
   "config": {
-    "url": "https://raw.githubusercontent.com/jasonxtt/file/5d1efe923a6ca360351ff51215401a7d97726a45/atomdns/config/incremental/config_rust_up.zip",
-    "sha256": "27c60a2736fb48e110f4f000e68bd49dfaa3692ae121e9089a0e2feb0e9d2057"
+    "url": "https://raw.githubusercontent.com/jasonxtt/file/11088eec86c74881407cd1a28dab23c271aaad2d/atomdns/config/incremental/config_rust_up.zip",
+    "sha256": "e940c3107ef4fef072875f843237de1781343e827dc4942d9d24646b26a9c1c4"
   }
 }

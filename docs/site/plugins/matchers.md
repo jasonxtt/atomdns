@@ -8,7 +8,8 @@
 | `qname $domestic` | 查询域名在 [domain_set](/plugins/domain_set) 或 [adguard_rule](/plugins/adguard_rule) 中 |
 | `qtype 1 28` | 查询类型是其中之一（数字：1 A、28 AAAA、65 HTTPS、12 PTR、6 SOA） |
 | `client_ip 192.0.2.0/24 $lan &rule/clients.txt` | 客户端 IP 在其中（CIDR、[ip_set](/plugins/ip_set)、文件） |
-| `resp_ip 0.0.0.0/0 $geoip_cn` | 应答中的 A / AAAA 地址在其中 |
+| `resp_ip 0.0.0.0/0 $geoip_cn` | 应答中任意 A / AAAA 地址在其中 |
+| `resp_ip_all $poisoned_ip` | 应答有 A / AAAA 且全部地址都在其中 |
 | `has_resp` | 已经有应答 |
 | `rcode 0 3` | 应答响应码是其中之一（0 NOERROR、2 SERVFAIL、3 NXDOMAIN） |
 | `fast_mark 1 5` | 有其中任一 [fast_mark](/plugins/fast_mark) 标记 |

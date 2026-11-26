@@ -176,11 +176,22 @@ impl Matcher for ClientIpMatcher {
 #[allow(dead_code)]
 pub(crate) struct ResponseIpMatcher {
     prefixes: Vec<Rc<IpListHandle>>,
+    require_all: bool,
 }
 
 impl ResponseIpMatcher {
     pub(crate) fn new(prefixes: Vec<Rc<IpListHandle>>) -> Self {
-        Self { prefixes }
+        Self {
+            prefixes,
+            require_all: false,
+        }
+    }
+
+    pub(crate) fn all(prefixes: Vec<Rc<IpListHandle>>) -> Self {
+        Self {
+            prefixes,
+            require_all: true,
+        }
     }
     #[cfg(test)]
     pub(crate) fn ipv4(address: Ipv4Addr) -> Self {
@@ -189,6 +200,7 @@ impl ResponseIpMatcher {
         prefixes.rebuild();
         Self {
             prefixes: vec![Rc::new(IpListHandle::new(Rc::new(prefixes)))],
+            require_all: false,
         }
     }
 }
@@ -201,12 +213,17 @@ impl Matcher for ResponseIpMatcher {
         let addresses = observe_answer_addresses(response.as_bytes()).map_err(|error| {
             MatcherError::new(format!("cannot inspect response addresses: {error:?}"))
         })?;
-        Ok(MatchOutcome::new(
+        let matched = if self.require_all {
+            !addresses.is_empty()
+                && addresses
+                    .into_iter()
+                    .all(|address| self.prefixes.iter().any(|list| list.contains(address)))
+        } else {
             addresses
                 .into_iter()
-                .any(|address| self.prefixes.iter().any(|list| list.contains(address))),
-            None,
-        ))
+                .any(|address| self.prefixes.iter().any(|list| list.contains(address)))
+        };
+        Ok(MatchOutcome::new(matched, None))
     }
 }
 

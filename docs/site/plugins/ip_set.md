@@ -27,8 +27,9 @@ IP 表，用于 `client_ip`（按客户端）和 `resp_ip`（按应答地址）�
 | --- | --- | --- |
 | `ips` | 列表 | IP 或 CIDR |
 | `files` | 列表 | 文本文件，一行一个 IP 或 CIDR，`#` 开头为注释 |
+| `seed_text` | 字符串 | 可选；与单个 `.txt` 文件配合（不可与 `ips` 同时使用），文件不存在时在正常启动时自动写入一次，不会覆盖已有文件 |
 
-文件不存在时只警告，按空表处理。
+未配置 `seed_text` 且文件不存在时只警告，按空表处理。
 
 ## si_set
 
@@ -53,10 +54,11 @@ IP 表，用于 `client_ip`（按客户端）和 `resp_ip`（按应答地址）�
 
 ```yaml
 - matches: "client_ip $lan_clients"                # 引用 ip_set / si_set
-- matches: "resp_ip 192.0.2.0/24 &rule/extra.txt"  # 直接写 CIDR，或 & 加文件路径
+- matches: "resp_ip 192.0.2.0/24 &rule/extra.txt"  # 任意一个应答地址命中（支持 CIDR、$引用、&文件）
+- matches: "resp_ip_all $poisoned_ip"              # 非空且全部应答地址都命中
 ```
 
-多个来源之间是「或」的关系。`resp_ip` 只看应答 Answer 段里的 A / AAAA 记录。
+多个来源之间是「或」的关系。`resp_ip` 与 `resp_ip_all` 只看应答 Answer 段里的 A / AAAA 记录。
 
 ## 管理接口
 

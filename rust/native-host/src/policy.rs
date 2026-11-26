@@ -690,6 +690,12 @@ pub(crate) fn ip_list(
 ) -> Result<Rc<IpListHandle>, ConfigError> {
     ip_list_with_inputs(inline, files, path, None)
 }
+#[derive(Clone, Debug)]
+pub(crate) struct SeededIpFile {
+    pub(crate) file: PathBuf,
+    pub(crate) content: String,
+}
+
 pub(crate) fn ip_list_with_inputs(
     inline: &[String],
     files: &[PathBuf],
@@ -715,6 +721,100 @@ pub(crate) fn ip_list_with_inputs(
     )?;
     prefixes.rebuild();
     Ok(Rc::new(IpListHandle::new(Rc::new(prefixes))))
+}
+
+pub(crate) fn ip_list_with_seed(
+    inline: &[String],
+    files: &[PathBuf],
+    seed_text: Option<&str>,
+    path: &str,
+    mut inputs: Option<&mut crate::special_groups::CandidateInputSet>,
+) -> Result<(Rc<IpListHandle>, Option<SeededIpFile>), ConfigError> {
+    let Some(seed) = seed_text else {
+        return Ok((ip_list_with_inputs(inline, files, path, inputs)?, None));
+    };
+    let mut seed_prefixes = IpPrefixList::new();
+    let mut budget = RuleBudget::default();
+    let seed_path = format!("{path}.seed_text");
+    for (index, raw_line) in seed.split_inclusive('\n').enumerate() {
+        budget.line(
+            raw_line.as_bytes(),
+            &format!("{seed_path}:{}", index + 1),
+            &mut |line, location| {
+                for (ip, bits) in ip_entries(&ip_line_field(line), location)? {
+                    seed_prefixes.append(ip, bits);
+                }
+                Ok(())
+            },
+        )?;
+    }
+    let target = &files[0];
+    let probe_path = target.clone();
+    let open_result = crate::transaction::blocking_io(move || std::fs::File::open(probe_path))
+        .map_err(|error| {
+            ConfigError::new(
+                target.display().to_string(),
+                format!("cannot open rule file on bounded worker: {error}"),
+            )
+        })?;
+    if let Err(error) = open_result
+        && error.kind() == std::io::ErrorKind::NotFound
+    {
+        if let Some(inputs) = inputs.as_deref_mut() {
+            inputs
+                .record_missing(target)
+                .map_err(|reason| ConfigError::new(target.display().to_string(), reason))?;
+        }
+        seed_prefixes.rebuild();
+        return Ok((
+            Rc::new(IpListHandle::new(Rc::new(seed_prefixes))),
+            Some(SeededIpFile {
+                file: target.clone(),
+                content: seed.to_owned(),
+            }),
+        ));
+    }
+    Ok((ip_list_with_inputs(inline, files, path, inputs)?, None))
+}
+
+/// Startup's one-time seeding for `ip_set` files declared with `seed_text`:
+/// writes missing files once during a normal start (never during `check` or an
+/// online-update trial) and never overwrites an existing file.
+pub(crate) fn persist_ip_seeds(config: &mut crate::config::CompiledConfig) {
+    if config.pending_ip_seeds.is_empty() {
+        return;
+    }
+    if crate::config::flags::update_trial() {
+        crate::diag::info_line!("ip_set seed deferred: an online update is being tried out");
+        return;
+    }
+    for seed in std::mem::take(&mut config.pending_ip_seeds) {
+        match std::fs::symlink_metadata(&seed.file) {
+            Ok(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                crate::diag::warn_line!(
+                    "ip_set seed not written for {}: {error}",
+                    seed.file.display()
+                );
+                continue;
+            }
+        }
+        if let Err(error) =
+            crate::runtime_snapshot::write_durably(&seed.file, seed.content.as_bytes())
+        {
+            crate::diag::warn_line!(
+                "ip_set seed not written for {}: {error}",
+                seed.file.display()
+            );
+            continue;
+        }
+        config.compile_inputs.files.insert(
+            crate::special_groups::lexical_path(&seed.file),
+            Some(crate::special_groups::sha256(seed.content.as_bytes())),
+        );
+        crate::diag::info_line!("ip_set default file seeded: {}", seed.file.display());
+    }
 }
 /// Applies one non-scoped policy atomically. True means hosts replaced the
 /// response; TTL transforms preserve the existing supplier identity.

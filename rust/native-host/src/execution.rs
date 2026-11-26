@@ -5080,6 +5080,13 @@ fn result_from_wire(response_wire: Vec<u8>, facts: &mut ExecutionFacts) -> Execu
                 )
             })
             .or_else(|| {
+                matches!(
+                    final_sequence.as_deref().map(str::trim),
+                    Some("sequence_poison_fakeip_exit" | "sequence_poison_realip_exit")
+                )
+                .then(|| SharedStr::from("污染转代理"))
+            })
+            .or_else(|| {
                 (routing.matched_rule_source.is_none()
                     && routing.domain_set.is_none()
                     && final_sequence.is_some())
@@ -5432,6 +5439,14 @@ fn compute_effective_tag(
         if !memory.is_empty() {
             return join_effective_tags(has_nov4, has_nov6, memory, domain_set);
         }
+    }
+    if route_kind == Some("proxy")
+        && matches!(
+            final_sequence.map(str::trim),
+            Some("sequence_poison_fakeip_exit" | "sequence_poison_realip_exit")
+        )
+    {
+        return join_effective_tags(has_nov4, has_nov6, "污染转代理", domain_set);
     }
     if route_kind == Some("proxy")
         && matches!(
@@ -7660,6 +7675,7 @@ plugins:
             domain_sets: Vec::new(),
             flags: Vec::new(),
             flag_legacy_notes: Vec::new(),
+            pending_ip_seeds: Vec::new(),
             program,
         }
     }
@@ -7777,6 +7793,7 @@ plugins:
                 domain_sets: Vec::new(),
                 flags: Vec::new(),
                 flag_legacy_notes: Vec::new(),
+                pending_ip_seeds: Vec::new(),
                 program,
             },
             a_id,
@@ -8324,6 +8341,7 @@ plugins:
             domain_sets: Vec::new(),
             flags: Vec::new(),
             flag_legacy_notes: Vec::new(),
+            pending_ip_seeds: Vec::new(),
             program,
         };
         (config, forward_id, CacheId(0))
@@ -8455,6 +8473,7 @@ plugins:
                 domain_sets: Vec::new(),
                 flags: Vec::new(),
                 flag_legacy_notes: Vec::new(),
+                pending_ip_seeds: Vec::new(),
                 program,
             },
             child_id,
@@ -8632,6 +8651,7 @@ plugins:
             domain_sets: Vec::new(),
             flags: Vec::new(),
             flag_legacy_notes: Vec::new(),
+            pending_ip_seeds: Vec::new(),
             program,
         };
         (config, forward_b_id, forward_c_id, forward_b_id)

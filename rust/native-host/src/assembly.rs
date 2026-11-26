@@ -212,6 +212,7 @@ impl HostAssembly {
         let mut config = crate::config::compile_file_with_roots(&yaml, path, state_root, root_dir)
             .map_err(AssemblyError::Config)?;
         crate::config::flags::persist_migration(&mut config);
+        crate::policy::persist_ip_seeds(&mut config);
         Self::with_options_and_state_root(config, HostOptions::default(), state_root)
     }
 

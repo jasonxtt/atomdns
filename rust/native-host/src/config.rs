@@ -646,6 +646,9 @@ pub struct CompiledConfig {
     pub(crate) flags: Vec<flags::Flag>,
     /// Legacy switch files the flag values could not be taken from.
     pub(crate) flag_legacy_notes: flags::LegacyNotes,
+    /// Missing `ip_set` files that were loaded from `seed_text` and may be
+    /// persisted once on a normal start (never during `check` or update trial).
+    pub(crate) pending_ip_seeds: Vec<policy::SeededIpFile>,
     /// The scoped management HTTP listener, when one is configured.
     pub api: Option<ApiConfig>,
     pub program: ValidatedProgram,
@@ -1669,7 +1672,7 @@ fn sequence_has_file_backed_ip_matcher(args: &RawValue) -> bool {
         expressions.iter().any(|expression| {
             let expression = expression.strip_prefix('!').unwrap_or(expression).trim();
             let mut fields = expression.split_whitespace();
-            matches!(fields.next(), Some("client_ip" | "resp_ip"))
+            matches!(fields.next(), Some("client_ip" | "resp_ip" | "resp_ip_all"))
                 && fields.any(|field| field.starts_with('&'))
         })
     })
@@ -2233,6 +2236,7 @@ fn compile_definitions(
     }
     let policies = RefCell::new(Vec::new());
     let mut ip_sets = Vec::new();
+    let mut pending_ip_seeds = Vec::new();
     let response_ip_rules = RefCell::new(Vec::new());
     let ip_budgets = RefCell::new(BTreeMap::new());
     let mut forwards = Vec::new();
@@ -2299,7 +2303,7 @@ fn compile_definitions(
                     &format!("{}.args", plugin.source_path),
                     "ip_set args must be a mapping",
                 )?;
-                args.reject_unknown(&["ips", "files", "sets"], &plugin.source_path)?;
+                args.reject_unknown(&["ips", "files", "sets", "seed_text"], &plugin.source_path)?;
                 if !policy_strings(
                     args.get("sets"),
                     &format!("{}.args.sets", plugin.source_path),
@@ -2311,16 +2315,45 @@ fn compile_definitions(
                         "non-empty ip_set sets are unsupported",
                     ));
                 }
+                let seed_text = match args.get("seed_text") {
+                    None | Some(RawValue::Null) => None,
+                    Some(value) => Some(expect_string(
+                        value,
+                        &format!("{}.args.seed_text", plugin.source_path),
+                    )?),
+                };
                 let (inline, files) =
-                    policy_sources(plugin, "ips", &["ips", "files", "sets"], &[])?;
+                    policy_sources(plugin, "ips", &["ips", "files", "sets", "seed_text"], &[])?;
+                if seed_text.is_some() {
+                    if !inline.is_empty() {
+                        return Err(ConfigError::new(
+                            format!("{}.args.seed_text", plugin.source_path),
+                            "seed_text cannot be combined with inline ips",
+                        ));
+                    }
+                    if files.len() != 1
+                        || !files[0]
+                            .extension()
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("txt"))
+                    {
+                        return Err(ConfigError::new(
+                            format!("{}.args.seed_text", plugin.source_path),
+                            "seed_text requires exactly one .txt file in files",
+                        ));
+                    }
+                }
                 known_artifacts.extend(files.iter().cloned());
                 let mut candidate_inputs = candidate_inputs.borrow_mut();
-                let prefixes = policy::ip_list_with_inputs(
+                let (prefixes, seeded) = policy::ip_list_with_seed(
                     &inline,
                     &files,
+                    seed_text.as_deref(),
                     &format!("{}.args", plugin.source_path),
                     candidate_inputs.as_mut(),
                 )?;
+                if let Some(seeded) = seeded {
+                    pending_ip_seeds.push(seeded);
+                }
                 ip_sets.push(IpSetConfig {
                     tag: plugin.tag.clone(),
                     management: Some(crate::managed_ip::ManagedIpSet::new(
@@ -3074,6 +3107,7 @@ fn compile_definitions(
         domain_sets: domain_set_configs,
         flags: Vec::new(),
         flag_legacy_notes: Vec::new(),
+        pending_ip_seeds,
         api,
         program,
         rule_sources: Rc::new(crate::rule_sources::RuleSources::new(
@@ -4583,7 +4617,7 @@ fn compile_matcher(
         "client_ip" => Box::new(ClientIpMatcher::new(compile_response_ip(
             args, path, catalog, base,
         )?)),
-        "resp_ip" => {
+        "resp_ip" | "resp_ip_all" => {
             let prefixes = compile_response_ip(args, path, catalog, base)?;
             catalog
                 .response_ip_rules
@@ -4592,7 +4626,11 @@ fn compile_matcher(
                     source_path: path.to_owned(),
                     prefixes: prefixes.clone(),
                 });
-            Box::new(ResponseIpMatcher::new(prefixes))
+            if name == "resp_ip_all" {
+                Box::new(ResponseIpMatcher::all(prefixes))
+            } else {
+                Box::new(ResponseIpMatcher::new(prefixes))
+            }
         }
         "_true" => {
             if !args.is_empty() {
@@ -5931,6 +5969,10 @@ mod tests {
                 "anonymous_match(qname: $geosite_cn)",
             ),
             ("resp_ip $geoip_cn", "anonymous_match(resp_ip: $geoip_cn)"),
+            (
+                "resp_ip_all $poisoned_ip",
+                "anonymous_match(resp_ip_all: $poisoned_ip)",
+            ),
             ("has_resp", "anonymous_match(has_resp: )"),
             ("_true", "anonymous_match(_true: )"),
             ("$my_matcher", "my_matcher"),
