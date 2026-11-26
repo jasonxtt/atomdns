@@ -93,6 +93,13 @@
 
 v0.5.0 起 `config.url` 指向 file 仓库（此前指向 Release 资产）；已发布的 v0.4.x 与 v0.5.0 的清单仍指向各自 Release 里的包，不受影响。
 
+## v0.7.1 升级须知（配置 schema 8：中国域名污染识别与可选毛玻璃界面 `/lg/`）
+
+- **配置 schema 8，有新配置包**：在线更新会一并应用 `rust-config-schema-8`（新增 `sub_config/poisoned_ip.yaml` 及污染检测序列，升级 `config_custom.yaml`、`sub_config/{flags,forward_1,process_listed,process_ot,route_learner}.yaml`），失败自动回滚；规则、名单、学习结果、缓存、`webinfo/settings.json` 与专属分流组原样保留。首次正常启动若缺少 `rule/poisoned_ip.txt`，会按 `seed_text` 自动生成内置 609 条污染 IP 列表，已有文件不覆盖。
+- **中国域名污染识别**：新增「规则设置 › 分流规则 › 污染识别」页签与 `detect_poison` 开关（默认关闭）。开启后，命中中国域名（`geosite_cn`）但所有返回 IP 均落入 `poisoned_ip` 列表时，自动改走代理并记入现有代理学习名单，首次命中审计标记为「污染转代理」；`resp_ip_all` 匹配器同时生效于正常查询与懒缓存刷新。
+- **可选毛玻璃界面（`/lg/`）**：默认界面不变，仍为 `/`；`atomdns-webui.tar.gz` 现将毛玻璃版打包在 `bundled-ui/lg/` 中，在线更新（含从 v0.7.0 一次升级）、Docker 镜像与全新安装包 `config_rust.zip` 均会自动启用 `ui/lg/`（无 `ui/main/` 的纯后端不创建任何界面）。系统管理页新增双向切换按钮：从 `/` 可一键前往 `/lg/`，从 `/lg/` 可一键返回默认界面 `/`；玻璃界面同步包含「污染识别」页签。
+- **资产**：同 v0.7.0（七种程序包、`atomdns-webui.tar.gz`、清单、`config_rust.zip`）。
+
 ## v0.7.0 升级须知
 
 - 本版只改性能和内存，配置、规则语义、查询结果、接口输出与持久化格式都不变。配置 schema 仍为 7，**没有新配置包**：在线更新换程序，并在已安装 `ui/main` 时一并换成新界面。
