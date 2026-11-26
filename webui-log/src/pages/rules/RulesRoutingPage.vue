@@ -62,7 +62,7 @@ const active = computed(() => {
       <section class="panel rt-panel-group">
         <FlagSwitches page="routing" :only="POISON_FLAGS" />
         <div class="rt-divider" role="separator"><i></i></div>
-        <ListEditor tag="poisoned_ip" title="污染 IP" hint="配合上面的「污染识别」使用：中国域名由国内 DNS 返回的 A 记录若全部命中此名单，自动改走代理并写入学习名单。每行一个条目，可以是单个 IP、网段（203.0.113.0/24）或 IP 范围（203.0.113.10-203.0.113.99）。" />
+        <ListEditor tag="poisoned_ip" title="污染 IP" hint="内置常见 DNS 污染地址，一般保持默认即可。每行一个条目，支持单个 IP、网段或 IP 范围。" />
       </section>
     </template>
     <template v-else>
